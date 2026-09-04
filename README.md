@@ -210,11 +210,109 @@ All 9 services are fully implemented and integrated. Each runs as a handler on a
 | Voice | `pkg/services/voice/` | Signaling + media | 9093 |
 | VPN | `pkg/services/vpn/` | TUN interface | 9094 |
 
+## Author
+
+Mrityunjay K — architect and core contributor of Local-WEB.
+
+## Usage
+
+### Starting a Node Daemon
+
+```bash
+# Build the node binary
+go build -o bin/node ./cmd/node
+
+# Start the node daemon (listens on UDP 4443 for QUIC transport)
+./bin/node --name "my-laptop" --listen :4443
+
+# Available flags:
+#   --name       Human-readable node name
+#   --listen     Address to bind QUIC transport (default :4443)
+#   --storage    Path to BadgerDB storage directory (default ./data)
+#   --data-dir   Path to store node identity and keys (default ./keys)
+```
+
+### Using the CLI
+
+```bash
+# Build the CLI
+go build -o bin/cli ./cmd/cli
+
+# Generate or display your node identity
+./bin/cli id
+
+# List discovered peers on the local network
+./bin/cli peers
+
+# Start the node daemon from CLI
+./bin cli node
+```
+
+### Running Services
+
+Services start automatically when the node daemon runs. Each service listens on its own QUIC stream (identified by 1-byte ServiceID):
+
+| Service | How to Use |
+|---|---|
+| **DNS** | `nslookup host.localweb 127.0.0.1 -port=5353` |
+| **HTTP Gateway** | `curl http://localhost:8080/health` |
+| **Email** | Configure SMTP client to `localhost:587` |
+| **Messaging** | Use the CLI or SDK to publish/subscribe to channels |
+| **Files** | `curl http://localhost:9090/files/` |
+| **Docs** | Open `http://localhost:9091/docs/` in a browser |
+| **Registry** | `GET http://localhost:9092/packages` |
+| **Voice** | Use WebRTC-compatible client pointed at signaling port |
+| **VPN** | Routes are automatically installed on TUN interface |
+
+### DNS Resolution
+
+Once your node is running, `.localweb` domains resolve automatically on your local network:
+
+```bash
+# Query a peer's .localweb address
+nslookup peer1.localweb
+
+# Test with dig
+dig peer1.localweb @127.0.0.1 -p 5353
+```
+
+### Messaging
+
+```go
+// From Go code
+import "github.com/mrityunjay/LocalWEB/pkg/services/messaging"
+
+svc := messaging.NewService(store, privateKey)
+chID := svc.CreateChannel([]*[32]byte{pubKey1, pubKey2})
+msg, _ := svc.Publish(ctx, chID, myPubKey, []byte("hello"), "")
+history, _ := svc.History(chID, "", 100)
+```
+
+### File Sharing
+
+Share a file with a peer:
+```bash
+# On sender node
+curl -T myfile.zip http://localhost:9090/files/myfile.zip
+
+# On receiver node
+curl http://localhost:9090/files/myfile.zip --output myfile.zip
+```
+
+### VPN
+
+Start the VPN service (creates a TUN interface):
+```bash
+# TUN interface is created automatically when vpn service starts
+ip addr show dev tun0  # Linux: tun0 created
+ifconfig utun0         # macOS: utun0 created
+```
+
 ## Development
 
 ### Code Review
 
-All changes are reviewed using the ECC (Everything Claude Code) workflow:
+All changes follow a disciplined workflow:
 - TDD-first development
 - Security review for crypto/transport layer
 - Go vet and test gates (`make lint`)
@@ -242,14 +340,14 @@ All 9 architecture layers and 9 services are **production-ready**, tested with i
 
 | Layer | Component | Status | Tests |
 |---|---|---|---|
-| L1 | Transport (QUIC) | Production-ready | `transport_test.go` |
+| L1 | Transport (QUIC) | Production-ready | `quic_test.go` |
 | L2 | Link (6 link types) | Production-ready | — |
 | L3 | Discovery (mDNS/BLE/WiFi) | Production-ready | `discovery_test.go` |
 | L4 | DHT (Kademlia) | Production-ready | `dht_test.go` |
-| L5 | Security (Noise XX, PoW, Audit) | Production-ready | — |
-| L6 | Store (BadgerDB + AES-GCM) | Production-ready | — |
-| L7 | CRDT (OR-Set, RGA) | Production-ready | — |
-| L8 | Services (9 services) | Production-ready | `dns_test.go`, `messaging_test.go`, `full_stack_test.go` |
+| L5 | Security (Noise XX, PoW, Audit) | Production-ready | `audit_test.go`, `capability_test.go`, `pow_test.go` |
+| L6 | Store (BadgerDB + AES-GCM) | Production-ready | `store_test.go`, `block_store_test.go`, `peer_store_test.go` |
+| L7 | CRDT (OR-Set, RGA) | Production-ready | `crdt_test.go` |
+| L8 | Services (9 services) | Production-ready | `dns_test.go`, `messaging_test.go`, `full_stack_test.go` + per-service tests |
 | L9 | App (node + CLI) | Production-ready | — |
 
 ## Security
@@ -267,14 +365,18 @@ MIT
 
 ## Contributing
 
-PRs welcome. Please follow the ECC workflow:
-1. Plan with `planner` agent
-2. TDD with `tdd-guide`
-3. Review with `code-reviewer` + `security-reviewer`
-4. Commit with conventional commits
+PRs welcome. Please follow the workflow:
+1. Plan the change before implementing
+2. Write tests first (TDD)
+3. Review for correctness, performance, and security
+4. Commit with conventional commits (`feat:`, `fix:`, `refactor:`, etc.)
 
-## Acknowledgments
+## License
 
-Built with [ECC](https://github.com/affaan-m/ECC) — Everything Claude Code agent harness.
+MIT
 
-See `docs/architecture/TECH_STACK.md` for dependency details and `docs/architecture/ROADMAP.md` for the complete implementation checklist.
+## Links
+
+- Documentation: `docs/architecture/TECH_STACK.md` (dependency details)
+- Roadmap: `docs/architecture/ROADMAP.md` (implementation checklist)
+- Architecture: `docs/architecture/ARCHITECTURE_V3.md`
