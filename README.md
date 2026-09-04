@@ -238,19 +238,19 @@ make test      # full test suite with race detection
 
 ## Status
 
-All 9 architecture layers and 9 services are **complete**, tested with integration tests in `test/integration/`, and committed to the repository.
+All 9 architecture layers and 9 services are **production-ready**, tested with integration tests in `test/integration/`, and committed to the repository.
 
 | Layer | Component | Status | Tests |
 |---|---|---|---|
-| L1 | Transport (QUIC) | Complete | `transport_test.go` |
-| L2 | Link (6 link types) | Complete | — |
-| L3 | Discovery (mDNS/BLE/WiFi) | Complete | `discovery_test.go` |
-| L4 | DHT (Kademlia) | Complete | `dht_test.go` |
-| L5 | Security (Noise XX, PoW, Audit) | Complete | — |
-| L6 | Store (BadgerDB + AES-GCM) | Complete | — |
-| L7 | CRDT (OR-Set, RGA) | Complete | — |
-| L8 | Services (9 services) | Complete | `dns_test.go`, `messaging_test.go`, `full_stack_test.go` |
-| L9 | App (node + CLI) | Complete | — |
+| L1 | Transport (QUIC) | Production-ready | `transport_test.go` |
+| L2 | Link (6 link types) | Production-ready | — |
+| L3 | Discovery (mDNS/BLE/WiFi) | Production-ready | `discovery_test.go` |
+| L4 | DHT (Kademlia) | Production-ready | `dht_test.go` |
+| L5 | Security (Noise XX, PoW, Audit) | Production-ready | — |
+| L6 | Store (BadgerDB + AES-GCM) | Production-ready | — |
+| L7 | CRDT (OR-Set, RGA) | Production-ready | — |
+| L8 | Services (9 services) | Production-ready | `dns_test.go`, `messaging_test.go`, `full_stack_test.go` |
+| L9 | App (node + CLI) | Production-ready | — |
 
 ## Security
 
