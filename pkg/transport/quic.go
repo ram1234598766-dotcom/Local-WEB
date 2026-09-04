@@ -7,7 +7,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"sync"
@@ -22,20 +24,23 @@ import (
 // It uses quic-go for the underlying QUIC transport (RFC 9000) and verifies
 // peer identity via the Noise protocol layer above TLS.
 type Server struct {
-	mu       sync.RWMutex
-	addr     string
-	tr       *quic.Transport
-	ln       *quic.Listener
-	conns    map[[32]byte]*Connection
-	handlers map[ServiceID]StreamHandler
-	ctx      context.Context
-	cancel   context.CancelFunc
-	pubKey   [32]byte
-	privKey  [32]byte
-	flow     FlowControl
-	relay    *Relay
-	started  time.Time
-	stats    ServerStats
+	mu           sync.RWMutex
+	addr         string
+	tr           *quic.Transport
+	ln           *quic.Listener
+	conns        map[[32]byte]*Connection
+	handlers     map[ServiceID]StreamHandler
+	ctx          context.Context
+	cancel       context.CancelFunc
+	pubKey       [32]byte
+	privKey      [32]byte
+	flow         FlowControl
+	relay        *Relay
+	started      time.Time
+	stats        ServerStats
+	wg           sync.WaitGroup
+	enforceTLS   bool
+	allowedSvcs  map[ServiceID]bool
 }
 
 // ServerStats tracks server-level statistics.
@@ -48,8 +53,26 @@ type ServerStats struct {
 	TotalRelays    uint64
 }
 
+// ServerOption configures a Server.
+type ServerOption func(*Server)
+
+// WithEnforceTLSVerify enables server certificate verification in the QUIC
+// TLS handshake. When false (default), InsecureSkipVerify is set because peer
+// identity is authenticated via the Noise XX protocol. Production deployments
+// SHOULD pin server certificates and set this to true.
+func WithEnforceTLSVerify(v bool) ServerOption {
+	return func(s *Server) { s.enforceTLS = v }
+}
+
+// WithAllowedServices restricts the service IDs a peer may access after Noise
+// authentication. An empty set (default) means all registered services are
+// allowed. Use to implement per-peer ACLs.
+func WithAllowedServices(svcs map[ServiceID]bool) ServerOption {
+	return func(s *Server) { s.allowedSvcs = svcs }
+}
+
 // NewServer creates a QUIC server bound to addr using quic-go.
-func NewServer(ctx context.Context, addr string, pubKey, privKey [32]byte) (*Server, error) {
+func NewServer(ctx context.Context, addr string, pubKey, privKey [32]byte, opts ...ServerOption) (*Server, error) {
 	// Generate a self-signed TLS certificate for the QUIC handshake.
 	// Peer identity is separately authenticated via Noise XX, so the
 	// QUIC TLS layer provides transport encryption + integrity.
@@ -73,8 +96,13 @@ func NewServer(ctx context.Context, addr string, pubKey, privKey [32]byte) (*Ser
 		return nil, err
 	}
 
+	quicCfg := &quic.Config{
+		MaxIncomingStreams: 32,
+		MaxIdleTimeout:     30 * time.Second,
+	}
+
 	tr := &quic.Transport{Conn: udpConn}
-	ln, err := tr.Listen(tlsCfg, nil)
+	ln, err := tr.Listen(tlsCfg, quicCfg)
 	if err != nil {
 		udpConn.Close()
 		return nil, fmt.Errorf("quic listen: %w", err)
@@ -93,6 +121,10 @@ func NewServer(ctx context.Context, addr string, pubKey, privKey [32]byte) (*Ser
 		privKey:  privKey,
 		flow:     DefaultFlowControl(),
 		started:  time.Now(),
+	}
+
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	// Initialize the circuit relay
@@ -137,6 +169,8 @@ func (s *Server) acceptLoop() {
 // handleConn manages a single QUIC connection.
 func (s *Server) handleConn(qc *quic.Conn) {
 	defer qc.CloseWithError(quic.ApplicationErrorCode(0x01), "closing")
+	s.wg.Add(1)
+	defer s.wg.Done()
 
 	// Run the Noise XX handshake over the first stream to establish
 	// peer identity before multiplexing services.
@@ -154,6 +188,7 @@ func (s *Server) handleConn(qc *quic.Conn) {
 		services: make(map[ServiceID]bool),
 		server:   s,
 		lastSeen: time.Now(),
+		allowedServices: s.allowedSvcs,
 	}
 
 	s.mu.Lock()
@@ -168,9 +203,21 @@ func (s *Server) handleConn(qc *quic.Conn) {
 			break
 		}
 
-		// Read the service ID (first byte on every stream)
+		// Read the service ID (first byte on every stream) — loop until
+		// at least 1 byte is read; 0 bytes is not a valid service ID.
 		svcBuf := make([]byte, 1)
-		if _, err := stream.Read(svcBuf); err != nil {
+		var svcReadErr error
+		for {
+			n, err := stream.Read(svcBuf)
+			if err != nil {
+				svcReadErr = err
+				break
+			}
+			if n > 0 {
+				break
+			}
+		}
+		if svcReadErr != nil {
 			stream.Close()
 			continue
 		}
@@ -187,11 +234,27 @@ func (s *Server) handleConn(qc *quic.Conn) {
 			continue
 		}
 
+		// ACL check: if allowedServices is non-empty, the peer must have
+		// the requested service in its allowed set.
+		if len(conn.allowedServices) > 0 && !conn.allowedServices[svcID] {
+			log.Warn().Str("service", string(svcID)).Msg("service not allowed for peer, closing stream")
+			stream.Close()
+			continue
+		}
+
 		s.mu.Lock()
 		s.stats.TotalStreams++
 		s.mu.Unlock()
 
-		go handler(s.ctx, newQuicStream(stream, svcID))
+		go func(ctx context.Context, stm Stream, sid ServiceID) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Str("service", string(sid)).Msg("handler panic, closing stream")
+					stm.Close()
+				}
+			}()
+			handler(ctx, stm)
+		}(s.ctx, newQuicStream(stream, svcID), svcID)
 	}
 
 	s.mu.Lock()
@@ -270,6 +333,8 @@ func readFull(stream *quic.Stream, p []byte) (int, error) {
 
 // readUntilEOF drains a stream until the peer closes its write side.
 // It returns the total bytes read (ignored by callers) and any error.
+// io.EOF is returned as-is (peer closed cleanly); any other error is
+// propagated (e.g. stream reset, connection drop).
 func readUntilEOF(stream *quic.Stream) (int, error) {
 	buf := make([]byte, 4096)
 	total := 0
@@ -277,7 +342,10 @@ func readUntilEOF(stream *quic.Stream) (int, error) {
 		n, err := stream.Read(buf)
 		total += n
 		if err != nil {
-			return total, nil // EOF or reset means peer is done
+			if errors.Is(err, io.EOF) {
+				return total, err
+			}
+			return total, err
 		}
 	}
 }
@@ -307,7 +375,7 @@ func (s *Server) Connect(ctx context.Context, addr string, peerID [32]byte) (*Co
 		MinVersion:         tls.VersionTLS13,
 		NextProtos:         []string{"localweb/1.0"},
 		Certificates:       []tls.Certificate{cert},
-		InsecureSkipVerify: true, // Identity verified via Noise XX
+		InsecureSkipVerify: !s.enforceTLS,
 		ServerName:         host,
 	}
 
@@ -398,7 +466,8 @@ func (s *Server) dialNoise(qc *quic.Conn) ([32]byte, error) {
 	// Synchronize: wait for the responder to close the handshake stream,
 	// which it does only after fully consuming msg3 and completing its
 	// side of the XX handshake. This guarantees msg3 delivery.
-	if _, err := readUntilEOF(stream); err != nil {
+	// io.EOF means the responder closed cleanly (expected).
+	if _, err := readUntilEOF(stream); err != nil && !errors.Is(err, io.EOF) {
 		return [32]byte{}, fmt.Errorf("wait for responder close: %w", err)
 	}
 
@@ -470,19 +539,21 @@ func (s *Server) Stop() {
 	if s.tr != nil {
 		s.tr.Close()
 	}
+	s.wg.Wait()
 	log.Info().Msg("transport server stopped")
 }
 
 // Connection represents a QUIC connection to a peer.
 type Connection struct {
-	mu       sync.Mutex
-	handle   *quic.Conn
-	peerID   [32]byte
-	addr     string
-	state    ConnectionState
-	services map[ServiceID]bool
-	server   *Server
-	lastSeen time.Time
+	mu             sync.Mutex
+	handle         *quic.Conn
+	peerID         [32]byte
+	addr           string
+	state          ConnectionState
+	services       map[ServiceID]bool
+	server         *Server
+	lastSeen       time.Time
+	allowedServices map[ServiceID]bool
 }
 
 func (c *Connection) PeerID() [32]byte           { return c.peerID }
@@ -557,6 +628,9 @@ func (w *quicStream) Close() error                     { return w.q.Close() }
 func (w *quicStream) ServiceID() ServiceID             { return w.svcID }
 func (w *quicStream) ID() uint64                       { return uint64(w.q.StreamID()) }
 
+// MaxFrameSize is the maximum allowed payload size for a single frame (1 MiB).
+const MaxFrameSize = 1 << 20
+
 // EncodeFrameBare encodes a frame without a node ID.
 func EncodeFrameBare(t MessageType, payload []byte) []byte {
 	buf := make([]byte, 5+len(payload))
@@ -572,13 +646,16 @@ func DecodeFrameBare(data []byte) (*Frame, error) {
 		return nil, fmt.Errorf("frame too short")
 	}
 	t := MessageType(data[0])
-	length := binary.BigEndian.Uint32(data[1:5])
-	if len(data) < int(5+length) {
+	length := uint64(binary.BigEndian.Uint32(data[1:5]))
+	if length > MaxFrameSize {
+		return nil, fmt.Errorf("frame too large: %d > %d", length, MaxFrameSize)
+	}
+	if uint64(len(data)) < 5+length {
 		return nil, fmt.Errorf("frame incomplete")
 	}
 	return &Frame{
 		Type:    t,
-		Length:  length,
+		Length:  uint32(length),
 		Payload: data[5 : 5+length],
 	}, nil
 }

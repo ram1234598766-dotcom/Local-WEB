@@ -3,8 +3,10 @@ package crypto
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha512"
 	"fmt"
 	"io"
+	"math/big"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/sha3"
@@ -94,4 +96,57 @@ func GenerateX25519KeyPair() (pub, priv [32]byte, err error) {
 	}
 	copy(pub[:], out)
 	return
+}
+
+var (
+	curve25519p *big.Int
+	curve25519d *big.Int
+)
+
+func init() {
+	curve25519p, _ = new(big.Int).SetString("57896044618658097711785492504343953926634992332820282019728792003956564819949", 10)
+	curve25519d, _ = new(big.Int).SetString("37095705934669483943151133361467617231603323252428812480226727831072828823221", 10)
+}
+
+// Ed25519PublicToX25519 converts an Ed25519 public key to an X25519 public key
+// for use as a Noise identity key in X25519-based handshakes.
+func Ed25519PublicToX25519(pub [32]byte) ([32]byte, error) {
+	// Decode Ed25519 compressed Edwards point.
+	// The public key is in compressed form: first bit is x sign, rest is y.
+	yBytes := make([]byte, 32)
+	copy(yBytes, pub[:])
+	yBytes[0] &= 0x7f
+
+	y := new(big.Int).SetBytes(yBytes)
+	one := big.NewInt(1)
+	p := curve25519p
+
+	// u = (1 + y) / (1 - y) mod p
+	// u = (1 + y) * inv(1 - y) mod p
+	denom := new(big.Int).Sub(p, y) // p - y
+	inv := new(big.Int).ModInverse(denom, p)
+	num := new(big.Int).Add(one, y)
+	u := new(big.Int).Mod(new(big.Int).Mul(num, inv), p)
+
+	var xpub [32]byte
+	uBytes := u.Bytes()
+	copy(xpub[32-len(uBytes):], uBytes)
+	return xpub, nil
+}
+
+// Ed25519PrivateToX25519 converts an Ed25519 private key seed to an X25519
+// private key for use as a Noise identity key in X25519-based handshakes.
+func Ed25519PrivateToX25519(priv [32]byte) [32]byte {
+	// Ed25519 expands the seed via SHA-512; first 32 bytes are the scalar.
+	h := sha512.New()
+	h.Write(priv[:])
+	digest := h.Sum(nil)
+	scalar := make([]byte, 32)
+	copy(scalar, digest[:32])
+	scalar[0] &= 248
+	scalar[31] &= 127
+	scalar[31] |= 64
+	var xpriv [32]byte
+	copy(xpriv[:], scalar)
+	return xpriv
 }

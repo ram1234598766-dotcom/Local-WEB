@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,9 @@ import (
 // operations, so the XX pattern remains exactly as specified. The exact same
 // protocol name must be used by both peers.
 const protocolName = "Noise_XX_25519_XSalsa20Poly1305_SHA3-256"
+
+// MaxNonce is the maximum allowed nonce value before rekey is required.
+const MaxNonce = ^uint64(0)
 
 // NoiseSession holds state for a Noise XX handshake and the post-handshake
 // transport session keys.
@@ -283,13 +287,10 @@ func (s *NoiseSession) responderWrite(peerMsg []byte) ([]byte, []byte, bool, err
 
 // split derives the transport send/receive keys (Noise Split token).
 func (s *NoiseSession) split() {
-	kdf := hkdf.New(sha3.New256, s.ck[:], nil, nil)
-	// First output → k1 (send for initiator, recv for responder).
+	kdf := hkdf.New(sha3.New256, nil, s.ck[:], []byte{0x01})
 	kdf.Read(s.sendKey[:])
-	// Second output → k2.
 	kdf.Read(s.recvKey[:])
 	if !s.isInitiator {
-		// Responder reverses: it receives on k1 and sends on k2.
 		s.sendKey, s.recvKey = s.recvKey, s.sendKey
 	}
 }
@@ -303,9 +304,9 @@ func (s *NoiseSession) mixHash(data []byte) {
 }
 
 // mixKey performs ck = HKDF(ck, dh, 1).
-// In Noise semantics: ck is the IKM, dh is the info, no explicit salt.
+// In Noise semantics: ck is the salt, dh is the IKM, info = 0x01.
 func (s *NoiseSession) mixKey(dh []byte) {
-	kdf := hkdf.New(sha3.New256, s.ck[:], nil, dh)
+	kdf := hkdf.New(sha3.New256, dh, s.ck[:], []byte{0x01})
 	kdf.Read(s.ck[:])
 	s.ok = true
 }
@@ -355,8 +356,11 @@ func (s *NoiseSession) Encrypt(plaintext []byte) ([]byte, error) {
 	if !s.complete {
 		return nil, fmt.Errorf("handshake not complete")
 	}
+	if s.sendCount > MaxNonce {
+		return nil, fmt.Errorf("send nonce overflow")
+	}
 	var nonce [24]byte
-	putUint64(nonce[:8], s.sendCount)
+	binary.BigEndian.PutUint64(nonce[16:], s.sendCount)
 	s.sendCount++
 	return secretbox.Seal(nil, plaintext, &nonce, &s.sendKey), nil
 }
@@ -369,8 +373,11 @@ func (s *NoiseSession) Decrypt(ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) < secretbox.Overhead {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
+	if s.recvCount > MaxNonce {
+		return nil, fmt.Errorf("recv nonce overflow")
+	}
 	var nonce [24]byte
-	putUint64(nonce[:8], s.recvCount)
+	binary.BigEndian.PutUint64(nonce[16:], s.recvCount)
 	s.recvCount++
 	out, ok := secretbox.Open(nil, ciphertext, &nonce, &s.recvKey)
 	if !ok {
@@ -390,9 +397,3 @@ func (s *NoiseSession) RemotePublic() [32]byte {
 
 // Complete reports whether the handshake has finished.
 func (s *NoiseSession) Complete() bool { return s.complete }
-
-func putUint64(b []byte, v uint64) {
-	for i := 0; i < 8; i++ {
-		b[i] = byte(v >> (8 * uint(i)))
-	}
-}
