@@ -1,161 +1,90 @@
-# LocalWEB — Tech Stack Decision
+# TECH STACK
 
-## Language: Go 1.23+
+This document describes the **actual** technology stack of the Local-WEB Go P2P networking stack as implemented in `pkg/` and `cmd/`. It supersedes the previous version which described a planned/aspirational stack.
 
-### Why Go (not Rust, not C++)
+## Module
 
-| Factor | Go | Rust | C++ |
-|--------|-----|------|-----|
-| Development speed | Fast | Slow | Very slow |
-| Memory safety | GC | Ownership | Manual |
-| QUIC ecosystem | quic-go (mature) | quinn (good) | boost::asio |
-| mDNS/DNS | miekg/dns, zeroconf | trust-dns | Custom |
-| Cross-compile | Trivial (GOOS/GOARCH) | Cross but harder | Painful |
-| FUSE | go-fuse (mature) | fuse3 (C bindings) | libfuse |
-| WireGuard | golang.zx2c4.com/wireguard | boringtun | libwg |
-| Protobuf | google.golang.org/protobuf | prost | protobuf-cpp |
-| Developer productivity | High | Medium | Low |
-| Concurrency | Goroutines (easy) | Tokio (good) | Threads (hard) |
-| Error handling | Explicit | Explicit | Exceptions |
-| Binary size | ~15MB | ~5MB | Varies |
-| Startup time | Fast | Fast | Fast |
-
-**Decision: Go.** The ecosystem alignment is perfect. quic-go, miekg/dns, go-fuse, wireguard-go — all mature Go libraries. Development speed matters more than squeezing the last 10% of performance for a v1.0.
-
-### When to Consider Rust
-- If we hit GC pauses >10ms under load
-- If crypto operations bottleneck
-- If memory footprint is too high
-- These are unlikely for v1.0 — profile first, rewrite later if needed.
-
----
+- **Module path**: `github.com/mrityunjay/LocalWEB`
+- **Language**: Go 1.26.0
+- **Build system**: GNU Make (`Makefile` with `build`, `test`, `bench`, `lint`, `run-node`, `run-cli`, `cross-compile`, `generate`, `clean`, `deps` targets)
+- **Code generation**: `protoc` for `pkg/proto/api/proto/messages.proto`
 
 ## Core Dependencies
 
-### Transport
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/quic-go/quic-go` | QUIC (RFC 9000) | Mature, production-ready |
-| `golang.org/x/crypto` | Noise, X25519, ChaCha20 | Standard library |
+| Dependency | Version | Purpose |
+|---|---|---|
+| `github.com/quic-go/quic-go` | v0.62.0 | QUIC transport layer (Layer L5) |
+| `github.com/dgraph-io/badger/v3` | v3.2103.5 | Embedded key-value store (store layer) |
+| `github.com/ipfs/go-cid` | v0.4.0 | Content-addressed identifiers (CID v1) |
+| `github.com/klauspost/compress` | v1.18.0 | zstd compression (files service) |
+| `github.com/rs/zerolog` | v1.33.0 | Structured JSON logging |
+| `github.com/spf13/cobra` | v1.8.1 | CLI framework (`cmd/cli/`) |
+| `github.com/stretchr/testify` | v1.12.1 | Test assertions and mocking |
+| `golang.org/x/crypto` | (latest) | Ed25519, X25519, SHA3-256 (crypto primitives) |
+| `go.yaml.in/yaml/v3` | (latest) | YAML parsing (registry service manifests) |
+| `google.golang.org/protobuf` | (latest) | Protobuf marshaling (proto layer) |
 
-### Discovery
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/grandcat/zeroconf` | mDNS-SD | Mature, cross-platform |
-| `github.com/miekg/dns` | DNS parser/server | Gold standard in Go |
+## Security & Cryptography (`pkg/security/`, `pkg/crypto/`)
 
-### Storage
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/dgraph-io/badger/v3` | Embedded KV store | Production-ready |
-| `github.com/ipfs/go-cid` | Content identifiers | IPFS ecosystem |
+- **Identity**: Ed25519 keypair generation, signing, and verification
+- **Key exchange**: X25519 for ephemeral key exchange
+- **Hashing**: SHA3-256 for content addressing and audit trails
+- **Transport encryption**: Noise XX handshake (implemented in `pkg/crypto/noise.go`)
+- **Store encryption**: AES-GCM authenticated encryption at rest (BadgerDB + `pkg/store/store.go`)
+- **Capability tokens**: Ed25519-signed tokens with canonical JSON serialization (`pkg/security/capability.go`)
+- **Proof of Work**: SHA3-based PoW challenge/verify (`pkg/security/pow.go`)
+- **Audit log**: Append-only hash chain with SHA3-256 (`pkg/security/audit.go`)
 
-### Crypto
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `golang.org/x/crypto` | Ed25519, X25519, HKDF | Standard |
-| `github.com/rs/zerolog` | Structured logging | Fast, zero-alloc |
+## Networking (`pkg/transport/`, `pkg/discovery/`)
 
-### Config / CLI
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/spf13/cobra` | CLI framework | Standard |
-| `github.com/spf13/viper` | Config management | Standard |
-| `google.golang.org/protobuf` | Serialization | Standard |
+- **Transport protocol**: QUIC (RFC 9001) via `quic-go`
+- **Link types supported**: 6 physical/adaptation layers in `pkg/link/`:
+  - WiFi Station, WiFi Direct, Ad-hoc, USB Tether, BLE, Acoustic
+- **Discovery modes**: WiFi, BLE, mDNS (multicast DNS) — merged by `Orchestrator` in `pkg/discovery/discovery.go`
+- **NAT traversal**: UDP hole punching with relay fallback
+- **Circuit relay**: QUIC-based circuit relay for NAT traversal
+- **Stream multiplexing**: 1-byte ServiceID-based routing over QUIC streams
 
-### Voice/Video
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/nicknack/opus` | Opus codec (CGo) | Wrapper around libopus |
-| `github.com/nicknack/vpx` | VP9 codec | Wrapper around libvpx |
+## Data Layer (`pkg/store/`, `pkg/dht/`)
 
-### VPN
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `golang.zx2c4.com/wireguard` | WireGuard userspace | Official Go impl |
+- **Primary store**: BadgerDB (embedded, LSM-tree based)
+- **Block store**: Content-addressed block storage with CID support (`pkg/store/block_store.go`)
+- **Peer store**: Peer metadata, pubkeys, and connection state (`pkg/store/peer_store.go`)
+- **DHT**: Kademlia-style distributed hash table:
+  - KBucket size: 20
+  - α (concurrency): 3
+  - XOR-based routing (SHA3-256 of public key)
+  - Operations: FindNode, Store, Lookup, RegisterNode, Ping
+- **CRDT**: Two conflict-free replicated data types:
+  - ORSet (add-wins set with tombstones)
+  - RGA (Replicated Growable Array for collaborative text editing)
 
-### FUSE
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/hanwen/go-fuse` | FUSE filesystem | Mature, cross-platform |
+## Services Layer (`pkg/services/`)
 
-### Compression
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/klauspost/compress` | Zstd, gzip, snappy | Fastest Go compression |
+Nine implemented P2P services, each with its own subpackage:
 
-### Time Sync
-| Package | Purpose | Status |
-|---------|---------|--------|
-| `github.com/beevik/ntp` | NTP client | Simple, reliable |
+| Service | Port/Protocol | Key Features |
+|---|---|---|
+| DNS | UDP 5353 (mDNS) | `.localweb` TLD, signed zone records |
+| HTTP | TCP 8080 | Per-site mux, `/health` endpoint, logging middleware |
+| Email | SMTP + IMAP | Maildir storage, PoW antispam |
+| Docs | Custom over messaging | RGA-backed collaborative text, presence, cursors, selections |
+| Files | Bitswap-like protocol | BlockStore + FileStore, zstd compression, Merkle DAG sync |
+| Messaging | Custom pub/sub | Signed messages, offline queue |
+| Registry | HTTP + DHT | LWPKG packages (tar.gz + sig), YAML manifest validation |
+| Voice | Signaling + media | Call state machine, ICE candidates, Opus/VP9 codec profiles |
+| VPN | TUN interface | Tunnel creation via SHA3-256, route distribution |
 
----
+## Testing & Quality
 
-## Serialization: Protobuf
+- **Integration tests**: `test/integration/` — covers DHT, discovery, DNS, messaging, transport, full-stack
+- **Test framework**: `github.com/stretchr/testify`
+- **Linting**: `golangci-lint`, `go vet`, `gofmt`
+- **Race detection**: `go test -race`
+- **Coverage**: `go test -coverprofile`
 
-### Why Protobuf (not JSON, not msgpack)
-- Schema evolution (backward compatible)
-- Compact binary encoding
-- Code generation (Go, future clients)
-- Strong typing
-- Used by gRPC ecosystem
+## Runtime & Deployment
 
-### Proto Files
-```protobuf
-syntax = "proto3";
-package localweb;
-
-message PeerInfo {
-  bytes id = 1;
-  string addr = 2;
-  repeated string services = 3;
-  bytes public_key = 4;
-  int64 last_seen = 5;
-}
-
-message Message {
-  string id = 1;
-  string channel_id = 2;
-  bytes sender = 3;
-  int64 timestamp = 4;
-  bytes payload = 5;
-  bytes signature = 6;
-  string parent_id = 7;
-}
-
-message DNSRecord {
-  string name = 1;
-  uint32 type = 2;
-  uint32 ttl = 3;
-  bytes data = 4;
-  uint32 priority = 5;
-}
-
-message FileBlock {
-  string cid = 1;
-  bytes data = 2;
-  int64 size = 3;
-  string mime = 4;
-  repeated string parents = 5;
-}
-```
-
----
-
-## Build Targets
-
-```bash
-# Native build
-go build -o bin/localweb-node ./cmd/node
-
-# Cross-compile
-GOOS=linux   GOARCH=amd64 go build -o bin/localweb-linux-amd64 ./cmd/node
-GOOS=linux   GOARCH=arm64 go build -o bin/localweb-linux-arm64 ./cmd/node
-GOOS=darwin  GOARCH=arm64 go build -o bin/localweb-macos-arm64 ./cmd/node
-GOOS=darwin  GOARCH=amd64 go build -o bin/localweb-macos-amd64 ./cmd/node
-GOOS=windows GOARCH=amd64 go build -o bin/localweb-windows-amd64.exe ./cmd/node
-```
-
----
-
-*Last updated: 2026-09-04*
+- **Target platforms**: Linux, macOS, Windows (cross-compile via Makefile)
+- **Entry points**: `cmd/node` (full node daemon), `cmd/cli` (CLI client)
+- **No external dependencies required**: fully self-contained Go binary
