@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrityunjayjha/LocalWEB/pkg/crypto"
+	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 )

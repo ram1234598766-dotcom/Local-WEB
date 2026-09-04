@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrityunjayjha/LocalWEB/pkg/link"
+	"github.com/mrityunjay/LocalWEB/pkg/link"
 	"github.com/rs/zerolog/log"
 )
 

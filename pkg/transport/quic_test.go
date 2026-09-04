@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrityunjayjha/LocalWEB/pkg/crypto"
+	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 )
 
 // TestTransportRoundTrip spins up two real quic-go servers, connects
