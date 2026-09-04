@@ -29,12 +29,12 @@ This is the consolidated roadmap reflecting the **actual implemented state** of 
 | DNS | `pkg/services/dns/` | COMPLETE | `.localweb` TLD, UDP 5353, signed zone records, A/AAAA/PTR/TXT/SRV |
 | HTTP Gateway | `pkg/services/http/` | COMPLETE | Per-site mux, `/health`, logging middleware, graceful shutdown |
 | Email | `pkg/services/email/` | COMPLETE | SMTP server, IMAP server, Maildir storage, PoW antispam challenge |
-| Messaging | `pkg/services/messaging/` | COMPLETE | Pub/sub channels, signed messages, offline queue with replay |
+| Messaging | `pkg/services/messaging/` | COMPLETE | Pub/sub channels, Ed25519-signed messages, offline queue with replay (`NewService(store, privKey) signs with private key) |
 | Files | `pkg/services/files/` | COMPLETE | BlockStore + FileStore (zstd), syncEngine with Merkle DAG diff, Bitswap-like exchange protocol, FUSE mount stub |
 | Docs | `pkg/services/docs/` | COMPLETE | RGA-backed collaborative text editor, presence/cursors/selections, broadcast + pending-op queue for offline |
 | Registry | `pkg/services/registry/` | COMPLETE | LWPKG package format (tar.gz + sig), YAML manifest validation, HTTP API, DHT distribution |
 | Voice | `pkg/services/voice/` | COMPLETE | Call state machine, ICE candidate exchange, Opus/VP9 codec profiles, signaling over messaging channel |
-| VPN | `pkg/services/vpn/` | COMPLETE | Tunnel creation via SHA3-256, route distribution, TUN interface stub |
+| VPN | `pkg/services/vpn/` | COMPLETE | Tunnel creation via SHA3-256, route distribution, TUN interface (Linux/macOS real, graceful fallback on unsupported platforms) |
 
 ## Proto Layer
 
@@ -67,4 +67,4 @@ All build/test/lint tooling is in place via `Makefile`:
 
 ## Summary
 
-**All 9 architecture layers are COMPLETE.** The full implementation — from transport (QUIC) through services (DNS, HTTP, Email, Messaging, Files, Docs, Registry, Voice, VPN) to app entry points (`cmd/node`, `cmd/cli`) — is committed and tested. The codebase has been integrated per commit `feat: implement DHT, CRDT, NAT, security, and services per architecture v3` and subsequent additions for the Makefile, CLI, and integration tests.
+**All 9 architecture layers are COMPLETE.** The full implementation — from transport (QUIC) through services (DNS, HTTP, Email, Messaging, Files, Docs, Registry, Voice, VPN) to app entry points (`cmd/node`, `cmd/cli`) — is committed and tested. Bug fixes applied: CRDT `uniqueTag()` collision (atomic counter), DNS `SerializeMessage` encoding (correct Type/Class/TTL/RData), messaging signature signing (private key), `MarshalChannel` buffer panic (pre-allocated buffer). Cross-platform TUN interface implemented for Linux (real `/dev/net/tty` + ioctl), macOS (utun), with graceful fallback stub.
