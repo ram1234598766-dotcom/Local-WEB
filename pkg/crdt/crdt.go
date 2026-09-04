@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mrityunjay/LocalWEB/pkg/crypto"
@@ -16,10 +17,12 @@ import (
 
 // OR-Set (Observed-Remove Set) - add-wins semantics
 type ORSet struct {
-	mu     sync.RWMutex
-	adds   map[string]map[string]bool // element -> set of unique tags
+	mu      sync.RWMutex
+	adds    map[string]map[string]bool // element -> set of unique tags
 	removes map[string]bool            // set of tombstones (tags)
 }
+
+var tagCounter uint32
 
 func NewORSet() *ORSet {
 	return &ORSet{
@@ -389,7 +392,10 @@ func (r *LWWRegister) Unmarshal(data []byte) error {
 
 func uniqueTag() string {
 	h := sha3.New256()
-	h.Write([]byte(time.Now().String()))
+	b := make([]byte, 16)
+	binary.LittleEndian.PutUint64(b[:8], uint64(time.Now().UnixNano()))
+	binary.LittleEndian.PutUint32(b[8:12], atomic.AddUint32(&tagCounter, 1))
+	h.Write(b[:12])
 	var out [32]byte
 	h.Sum(out[:0])
 	return string(out[:])

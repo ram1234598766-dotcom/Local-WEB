@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package message;
+
+option go_package = "github.com/mrityunjay/LocalWEB/pkg/proto";
+
+enum MessageType {
+  MSG_PING = 0;
+  MSG_PONG = 1;
+  MSG_FIND_NODE = 2;
+  MSG_FOUND_NODE = 3;
+  MSG_STORE = 4;
+  MSG_FIND_VALUE = 5;
+  MSG_FOUND_VALUE = 6;
+  MSG_REGISTER_NODE = 7;
+  MSG_ANNOUNCE = 8;
+  MSG_HEARTBEAT = 9;
+  MSG_RELAY = 10;
+  MSG_RELAY_ACK = 11;
+}
+
+message Message {
+  MessageType type = 1;
+  bytes src = 2;
+  bytes dst = 3;
+  bytes payload = 4;
+}

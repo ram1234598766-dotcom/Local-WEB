@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package file;
+
+option go_package = "github.com/mrityunjay/LocalWEB/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+message Block {
+  bytes cid = 1;
+  bytes data = 2;
+}
+
+message BlockMeta {
+  bytes cid = 1;
+  int64 size = 2;
+  bool compressed = 3;
+  google.protobuf.Timestamp created = 4;
+  int64 ref_count = 5;
+}
+
+message FileMeta {
+  bytes cid = 1;
+  string name = 2;
+  int64 size = 3;
+  string mime_type = 4;
+  google.protobuf.Timestamp modified = 5;
+  google.protobuf.Timestamp created = 6;
+  repeated ACLEntry acl = 7;
+  int64 version = 8;
+  bytes parent_cid = 9;
+}
+
+message ACLEntry {
+  bytes pub_key = 1;
+  bool read = 2;
+  bool write = 3;
+  bool admin = 4;
+}

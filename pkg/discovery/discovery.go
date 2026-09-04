@@ -135,7 +135,11 @@ func (o *Orchestrator) processEvents() {
 	}
 }
 
-// handleEvent processes a single peer event.
+// HandleEvent processes a peer event directly. Exported for testing.
+func (o *Orchestrator) HandleEvent(evt PeerEvent) {
+	o.handleEvent(evt)
+}
+
 func (o *Orchestrator) handleEvent(evt PeerEvent) {
 	switch evt.Type {
 	case PeerFound, PeerUpdated:

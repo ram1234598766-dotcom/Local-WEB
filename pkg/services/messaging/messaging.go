@@ -68,9 +68,10 @@ func (s *memoryStore) History(channel ChannelID, after string, limit int) ([]Mes
 }
 
 type Service struct {
-	mu       sync.RWMutex
+	mu      sync.RWMutex
 	channels map[ChannelID]*Channel
 	store    Store
+	privKey   [32]byte
 }
 
 type Channel struct {
@@ -80,14 +81,19 @@ type Channel struct {
 	LastSeen time.Time
 }
 
-func NewService(store Store) *Service {
+func NewService(store Store, privKey [32]byte) *Service {
 	if store == nil {
-		store = newMemoryStore()
+		store = NewMemoryStore()
 	}
 	return &Service{
 		channels: make(map[ChannelID]*Channel),
 		store:    store,
+		privKey:  privKey,
 	}
+}
+
+func NewMemoryStore() *memoryStore {
+	return &memoryStore{history: make(map[ChannelID][]Message)}
 }
 
 func (s *Service) CreateChannel(members [][32]byte) ChannelID {
@@ -130,7 +136,7 @@ func (s *Service) Publish(ctx context.Context, channelID ChannelID, sender [32]b
 		ParentID:  parentID,
 		Type:      0,
 	}
-	sig, err := crypto.Sign(sender, append([]byte(msg.ID), content...))
+	sig, err := crypto.Sign(s.privKey, append([]byte(msg.ID), content...))
 	if err != nil {
 		return Message{}, err
 	}
@@ -162,10 +168,13 @@ func (s *Service) MarshalChannel(channelID ChannelID) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("channel not found")
 	}
-	var buf []byte
-	binary.LittleEndian.PutUint64(buf, uint64(ch.Created.UnixNano()))
-	buf = append(buf, 0, 0, 0, 0)
-	binary.LittleEndian.PutUint64(buf, uint64(ch.LastSeen.UnixNano()))
+	buf := make([]byte, 20)
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(ch.Created.UnixNano()))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(ch.LastSeen.UnixNano()))
+	buf[16] = 0
+	buf[17] = 0
+	buf[18] = 0
+	buf[19] = 0
 	return buf, nil
 }
 

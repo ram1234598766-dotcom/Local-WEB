@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package peer;
+
+option go_package = "github.com/mrityunjay/LocalWEB/pkg/proto";
+
+message PeerInfo {
+  bytes id = 1;
+  bytes public_key = 2;
+  string name = 3;
+  repeated string addrs = 4;
+  repeated string services = 5;
+  double score = 6;
+  int64 last_seen = 7;
+  int64 first_seen = 8;
+  string version = 9;
+}

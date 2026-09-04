@@ -276,13 +276,13 @@ func SerializeMessage(msg *DNSMessage) ([]byte, error) {
 	binary.BigEndian.PutUint16(buf[10:12], msg.Header.ARCOUNT)
 	for _, q := range msg.Questions {
 		buf = append(buf, encodeName(q.Name)...)
-		buf = append(buf, 0, 0, 0, 0)
+		buf = append(buf, byte(q.Type>>8), byte(q.Type), byte(q.Class>>8), byte(q.Class))
 	}
 	for _, r := range msg.Answers {
 		buf = append(buf, encodeName(r.Name)...)
-		buf = append(buf, 0, 0, byte(r.Type>>8), byte(r.Type), 0, 0)
-		buf = append(buf, 0, 0, 0, 0)
-		buf = append(buf, 0, 0)
+		buf = append(buf, byte(r.Type>>8), byte(r.Type), byte(r.Class>>8), byte(r.Class))
+		buf = append(buf, byte(r.TTL>>24), byte(r.TTL>>16), byte(r.TTL>>8), byte(r.TTL))
+		buf = append(buf, byte(len(r.RData)>>8), byte(len(r.RData)))
 		buf = append(buf, r.RData...)
 	}
 	return buf, nil
