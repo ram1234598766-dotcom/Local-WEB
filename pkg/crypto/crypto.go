@@ -1,0 +1,97 @@
+package crypto
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"fmt"
+	"io"
+
+	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/sha3"
+)
+
+// KeySize is the byte length of LocalWEB public/private keys.
+const KeySize = 32
+
+// GenerateKeyPair creates a new Ed25519 keypair.
+// The public key is returned as a 32-byte array (the Ed25519 public key
+// is the first 32 bytes of the 64-byte public key material, which is the
+// compressed encoding of the point).
+func GenerateKeyPair() (pub, priv [32]byte, err error) {
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return pub, priv, fmt.Errorf("generate keypair: %w", err)
+	}
+
+	copy(pub[:], pubKey[:32])
+	copy(priv[:], privKey[:32])
+	return pub, priv, nil
+}
+
+// NodeID derives a node ID from a public key using SHA3-256.
+// This matches the DHT's 256-bit Kademlia key space.
+func NodeID(pub [32]byte) [32]byte {
+	return SHA3Hash(pub[:])
+}
+
+// Sign signs a message with the given private key.
+func Sign(priv [32]byte, msg []byte) ([]byte, error) {
+	// Expand the 32-byte seed to a full Ed25519 private key (64 bytes).
+	fullPriv := make([]byte, ed25519.PrivateKeySize)
+	copy(fullPriv[:32], priv[:])
+	// Derive the public key portion from the seed.
+	pubKey, err := computePubFromSeed(priv)
+	if err != nil {
+		return nil, err
+	}
+	copy(fullPriv[32:], pubKey)
+
+	return ed25519.Sign(ed25519.PrivateKey(fullPriv), msg), nil
+}
+
+// Verify checks a signature against a public key and message.
+func Verify(pub [32]byte, msg, sig []byte) bool {
+	return ed25519.Verify(ed25519.PublicKey(pub[:]), msg, sig)
+}
+
+// computePubFromSeed derives the Ed25519 public key from a 32-byte seed.
+func computePubFromSeed(seed [32]byte) ([]byte, error) {
+	priv := make([]byte, ed25519.PrivateKeySize)
+	copy(priv[:32], seed[:])
+	// ed25519.NewKeyFromSeed computes both halves.
+	fullPriv := ed25519.NewKeyFromSeed(priv[:32])
+	return fullPriv[32:], nil
+}
+
+// SHA3Hash computes the SHA3-256 hash of data.
+func SHA3Hash(data []byte) [32]byte {
+	h := sha3.New256()
+	h.Write(data)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// SeedToPrivateKey expands a 32-byte seed into a full 64-byte Ed25519
+// private key (seed || public). Useful for x509 and TLS interop.
+func SeedToPrivateKey(seed [32]byte) ([]byte, error) {
+	full := ed25519.NewKeyFromSeed(seed[:])
+	return []byte(full), nil
+}
+
+// GenerateX25519KeyPair creates a new X25519 keypair for Noise handshakes.
+func GenerateX25519KeyPair() (pub, priv [32]byte, err error) {
+	if _, err = io.ReadFull(rand.Reader, priv[:]); err != nil {
+		return
+	}
+	priv[0] &= 248
+	priv[31] &= 127
+	priv[31] |= 64
+
+	out, err := curve25519.X25519(priv[:], curve25519.Basepoint)
+	if err != nil {
+		return
+	}
+	copy(pub[:], out)
+	return
+}
