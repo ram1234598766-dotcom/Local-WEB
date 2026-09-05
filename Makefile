@@ -29,6 +29,9 @@ lint:
 	$(GO) vet ./...
 	$(GO) fmt ./...
 
+test-chaos:
+	$(GO) test -race -v ./pkg/chaos/...
+
 run-node:
 	$(GO) run ./cmd/node
 
