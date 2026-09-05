@@ -1,6 +1,6 @@
 # LocalWEB — Comprehensive Roadmap (Post-Phase 5)
 
-## Current State: Phase 5 Complete ✅
+## Current State: Phase 5 Complete ✅ | Phase 6.1 Federation ✅
 
 **What's shipped:**
 - Web GUI (SPA) on `localhost:8080` with 13 screens, all backed by real API endpoints
@@ -9,18 +9,22 @@
 - All 9 service panels functional (Files, DNS, HTTP, Email, Messaging, Docs, Registry, Voice, VPN)
 - SSE real-time updates on `/api/events`
 - Dark/light theme, reduced-motion support, keyboard accessibility
+- **NEW: RendezvousDiscoveryMode** — cross-LAN federation via `--rendezvous` flag
 
 **Verified on:** Go 1.27 (local), Go 1.26 (WSL CI), `make lint` + `make test -race` all green
+
+**Last commit:** `e98e233` — RendezvousDiscoveryMode for cross-LAN federation
 
 ---
 
 ## Phase 6 — Production Hardening (Priority: Critical)
 
-### 6.1 Federation & Cross-LAN (Rendezvous)
+### 6.1 Federation & Cross-LAN (Rendezvous) ✅
 - **Goal:** Two nodes across internet (not just LAN) can discover each other
 - **Work:** Deploy rendezvous relay servers, add to discovery orchestrator
 - **Tests:** E2E test with two nodes behind different NATs
 - **Files:** `pkg/federation/`, `pkg/discovery/orchestrator.go`
+- **Status:** Implemented `RendezvousDiscoveryMode` with CLI flags `--rendezvous`, `--rendezvous-register`, `--rendezvous-poll`
 
 ### 6.2 Post-Quantum Handshake (Hybrid X25519+Kyber)
 - **Goal:** Security story survives quantum attack
