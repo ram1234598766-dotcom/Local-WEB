@@ -4,7 +4,6 @@ package vpn
 
 import (
 	"fmt"
-	"os"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
