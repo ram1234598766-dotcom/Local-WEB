@@ -54,11 +54,12 @@
 - **Files:** `.github/workflows/ci.yml`, `pkg/chaos/`
 - **Status:** Implemented `ChaosRunner` with built-in scenarios (partition, latency, loss, duplication, corruption), CI workflow with nightly chaos runs, 12 test cases passing
 
-### 6.6 QoS/Bandwidth Shaping
+### 6.6 QoS/Bandwidth Shaping ✅
 - **Goal:** Voice, VPN, Files compete fairly
 - **Work:** Token bucket per service/peer, priority queues
 - **Tests:** Concurrent voice call + file transfer + VPN
-- **Files:** `pkg/transport/`, `pkg/services/voice/`, `pkg/services/vpn/`
+- **Files:** `pkg/qos/`
+- **Status:** Implemented `QoSManager` with token bucket rate limiting, 8 pre-configured service classes (voice, vpn, files, messaging, email, dns, http, registry, docs), HTB hierarchy support, context-aware QoS propagation, 12 tests passing
 
 ### 6.7 Module Publishing
 - **Goal:** `go get github.com/ram1234598766-dotcom/Local-WEB@v1.0.0` works
