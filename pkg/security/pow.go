@@ -157,7 +157,7 @@ func (a *DifficultyAdjuster) RecordSolve(d time.Duration) uint8 {
 	avg := averageDuration(a.history)
 	factor := float64(avg) / float64(a.config.TargetSolveTime)
 
-	newDiff := float64(a.difficulty)
+	var newDiff float64
 	if factor > a.config.MaxAdjustmentFactor {
 		factor = a.config.MaxAdjustmentFactor
 	}
