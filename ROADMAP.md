@@ -26,11 +26,12 @@
 - **Files:** `pkg/federation/`, `pkg/discovery/orchestrator.go`
 - **Status:** Implemented `RendezvousDiscoveryMode` with CLI flags `--rendezvous`, `--rendezvous-register`, `--rendezvous-poll`
 
-### 6.2 Post-Quantum Handshake (Hybrid X25519+Kyber)
+### 6.2 Post-Quantum Handshake (Hybrid X25519+Kyber) ✅
 - **Goal:** Security story survives quantum attack
 - **Work:** Integrate `pkg/crypto` hybrid into Noise XX layer
 - **Tests:** Handshake with both classical + PQ KEM, downgrade test
 - **Files:** `pkg/crypto/hybrid.go`, `pkg/transport/`
+- **Status:** Implemented `HybridServer` with `--hybrid` flag, HKDF key combination
 
 ### 6.3 Multi-Path Link Aggregation
 - **Goal:** Use BLE + WiFi simultaneously for redundancy
