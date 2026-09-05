@@ -21,7 +21,7 @@ key in logs, report it immediately — this is a security incident.
 Please report security vulnerabilities responsibly:
 
 1. **Do not** open a public GitHub issue for security bugs.
-2. Email: `security@localweb.p2p` (or open a private security advisory on GitHub).
+2. Email: `ram1234598766@gmail.com` (or open a private security advisory on GitHub).
 3. Include:
    - A description of the vulnerability
    - Steps to reproduce
