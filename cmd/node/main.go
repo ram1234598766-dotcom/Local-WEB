@@ -31,6 +31,9 @@ func main() {
 	rendezvousRegister := flag.Bool("rendezvous-register", true, "register this node with rendezvous server")
 	rendezvousPoll := flag.Duration("rendezvous-poll", 60*time.Second, "rendezvous poll interval")
 
+	// Post-quantum hybrid handshake
+	useHybrid := flag.Bool("hybrid", false, "enable post-quantum hybrid Noise+Kyber handshake")
+
 	flag.Parse()
 
 	if *name == "" {
@@ -144,7 +147,7 @@ func main() {
 	}()
 	defer disc.Stop()
 
-	server, err := transport.NewServer(ctx, *addr, pub, priv)
+	server, err := transport.NewHybridServer(ctx, *addr, pub, priv, *useHybrid)
 	if err != nil {
 		log.Fatalf("transport server: %v", err)
 	}
