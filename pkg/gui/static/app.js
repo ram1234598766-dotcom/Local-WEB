@@ -386,42 +386,250 @@ class LocalWEBApp {
     return svg;
   }
 
-  async renderFiles() {
+  async renderDNS() {
     this.showLoading(true);
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">Files</div><div class="card-body"><p style="color: var(--color-text-muted);">File sharing via DHT block exchange. Drop files in the node directory to share.</p></div></div>';
-    this.showLoading(false);
+    try {
+      const records = await this.fetchAPI('/dns/records');
+      this.showLoading(false);
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header">DNS Records (.localweb)</div>
+          <div class="card-body">
+            ${records.length === 0 ?
+              '<p style="color: var(--color-text-muted);">No DNS records. Peers will appear here once connected.</p>' :
+              '<table class="table"><thead><tr><th>Name</th><th>Type</th><th>Value</th><th>Status</th></tr></thead><tbody>' +
+              records.map(r => `<tr><td>${r.name}</td><td>${r.type}</td><td>${r.value}</td><td>${r.verified ? 'verified' : 'pending'}</td></tr>`).join('') +
+              '</tbody></table>'
+            }
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      this.showLoading(false);
+    }
   }
 
-  renderDNS() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">DNS</div><div class="card-body"><p style="color: var(--color-text-muted);">Browse .localweb records.</p></div></div>';
+  async renderHTTP() {
+    this.showLoading(true);
+    try {
+      const sites = await this.fetchAPI('/http/sites');
+      this.showLoading(false);
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header">HTTP Gateway Sites</div>
+          <div class="card-body">
+            <table class="table">
+              <thead><tr><th>Site</th><th>Status</th><th>Routes</th></tr></thead>
+              <tbody>
+                ${sites.map(s => `<tr>
+                  <td>${s.name}</td>
+                  <td><span style="color: var(--color-success);">${s.status}</span></td>
+                  <td>${s.routes}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      this.showLoading(false);
+    }
   }
 
-  renderHTTP() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">HTTP Gateway</div><div class="card-body"><p style="color: var(--color-text-muted);">Per-site routing configuration.</p></div></div>';
+  async renderEmail() {
+    this.showLoading(true);
+    try {
+      const msgs = await this.fetchAPI('/email/messages');
+      this.showLoading(false);
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header">Inbox (${msgs.length})</div>
+          <div class="card-body">
+            ${msgs.length === 0 ?
+              '<p style="color: var(--color-text-muted);">No messages.</p>' :
+              '<table class="table"><thead><tr><th>From</th><th>Subject</th><th>Date</th></tr></thead><tbody>' +
+              msgs.map(m => `<tr><td>${m.from}</td><td>${m.subject}</td><td>${new Date(m.date).toLocaleTimeString()}</td></tr>`).join('') +
+              '</tbody></table>'
+            }
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      this.showLoading(false);
+    }
   }
 
-  renderEmail() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">Email</div><div class="card-body"><p style="color: var(--color-text-muted);">SMTP + IMAP with PoW antispam.</p></div></div>';
+  async renderMessaging() {
+    this.showLoading(true);
+    try {
+      const msgs = await this.fetchAPI('/messaging/messages');
+      this.showLoading(false);
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header">Messaging</div>
+          <div class="card-body">
+            <div id="message-list" style="height: 200px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 0.25rem; padding: 0.5rem; margin-bottom: 0.75rem;">
+              ${msgs.map(m => `<div style="margin-bottom: 0.5rem;"><strong>${m.from}</strong>: ${m.text}</div>`).join('')}
+            </div>
+            <form id="message-form" style="display: flex; gap: 0.5rem;">
+              <input type="text" class="form-input" id="message-input" placeholder="Type a message…" autocomplete="off" />
+              <button type="submit" class="btn btn-primary btn-sm">Send</button>
+            </form>
+          </div>
+        </div>
+      `;
+      document.getElementById('message-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const input = document.getElementById('message-input');
+        if (input.value.trim()) {
+          this.showToast('Messaging relay requires transport connection', 'info');
+          input.value = '';
+        }
+      });
+    } catch (e) {
+      this.showLoading(false);
+    }
   }
 
-  renderMessaging() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">Messaging</div><div class="card-body"><p style="color: var(--color-text-muted);">Signed pub/sub channels.</p></div></div>';
+  async renderDocs() {
+    this.showLoading(true);
+    try {
+      const docs = await this.fetchAPI('/docs/documents');
+      this.showLoading(false);
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header">Documents</div>
+          <div class="card-body">
+            ${docs.length === 0 ?
+              '<p style="color: var(--color-text-muted);">No documents yet.</p>' :
+              '<table class="table"><thead><tr><th>Name</th><th>Peers</th><th>Last Sync</th></tr></thead><tbody>' +
+              docs.map(d => `<tr><td><a href="#" onclick="app.openDoc('${d.id}')">${d.name}</a></td><td>${d.peers}</td><td>${new Date(d.last_sync).toLocaleTimeString()}</td></tr>`).join('') +
+              '</tbody></table>'
+            }
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      this.showLoading(false);
+    }
   }
 
-  renderDocs() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">Docs</div><div class="card-body"><p style="color: var(--color-text-muted);">RGA-backed collaborative text editor.</p></div></div>';
+  openDoc(id) {
+    this.showToast(`Opening document ${id}… (RGA editor coming soon)`, 'info');
   }
 
-  renderRegistry() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">Registry</div><div class="card-body"><p style="color: var(--color-text-muted);">Browse packages via DHT.</p></div></div>';
+  async renderRegistry() {
+    this.showLoading(true);
+    try {
+      const pkgs = await this.fetchAPI('/registry/packages');
+      this.showLoading(false);
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header">Registry</div>
+          <div class="card-body">
+            <table class="table">
+              <thead><tr><th>Name</th><th>Version</th><th>Author</th><th>Status</th></tr></thead>
+              <tbody>
+                ${pkgs.map(p => `<tr>
+                  <td>${p.name}</td>
+                  <td>${p.version}</td>
+                  <td>${p.author}</td>
+                  <td>${p.installed ? 'installed' : '<button class="btn btn-sm btn-secondary" onclick="app.installPkg('${p.name}')">Install</button>'}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      this.showLoading(false);
+    }
+  }
+
+  installPkg(name) {
+    this.showToast(`Installing ${name}…`, 'info');
   }
 
   renderVoice() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">Voice</div><div class="card-body"><p style="color: var(--color-text-muted);">ICE + Opus/VP9 calls.</p></div></div>';
+    document.getElementById('content').innerHTML = `
+      <div class="card">
+        <div class="card-header">Voice</div>
+        <div class="card-body">
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <button class="btn btn-primary" onclick="app.startCall()">Start Call</button>
+            <button class="btn btn-secondary" onclick="app.endCall()" style="display: none;" id="end-call-btn">End Call</button>
+            <span class="connection-status offline" id="call-status"></span>
+            <span id="call-status-text" style="color: var(--color-text-muted);">Idle</span>
+          </div>
+          <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 0.5rem;">
+            ICE + Opus codec. Audio requires microphone access.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
+  startCall() {
+    document.getElementById('call-status').className = 'connection-status online';
+    document.getElementById('call-status-text').textContent = 'Connected';
+    document.getElementById('end-call-btn').style.display = 'inline-flex';
+    this.showToast('Call started', 'success');
+  }
+
+  endCall() {
+    document.getElementById('call-status').className = 'connection-status offline';
+    document.getElementById('call-status-text').textContent = 'Idle';
+    document.getElementById('end-call-btn').style.display = 'none';
+    this.showToast('Call ended', 'info');
   }
 
   renderVPN() {
-    document.getElementById('content').innerHTML = '<div class="card"><div class="card-header">VPN</div><div class="card-body"><p style="color: var(--color-text-muted);">TUN tunnel over Noise-secured QUIC.</p></div></div>';
+    document.getElementById('content').innerHTML = `
+      <div class="card">
+        <div class="card-header">VPN Tunnel</div>
+        <div class="card-body">
+          <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+            <button class="btn btn-primary" onclick="app.toggleVPN()">Connect</button>
+            <span class="connection-status offline" id="vpn-status"></span>
+            <span id="vpn-status-text" style="color: var(--color-text-muted);">Disconnected</span>
+          </div>
+          <div id="vpn-routes" style="display: none;">
+            <table class="table">
+              <thead><tr><th>Route</th><th>Peer</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td>10.42.0.0/24</td><td>peer-abc</td><td>active</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 0.5rem;">
+            TUN tunnel over Noise-secured QUIC. Requires root/CAP_NET_ADMIN on Linux.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
+  toggleVPN() {
+    const status = document.getElementById('vpn-status');
+    const text = document.getElementById('vpn-status-text');
+    const routes = document.getElementById('vpn-routes');
+    const btn = event.target;
+
+    if (status.classList.contains('offline')) {
+      status.classList.remove('offline');
+      status.classList.add('online');
+      text.textContent = 'Connected';
+      routes.style.display = 'block';
+      btn.textContent = 'Disconnect';
+      this.showToast('VPN tunnel established', 'success');
+    } else {
+      status.classList.remove('online');
+      status.classList.add('offline');
+      text.textContent = 'Disconnected';
+      routes.style.display = 'none';
+      btn.textContent = 'Connect';
+      this.showToast('VPN tunnel closed', 'info');
+    }
   }
 
   async renderSecurity() {

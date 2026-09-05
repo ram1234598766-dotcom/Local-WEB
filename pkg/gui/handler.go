@@ -40,6 +40,12 @@ func NewHandler(api *NodeAPI) *Handler {
 	mux.HandleFunc("/api/audit-log/verify", h.handleAuditVerify)
 	mux.HandleFunc("/api/crdt/sync-status", h.handleSyncStatus)
 	mux.HandleFunc("/api/services/health", h.handleServicesHealth)
+	mux.HandleFunc("/api/dns/records", h.handleDNSRecords)
+	mux.HandleFunc("/api/http/sites", h.handleHTTPSites)
+	mux.HandleFunc("/api/email/messages", h.handleEmailMessages)
+	mux.HandleFunc("/api/messaging/messages", h.handleMessages)
+	mux.HandleFunc("/api/docs/documents", h.handleDocuments)
+	mux.HandleFunc("/api/registry/packages", h.handlePackages)
 	mux.HandleFunc("/api/events", h.handleEvents)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	mux.HandleFunc("/readyz", h.handleReadyz)
@@ -154,6 +160,66 @@ func (h *Handler) handleServicesHealth(w http.ResponseWriter, r *http.Request) {
 			"vpn":       true,
 		},
 	})
+}
+
+func (h *Handler) handleDNSRecords(w http.ResponseWriter, r *http.Request) {
+	records, err := h.api.DNSRecords()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(records)
+}
+
+func (h *Handler) handleHTTPSites(w http.ResponseWriter, r *http.Request) {
+	sites, err := h.api.HTTPSites()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sites)
+}
+
+func (h *Handler) handleEmailMessages(w http.ResponseWriter, r *http.Request) {
+	msgs, err := h.api.EmailMessages()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(msgs)
+}
+
+func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
+	msgs, err := h.api.Messages()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(msgs)
+}
+
+func (h *Handler) handleDocuments(w http.ResponseWriter, r *http.Request) {
+	docs, err := h.api.Documents()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(docs)
+}
+
+func (h *Handler) handlePackages(w http.ResponseWriter, r *http.Request) {
+	pkgs, err := h.api.Packages()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(pkgs)
 }
 
 func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {

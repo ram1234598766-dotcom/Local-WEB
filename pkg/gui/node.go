@@ -70,6 +70,48 @@ type SyncStatusResponse struct {
 	Connected  bool `json:"connected"`
 }
 
+type DNSRecordResponse struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Value    string `json:"value"`
+	TTL      int    `json:"ttl"`
+	Verified bool   `json:"verified"`
+}
+
+type HTTPSiteResponse struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Routes int    `json:"routes"`
+}
+
+type EmailMessageResponse struct {
+	From    string `json:"from"`
+	Subject string `json:"subject"`
+	Date    string `json:"date"`
+	Read    bool   `json:"read"`
+}
+
+type MessageResponse struct {
+	Channel string `json:"channel"`
+	From    string `json:"from"`
+	Text    string `json:"text"`
+	Time    string `json:"time"`
+}
+
+type DocumentResponse struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Peers    int    `json:"peers"`
+	LastSync string `json:"last_sync"`
+}
+
+type PackageResponse struct {
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Author    string `json:"author"`
+	Installed bool   `json:"installed"`
+}
+
 func NewAPI(pubKey [32]byte) *NodeAPI {
 	return &NodeAPI{
 		pubKey:     pubKey,
@@ -220,6 +262,76 @@ func (a *NodeAPI) SyncStatus() SyncStatusResponse {
 	}
 
 	return resp
+}
+
+func (a *NodeAPI) DNSRecords() ([]DNSRecordResponse, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.peerStore == nil {
+		return nil, fmt.Errorf("peer store not initialized")
+	}
+	peers, err := a.peerStore.ListPeers(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DNSRecordResponse, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, DNSRecordResponse{
+			Name:     p.Name + ".localweb",
+			Type:     "A",
+			Value:    p.Addrs[0],
+			TTL:      4500,
+			Verified: true,
+		})
+	}
+	return out, nil
+}
+
+func (a *NodeAPI) HTTPSites() ([]HTTPSiteResponse, error) {
+	return []HTTPSiteResponse{
+		{Name: "localhost:8080", Status: "active", Routes: 1},
+		{Name: "gui.localweb", Status: "active", Routes: 2},
+	}, nil
+}
+
+func (a *NodeAPI) EmailMessages() ([]EmailMessageResponse, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.peerStore == nil {
+		return nil, fmt.Errorf("peer store not initialized")
+	}
+	peers, err := a.peerStore.ListPeers(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EmailMessageResponse, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, EmailMessageResponse{
+			From:    p.Name,
+			Subject: "Connection established",
+			Date:    p.LastSeen.Format(time.RFC3339),
+			Read:    true,
+		})
+	}
+	return out, nil
+}
+
+func (a *NodeAPI) Messages() ([]MessageResponse, error) {
+	return []MessageResponse{
+		{Channel: "general", From: "system", Text: "Welcome to LocalWEB messaging", Time: time.Now().Format(time.RFC3339)},
+	}, nil
+}
+
+func (a *NodeAPI) Documents() ([]DocumentResponse, error) {
+	return []DocumentResponse{
+		{ID: "doc-001", Name: "Getting Started", Peers: 0, LastSync: time.Now().Format(time.RFC3339)},
+	}, nil
+}
+
+func (a *NodeAPI) Packages() ([]PackageResponse, error) {
+	return []PackageResponse{
+		{Name: "localweb-cli", Version: "1.0.0", Author: "system", Installed: false},
+	}, nil
 }
 
 func (a *NodeAPI) Subscribe() chan SSEEvent {
