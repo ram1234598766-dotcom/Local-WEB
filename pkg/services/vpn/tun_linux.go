@@ -4,41 +4,36 @@ package vpn
 
 import (
 	"fmt"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-// linuxTUN implements Interface using /dev/net/tun.
 type linuxTUN struct {
 	name string
 	fd   int
 }
 
-// openTUN creates a TUN device on Linux via /dev/net/tun.
 func openTUN(name string) (Interface, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open /dev/net/tun: %w", err)
 	}
 
-	var req unix.Ifreq
-	copy(req.Ifr_name[:], name)
-
-	// IFF_TUN = layer 3 tunnel, IFF_NO_PI = no packet info header
-	*(*uint16)(unsafe.Pointer(&req.Ifr_flags)) = unix.IFF_TUN | unix.IFF_NO_PI
-
-	if _, _, errno := unix.Syscall(
-		unix.SYS_IOCTL,
-		uintptr(fd),
-		uintptr(unix.TUNSETIFF),
-		uintptr(unsafe.Pointer(&req)),
-	); errno != 0 {
+	req, err := unix.NewIfreq(name)
+	if err != nil {
 		unix.Close(fd)
-		return nil, fmt.Errorf("TUNSETIFF ioctl: %w", errno)
+		return nil, fmt.Errorf("create ifreq: %w", err)
 	}
 
-	actualName := trimCStr(req.Ifr_name[:])
+	// IFF_TUN = layer 3 tunnel, IFF_NO_PI = no packet info header
+	req.SetUint16(unix.IFF_TUN | unix.IFF_NO_PI)
+
+	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, req); err != nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("TUNSETIFF ioctl: %w", err)
+	}
+
+	actualName := req.Name()
 	if actualName == "" {
 		actualName = name
 	}
@@ -61,18 +56,14 @@ func (t *linuxTUN) setFlags(flags uint16) error {
 	}
 	defer unix.Close(sock)
 
-	var req unix.Ifreq
-	copy(req.Ifr_name[:], t.name)
+	req, err := unix.NewIfreq(t.name)
+	if err != nil {
+		return fmt.Errorf("create ifreq: %w", err)
+	}
+	req.SetUint16(flags)
 
-	*(*uint16)(unsafe.Pointer(&req.Ifr_flags)) = flags
-
-	if _, _, errno := unix.Syscall(
-		unix.SYS_IOCTL,
-		uintptr(sock),
-		uintptr(unix.SIOCSIFFLAGS),
-		uintptr(unsafe.Pointer(&req)),
-	); errno != 0 {
-		return fmt.Errorf("SIOCSIFFLAGS ioctl: %w", errno)
+	if err := unix.IoctlIfreq(sock, unix.SIOCSIFFLAGS, req); err != nil {
+		return fmt.Errorf("SIOCSIFFLAGS ioctl: %w", err)
 	}
 	return nil
 }
@@ -84,21 +75,25 @@ func (t *linuxTUN) Addrs() ([]string, error) {
 	}
 	defer unix.Close(sock)
 
-	var req unix.Ifreq
-	copy(req.Ifr_name[:], t.name)
-
-	if _, _, errno := unix.Syscall(
-		unix.SYS_IOCTL,
-		uintptr(sock),
-		uintptr(unix.SIOCGIFADDR),
-		uintptr(unsafe.Pointer(&req)),
-	); errno != 0 {
-		return nil, fmt.Errorf("SIOCGIFADDR ioctl: %w", errno)
+	req, err := unix.NewIfreq(t.name)
+	if err != nil {
+		return nil, fmt.Errorf("create ifreq: %w", err)
 	}
 
-	addr := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req.Ifr_addr))
-	ip := fmt.Sprintf("%d.%d.%d.%d", addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
-	return []string{ip}, nil
+	if err := unix.IoctlIfreq(sock, unix.SIOCGIFADDR, req); err != nil {
+		return nil, fmt.Errorf("SIOCGIFADDR ioctl: %w", err)
+	}
+
+	addr, err := req.Inet4Addr()
+	if err != nil {
+		return nil, fmt.Errorf("get inet4 addr: %w", err)
+	}
+
+	if len(addr) == 4 {
+		ip := fmt.Sprintf("%d.%d.%d.%d", addr[0], addr[1], addr[2], addr[3])
+		return []string{ip}, nil
+	}
+	return nil, nil
 }
 
 func (t *linuxTUN) AddRoute(dst string, gw string) error {
@@ -113,20 +108,16 @@ func (t *linuxTUN) AddRoute(dst string, gw string) error {
 		return fmt.Errorf("invalid gateway address: %s", gw)
 	}
 
-	var req unix.Ifreq
-	copy(req.Ifr_name[:], t.name)
+	req, err := unix.NewIfreq(t.name)
+	if err != nil {
+		return fmt.Errorf("create ifreq: %w", err)
+	}
+	if err := req.SetInet4Addr(parsed[:]); err != nil {
+		return fmt.Errorf("set inet4 addr: %w", err)
+	}
 
-	addr := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req.Ifr_addr))
-	addr.Family = unix.AF_INET
-	addr.Addr = *parsed
-
-	if _, _, errno := unix.Syscall(
-		unix.SYS_IOCTL,
-		uintptr(sock),
-		uintptr(unix.SIOCSIFDSTADDR),
-		uintptr(unsafe.Pointer(&req)),
-	); errno != 0 {
-		return fmt.Errorf("SIOCSIFDSTADDR ioctl: %w", errno)
+	if err := unix.IoctlIfreq(sock, unix.SIOCSIFDSTADDR, req); err != nil {
+		return fmt.Errorf("SIOCSIFDSTADDR ioctl: %w", err)
 	}
 	return nil
 }
