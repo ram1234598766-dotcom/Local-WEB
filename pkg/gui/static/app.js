@@ -239,24 +239,42 @@ class LocalWEBApp {
   async renderPeers() {
     this.showLoading(true);
     try {
-      const peers = await this.fetchAPI('/peers');
+      const [peers, dht] = await Promise.all([
+        this.fetchAPI('/peers'),
+        this.fetchAPI('/dht/table').catch(() => ({ nodes: [] })),
+      ]);
       this.showLoading(false);
+
+      const peerNodes = peers.length > 0 ? peers : dht.nodes;
+      this.state.peers = peers;
+      this.state.peerCount = peers.length;
+
+      const topologySVG = this.renderTopology(peers, dht.nodes);
+
       document.getElementById('content').innerHTML = `
-        <div class="card">
-          <div class="card-header">Connected Peers (${peers.length})</div>
-          <div class="card-body">
-            ${peers.length === 0 ?
-              '<p style="color: var(--color-text-muted);">No peers connected. Check network settings.</p>' :
-              '<div class="list">' + peers.map(p => `
-                <div class="connection">
-                  <span class="connection-status online"></span>
-                  <div class="connection-info">
-                    <div class="connection-name">${p.name || p.id}</div>
-                    <div class="connection-meta">${p.source} • ${p.latency || 'n/a'}</div>
+        <div class="grid grid-cols-2">
+          <div class="card">
+            <div class="card-header">Topology</div>
+            <div class="card-body">
+              ${topologySVG}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Connected Peers (${peers.length})</div>
+            <div class="card-body">
+              ${peers.length === 0 ?
+                '<p style="color: var(--color-text-muted);">No peers connected. Check network settings.</p>' :
+                '<div class="list">' + peers.map(p => `
+                  <div class="connection">
+                    <span class="connection-status online"></span>
+                    <div class="connection-info">
+                      <div class="connection-name">${p.name || p.id}</div>
+                      <div class="connection-meta">${p.source} • ${p.latency || 'n/a'}</div>
+                    </div>
                   </div>
-                </div>
-              `).join('') + '</div>'
-            }
+                `).join('') + '</div>'
+              }
+            </div>
           </div>
         </div>
       `;
@@ -264,6 +282,66 @@ class LocalWEBApp {
       this.showLoading(false);
       this.showToast('Failed to load peers', 'error');
     }
+  }
+
+  renderTopology(peers, dhtNodes) {
+    const allNodes = dhtNodes.length > 0 ? dhtNodes : peers;
+    if (allNodes.length === 0) {
+      return `<div class="topology" style="display: flex; align-items: center; justify-content: center;">
+        <p style="color: var(--color-text-muted);">No nodes in topology</p>
+      </div>`;
+    }
+
+    const width = 400;
+    const height = 300;
+    const cx = width / 2;
+    const cy = height / 2;
+    const count = allNodes.length;
+
+    let svg = `<div class="topology"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+
+    // Draw connections (lines between nodes)
+    for (let i = 0; i < count; i++) {
+      const a = allNodes[i];
+      for (let j = i + 1; j < count; j++) {
+        const b = allNodes[j];
+        const ax = cx + Math.cos(2 * Math.PI * i / count) * 100;
+        const ay = cy + Math.sin(2 * Math.PI * i / count) * 100;
+        const bx = cx + Math.cos(2 * Math.PI * j / count) * 100;
+        const by = cy + Math.sin(2 * Math.PI * j / count) * 100;
+        svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="var(--color-border)" stroke-width="1" />`;
+      }
+    }
+
+    // Draw node dots + labels
+    for (let i = 0; i < count; i++) {
+      const n = allNodes[i];
+      const angle = 2 * Math.PI * i / count;
+      const x = cx + Math.cos(angle) * 100;
+      const y = cy + Math.sin(angle) * 100;
+      const shortID = (n.id || n.ID || '').substring(0, 8);
+      const isSelf = i === 0;
+      const dotColor = isSelf ? 'var(--color-primary)' : 'var(--color-accent)';
+
+      svg += `<circle cx="${x}" cy="${y}" r="8" fill="${dotColor}" stroke="var(--color-bg)" stroke-width="2" />`;
+      svg += `<text x="${x}" y="${y + 30}" text-anchor="middle" font-size="8" fill="var(--color-text-muted)">${shortID}</text>`;
+    }
+
+    // Center node (this node)
+    const centerLabel = 'you';
+    svg += `<circle cx="${cx}" cy="${cy}" r="10" fill="var(--color-primary)" stroke="var(--color-bg)" stroke-width="2" />`;
+    svg += `<text x="${cx}" y="${cy + 35}" text-anchor="middle" font-size="8" fill="var(--color-text-muted)">${centerLabel}</text>`;
+
+    // Draw connection from center to each node
+    for (let i = 0; i < count; i++) {
+      const angle = 2 * Math.PI * i / count;
+      const x = cx + Math.cos(angle) * 100;
+      const y = cy + Math.sin(angle) * 100;
+      svg += `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="var(--color-primary)" stroke-width="1.5" opacity="0.6" />`;
+    }
+
+    svg += `</svg></div>`;
+    return svg;
   }
 
   async renderFiles() {
