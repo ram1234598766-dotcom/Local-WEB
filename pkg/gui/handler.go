@@ -37,6 +37,7 @@ func NewHandler(api *NodeAPI) *Handler {
 	mux.HandleFunc("/api/peers", h.handlePeers)
 	mux.HandleFunc("/api/dht/table", h.handleDHTTable)
 	mux.HandleFunc("/api/audit-log", h.handleAuditLog)
+	mux.HandleFunc("/api/audit-log/verify", h.handleAuditVerify)
 	mux.HandleFunc("/api/crdt/sync-status", h.handleSyncStatus)
 	mux.HandleFunc("/api/services/health", h.handleServicesHealth)
 	mux.HandleFunc("/api/events", h.handleEvents)
@@ -119,6 +120,18 @@ func (h *Handler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(events)
+}
+
+func (h *Handler) handleAuditVerify(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	verified := h.api.AuditLogVerified()
+	if !verified {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"verified":  verified,
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
 }
 
 func (h *Handler) handleSyncStatus(w http.ResponseWriter, r *http.Request) {

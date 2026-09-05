@@ -175,6 +175,15 @@ func (a *NodeAPI) DHTNodes() ([]DHTNodeResponse, error) {
 	return out, nil
 }
 
+func (a *NodeAPI) AuditLogVerified() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.auditLog == nil {
+		return false
+	}
+	return a.auditLog.VerifyIntegrity() == nil
+}
+
 func (a *NodeAPI) AuditLog() ([]AuditLogResponse, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

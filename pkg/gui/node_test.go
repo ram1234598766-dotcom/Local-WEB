@@ -180,3 +180,39 @@ func TestSyncStatusHandler(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 }
+
+func TestAuditVerifyHandler(t *testing.T) {
+	pubKey := [32]byte{1, 2, 3}
+	api := NewAPI(pubKey)
+	h := NewHandler(api)
+
+	req := httptest.NewRequest("GET", "/api/audit-log/verify", nil)
+	w := httptest.NewRecorder()
+	h.handleAuditVerify(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when audit log not set, got %d", w.Code)
+	}
+
+	var verifyResp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&verifyResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if verifyResp["verified"] != false {
+		t.Error("expected verified=false when no audit log")
+	}
+}
+
+func TestDHTTableHandlerNoDiscovery(t *testing.T) {
+	pubKey := [32]byte{1, 2, 3}
+	api := NewAPI(pubKey)
+	h := NewHandler(api)
+
+	req := httptest.NewRequest("GET", "/api/dht/table", nil)
+	w := httptest.NewRecorder()
+	h.handleDHTTable(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}

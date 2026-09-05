@@ -385,26 +385,48 @@ class LocalWEBApp {
   async renderSecurity() {
     this.showLoading(true);
     try {
-      const [auditLog, status] = await Promise.all([
+      const [auditLog, verify, status] = await Promise.all([
         this.fetchAPI('/audit-log'),
+        this.fetchAPI('/audit-log/verify'),
         this.refresh(),
       ]);
       this.showLoading(false);
+
+      const integrityColor = verify.verified
+        ? 'var(--color-success)'
+        : 'var(--color-critical)';
+      const integrityText = verify.verified
+        ? 'Chain verified'
+        : 'TAMPER DETECTED';
+
       document.getElementById('content').innerHTML = `
         <div class="grid grid-cols-2">
           <div class="card">
             <div class="card-header">Node Identity</div>
             <div class="card-body">
               <div class="form-group">
+                <label class="form-label">Node ID</label>
+                <div style="word-break: break-all; font-size: 0.8125rem; padding: 0.5rem; background: var(--color-bg); border-radius: 0.25rem;">${status.nodeID}</div>
+              </div>
+              <div class="form-group">
                 <label class="form-label">Public Key</label>
                 <div style="word-break: break-all; font-size: 0.8125rem; padding: 0.5rem; background: var(--color-bg); border-radius: 0.25rem;">${status.publicKey}</div>
               </div>
+              <button class="btn btn-primary btn-sm" style="margin-top: 0.5rem;" onclick="app.copyPublicKey()">
+                Copy Public Key
+              </button>
               <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 0.5rem;">Keep this key safe. It identifies this node on the network.</p>
             </div>
           </div>
           <div class="card">
-            <div class="card-header">Audit Log (${auditLog.length} events)</div>
+            <div class="card-header">
+              Audit Log Integrity
+              <span style="color: ${integrityColor}; font-weight: 600; font-size: 0.75rem;">● ${integrityText}</span>
+            </div>
             <div class="card-body">
+              <p style="color: var(--color-text-muted); font-size: 0.75rem; margin-bottom: 0.5rem;">
+                Last verified: ${new Date(verify.timestamp).toLocaleTimeString()}
+              </p>
               <table class="table">
                 <thead><tr><th>Type</th><th>Peer</th><th>Time</th></tr></thead>
                 <tbody>
@@ -424,6 +446,15 @@ class LocalWEBApp {
     } catch (e) {
       this.showLoading(false);
       this.showToast('Failed to load security info', 'error');
+    }
+  }
+
+  copyPublicKey() {
+    const keyEl = document.querySelector('.card-body div[style*="word-break"]');
+    if (keyEl) {
+      const keyText = keyEl.textContent;
+      navigator.clipboard.writeText(keyText);
+      this.showToast('Public key copied to clipboard', 'success');
     }
   }
 
