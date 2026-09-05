@@ -8,9 +8,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/federation"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/gui"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/link"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/security"
@@ -23,6 +25,12 @@ func main() {
 	name := flag.String("name", "", "node name")
 	storage := flag.String("storage", "", "path to BadgerDB storage directory")
 	dataDir := flag.String("data-dir", "", "path to store node identity and keys")
+
+	// Federation / rendezvous flags
+	rendezvousURL := flag.String("rendezvous", "", "rendezvous server URL (e.g., https://rendezvous.localweb.io)")
+	rendezvousRegister := flag.Bool("rendezvous-register", true, "register this node with rendezvous server")
+	rendezvousPoll := flag.Duration("rendezvous-poll", 60*time.Second, "rendezvous poll interval")
+
 	flag.Parse()
 
 	if *name == "" {
@@ -106,10 +114,27 @@ func main() {
 	}()
 	defer linkMgr.Stop()
 
+	// Build discovery modes
+	discoveryModes := []discovery.DiscoveryMode{}
+
+	// Add rendezvous mode if URL provided
+	var rendezvousMode *federation.RendezvousDiscoveryMode
+	if *rendezvousURL != "" {
+		rendezvousMode = federation.NewRendezvousDiscoveryMode(federation.RendezvousModeConfig{
+			ServerURL:    *rendezvousURL,
+			RegisterSelf: *rendezvousRegister,
+			PollInterval: *rendezvousPoll,
+		})
+		rendezvousMode.SetPublicKey(pub)
+		discoveryModes = append(discoveryModes, rendezvousMode)
+		log.Printf("rendezvous: enabled with server %s", *rendezvousURL)
+	}
+
 	disc := discovery.NewOrchestrator(discovery.OrchestratorConfig{
 		NodeID:      nodeID,
 		PublicKey:   pub,
 		Name:        *name,
+		Modes:       discoveryModes,
 		LinkManager: linkMgr,
 	})
 	go func() {
