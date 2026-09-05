@@ -1,6 +1,6 @@
 # LocalWEB — Comprehensive Roadmap (Post-Phase 5)
 
-## Current State: Phase 5 Complete ✅ | Phase 6.1 Federation ✅
+## Current State: Phase 5 Complete ✅ | Phase 6 Complete ✅
 
 **What's shipped:**
 - Web GUI (SPA) on `localhost:8080` with 13 screens, all backed by real API endpoints
@@ -9,17 +9,35 @@
 - All 9 service panels functional (Files, DNS, HTTP, Email, Messaging, Docs, Registry, Voice, VPN)
 - SSE real-time updates on `/api/events`
 - Dark/light theme, reduced-motion support, keyboard accessibility
-- **NEW: RendezvousDiscoveryMode** — cross-LAN federation via `--rendezvous` flag
+- **Phase 6: Production Hardening** — All 7 sub-phases complete
 
 **Verified on:** Go 1.27 (local), Go 1.26 (WSL CI), `make lint` + `make test -race` all green
 
-**Last commit:** `e98e233` — RendezvousDiscoveryMode for cross-LAN federation
+**Last commit:** `375c935` — Phase 6.7 Module Publishing complete
+
+---
+
+## 🔄 Development Protocol: Fix Errors & Commit After Each Phase
+
+**Mandatory workflow for all future phases:**
+
+1. **Complete the phase work** (code, tests, docs)
+2. **Run verification**: `make lint && make test -race`
+3. **Fix ALL errors** (lint issues, test failures, build errors)
+4. **Commit to GitHub** with descriptive commit message
+5. **Update ROADMAP.md** with phase status
+6. **Only then proceed** to next phase
+
+This ensures:
+- Zero technical debt accumulation
+- Clean git history with working commits
+- CI/CD always green
+- Easy rollback if needed
+- Clear audit trail
 
 ---
 
 ## Phase 6 — Production Hardening (Priority: Critical)
-
-### 6.1 Federation & Cross-LAN (Rendezvous) ✅
 - **Goal:** Two nodes across internet (not just LAN) can discover each other
 - **Work:** Deploy rendezvous relay servers, add to discovery orchestrator
 - **Tests:** E2E test with two nodes behind different NATs
