@@ -162,31 +162,31 @@ func TestNewPipe(t *testing.T) {
 }
 
 func TestPipePacketLoss(t *testing.T) {
-	a, b := NewPipe(50, 0.8)
+	testPipePacketLossWithRate(t, 0.5)
+}
+
+func testPipePacketLossWithRate(t *testing.T, lossRate float64) {
+	t.Helper()
+	a, b := NewPipe(50, lossRate)
 
 	sent := 0
 	received := 0
-	for i := 0; i < 50; i++ {
-		a.Write([]byte{byte(i)})
+	for i := 0; i < 200; i++ {
+		a.Write([]byte{byte(i % 256)})
 		sent++
-		// Use a timeout since with 80% loss, some reads will hit EOF
-		done := make(chan struct{})
-		var n int
-		go func() {
-			buf := make([]byte, 1)
-			n, _ = b.Read(buf)
-			close(done)
-		}()
-		select {
-		case <-done:
-			if n > 0 {
-				received++
-			}
-		case <-time.After(100 * time.Millisecond):
+		buf := make([]byte, 1)
+		n, _ := b.Read(buf)
+		if n > 0 {
+			received++
 		}
 	}
 
 	if received == 0 {
-		t.Error("expected at least some packets through with low loss")
+		t.Fatalf("expected at least some packets through with %.0f%% loss, got 0 after %d sends", lossRate*100, sent)
+	}
+
+	expectedMin := int(float64(sent) * (1 - lossRate) * 0.3)
+	if received < expectedMin {
+		t.Errorf("received %d packets, expected at least %.0f (30%% of expected)", received, float64(sent)*(1-lossRate)*0.3)
 	}
 }
