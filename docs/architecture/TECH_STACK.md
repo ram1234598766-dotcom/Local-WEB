@@ -4,7 +4,7 @@ This document describes the **actual** technology stack of the Local-WEB Go P2P 
 
 ## Module
 
-- **Module path**: `github.com/mrityunjay/LocalWEB`
+- **Module path**: `github.com/ram1234598766-dotcom/Local-WEB`
 - **Language**: Go 1.26.0
 - **Build system**: GNU Make (`Makefile` with `build`, `test`, `bench`, `lint`, `run-node`, `run-cli`, `cross-compile`, `generate`, `clean`, `deps` targets)
 - **Code generation**: `protoc` for `pkg/proto/api/proto/messages.proto`
