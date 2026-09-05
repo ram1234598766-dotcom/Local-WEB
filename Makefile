@@ -1,4 +1,4 @@
-.PHONY: build test lint cross-compile generate clean run-node run-cli
+.PHONY: build test lint cross-compile generate clean run-node run-cli quickstart
 
 GO := go
 BINDIR := bin
@@ -51,3 +51,6 @@ clean:
 deps:
 	$(GO) mod tidy
 	$(GO) mod download
+
+quickstart:
+	bash scripts/quickstart.sh

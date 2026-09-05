@@ -2,7 +2,21 @@
 
 **Real working P2P internet stack. Zero infrastructure required. Better than centralized.**
 
-Local-WEB is a production-grade peer-to-peer networking stack written in Go that enables device-to-device communication without any centralized infrastructure. It combines multiple transport modes, discovery mechanisms, and link layers into a unified platform.
+Local-WEB lets two laptops (or phones, or servers) talk directly to each other
+without a VPN, a server, or any account. It figures out the best path between
+you — WiFi, Bluetooth, USB, or audio — and encrypts every byte end-to-end.
+No cloud. No sign-up. Just two devices on the same network, connecting.
+
+**Want to try it?** Two commands:
+
+```bash
+make quickstart          # on machine A
+# on machine B (same network):
+make quickstart          # then run: bin/localweb-cli peers
+```
+
+That's it. Your node IDs will appear, and the two machines will find each
+other automatically.
 
 ## Core Principle
 
@@ -138,6 +152,23 @@ Local-WEB/
 
 ## Getting Started
 
+### Quick Start
+
+Get two machines talking in one command:
+
+```bash
+make quickstart            # Builds, generates identity, starts node
+```
+
+On the second machine (same local network), run the same command, then check
+for peers:
+
+```bash
+./bin/localweb-cli peers   # Lists discovered peers on the network
+```
+
+Your node ID is printed on startup and stored in `~/.localweb/identity.json`.
+
 ### Prerequisites
 
 - Go 1.26+
@@ -192,7 +223,45 @@ make run-cli
 #   cli id          — generate/display node identity
 #   cli peers       — list discovered peers
 #   cli node        — start the node daemon
+#
+# Advanced usage:
+#   cli id --json    — machine-readable output
+#   cli peers --json — machine-readable output
+#   --rendezvous <url> — enable cross-internet federation (Phase 4)
 ```
+
+## Dashboard (Optional)
+
+Local-WEB ships with an optional, read-only web dashboard for a visual
+overview of your node. It is **disabled by default** and only listens on
+`localhost` when enabled.
+
+**Enable it:**
+
+```bash
+go run ./cmd/node --dashboard
+```
+
+Then open `http://localhost:8080` in your browser.
+
+What you get:
+- **Dashboard**: node identity, uptime, active connections
+- **Network/Peers**: topology visualization showing which peers are
+  connected via which link type, with RTT
+- **Service health**: per-service status for all 9 built-in services
+- **DNS**: record browser and search
+- **Messaging**: channel list and message history
+- **Files**: transfer progress and peer browsing
+- **Audit log**: tamper-chain verification status (live recompute)
+- **Settings**: ports, paths, storage, dark/light theme toggle
+
+The dashboard speaks to the node over a WebSocket stream for real-time
+updates. It is read-only by design — no destructive actions are available
+through the UI.
+
+For monitoring, `/metrics` (Prometheus format), `/healthz`, and `/readyz`
+endpoints are always available when the node is running, regardless of
+dashboard status.
 
 ## Services
 
@@ -349,6 +418,27 @@ make test      # full test suite with race detection
 | L9 | App (node + CLI) | Verified (identity persistence, BadgerDB encryption) | — |
 
 Phase 1 (security, crypto, critical transport, DNS, identity persistence) is complete and all Phase 1 integration tests pass. See `PHASE2_PLAN.md` for remaining Phase 2 work.
+
+## Troubleshooting / FAQ
+
+**"No peers found"** — Both machines must be on the same local network.
+Local-WEB currently discovers peers via mDNS (same subnet) and BLE. If
+Firewalls are blocking discovery on macOS, go to
+System Settings → Network → Firewall and allow incoming connections for
+Local-WEB.
+
+**"Port already in use"** — Local-WEB listens on UDP 4443 by default. If
+another process is using that port, pass a different one:
+
+```bash
+./bin/localweb --addr 0.0.0.0:4444
+```
+
+**"VPN requires elevated privileges"** — The VPN service (L8, port :9094)
+creates TUN/TAP interfaces, which requires root on Linux (`sudo`) or
+`sudo` on macOS. This is documented in `docs/architecture/TECH_STACK.md`.
+The VPN service is optional — it can be disabled with `--no-vpn` if you
+don't need it.
 
 ## Security
 
