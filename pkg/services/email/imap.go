@@ -176,11 +176,12 @@ func (s *IMAPServer) cmdLogin(session *IMAPSession, conn net.Conn, tag, arg stri
 	user := parts[0]
 	password := parts[1]
 
-	if password == "" {
-		writeLine(conn, fmt.Sprintf("%s NO Login failure", tag))
-		return nil
+	if s.config.Credentials != nil {
+		if !s.config.Credentials.Verify(user, password) {
+			writeLine(conn, fmt.Sprintf("%s NO Login failure", tag))
+			return nil
+		}
 	}
-
 	session.user = user
 	session.state = IMAPStateAuth
 	writeLine(conn, fmt.Sprintf("%s OK LOGIN completed", tag))

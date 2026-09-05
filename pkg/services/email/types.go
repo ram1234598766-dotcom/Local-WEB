@@ -2,7 +2,11 @@ package email
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +17,7 @@ import (
 
 	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/mrityunjay/LocalWEB/pkg/transport"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // ServiceID is the 1-byte identifier for the email service.
@@ -80,6 +85,68 @@ type Mailbox struct {
 	mu          sync.RWMutex
 }
 
+// CredentialVerifier validates user credentials for SMTP/IMAP auth.
+// Implementations MUST be constant-time to prevent timing attacks.
+type CredentialVerifier interface {
+	// Verify returns true if the (user, pass) pair is valid.
+	Verify(user, pass string) bool
+}
+
+// CredentialStore is an in-memory credential store using PBKDF2-hashed passwords.
+// It satisfies CredentialVerifier.
+type CredentialStore struct {
+	entries map[string]*credentialEntry
+	mu      sync.RWMutex
+}
+
+type credentialEntry struct {
+	salt      []byte
+	hashedPwd []byte
+}
+
+const (
+	pwdIterations = 100_000
+	pwdKeyLen     = 32
+)
+
+// NewCredentialStore creates a new in-memory credential store.
+func NewCredentialStore() *CredentialStore {
+	return &CredentialStore{entries: make(map[string]*credentialEntry)}
+}
+
+// SetCredential stores a username/password pair, hashing the password with
+// a random salt using PBKDF2-HMAC-SHA-256.
+func (s *CredentialStore) SetCredential(user, pass string) error {
+	if user == "" || pass == "" {
+		return errors.New("username and password must be non-empty")
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+	hashed := pbkdf2Key(pass, salt)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries[user] = &credentialEntry{salt: salt, hashedPwd: hashed}
+	return nil
+}
+
+// Verify validates user credentials using constant-time comparison.
+func (s *CredentialStore) Verify(user, pass string) bool {
+	s.mu.RLock()
+	entry, ok := s.entries[user]
+	s.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	hashed := pbkdf2Key(pass, entry.salt)
+	return subtle.ConstantTimeCompare(hashed, entry.hashedPwd) == 1
+}
+
+func pbkdf2Key(pass string, salt []byte) []byte {
+	return pbkdf2.Key([]byte(pass), salt, pwdIterations, pwdKeyLen, sha256.New)
+}
+
 // QueueEntry represents an entry in the offline delivery queue.
 type QueueEntry struct {
 	ID          string
@@ -110,14 +177,17 @@ type SMTPConfig struct {
 	DB           *MailboxStore
 	Queue        *Queue
 	PowChecker   *PoWChecker
+	Credentials  CredentialVerifier
+	TLSConfig    *tls.Config
 }
 
 // IMAPConfig holds IMAP server configuration.
 type IMAPConfig struct {
-	Hostname string
-	Port     int
-	Listener net.Listener
-	DB       *MailboxStore
+	Hostname    string
+	Port        int
+	Listener    net.Listener
+	DB          *MailboxStore
+	Credentials CredentialVerifier
 }
 
 // MailboxStore manages maildir storage for all users.

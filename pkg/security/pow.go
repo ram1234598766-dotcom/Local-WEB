@@ -3,6 +3,7 @@ package security
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -65,7 +66,7 @@ func SolvePoW(challenge PoWChallenge) (PoWSolution, error) {
 		binary.BigEndian.PutUint64(nonceBytes[:], nonce)
 
 		h := crypto.SHA3Hash(append(challengeBytes, nonceBytes[:]...))
-		if bytes.Equal(h[:challenge.Difficulty], target) {
+		if subtle.ConstantTimeCompare(h[:challenge.Difficulty], target) == 1 {
 			return PoWSolution{
 				Nonce:    nonce,
 				Hash:     h,
@@ -88,11 +89,11 @@ func VerifyPoW(challenge PoWChallenge, sol PoWSolution) bool {
 	binary.BigEndian.PutUint64(nonceBytes[:], sol.Nonce)
 
 	h := crypto.SHA3Hash(append(challengeBytes, nonceBytes[:]...))
-	if !bytes.Equal(h[:], sol.Hash[:]) {
+	if subtle.ConstantTimeCompare(h[:], sol.Hash[:]) != 1 {
 		return false
 	}
 	target := make([]byte, challenge.Difficulty)
-	return bytes.Equal(h[:challenge.Difficulty], target)
+	return subtle.ConstantTimeCompare(h[:challenge.Difficulty], target) == 1
 }
 
 // PoWConfig tunes the proof-of-work subsystem.

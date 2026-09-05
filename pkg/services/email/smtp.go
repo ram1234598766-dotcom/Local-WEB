@@ -4,7 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/md5"
 	"crypto/rand"
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -102,6 +106,24 @@ func (s *SMTPServer) handleConn(conn net.Conn) {
 			continue
 		}
 
+		// STARTTLS replaces the connection with a TLS-wrapped one.
+		if strings.ToUpper(strings.SplitN(line, " ", 2)[0]) == "STARTTLS" {
+			if s.config.TLSEnabled && s.config.TLSConfig != nil {
+				writeLine(conn, "220 Ready to start TLS")
+				tlsConn := tls.Server(conn, s.config.TLSConfig)
+				if err := tlsConn.Handshake(); err != nil {
+					log.Warn().Err(err).Msg("SMTP TLS handshake failed")
+					return
+				}
+				conn = tlsConn
+				reader = bufio.NewReader(conn)
+				session.state = SMTPStateEHLO
+				continue
+			}
+			writeLine(conn, "454 TLS not available")
+			continue
+		}
+
 		if err := s.handleCommand(session, conn, reader, line); err != nil {
 			log.Warn().Err(err).Str("cmd", line).Msg("SMTP command error")
 			return
@@ -124,8 +146,6 @@ func (s *SMTPServer) handleCommand(session *SMTPSession, conn net.Conn, reader *
 	switch cmd {
 	case "EHLO", "HELO":
 		return s.cmdEHLO(session, conn, arg)
-	case "STARTTLS":
-		return s.cmdSTARTTLS(session, conn)
 	case "AUTH":
 		return s.cmdAUTH(session, conn, reader, arg)
 	case "MAIL":
@@ -155,21 +175,17 @@ func (s *SMTPServer) cmdEHLO(session *SMTPSession, conn net.Conn, arg string) er
 		return nil
 	}
 	session.state = SMTPStateEHLO
+	authMechanisms := "PLAIN"
+	if s.config.Credentials != nil {
+		authMechanisms = "PLAIN LOGIN CRAM-MD5"
+	}
 	writeLine(conn, "250-"+s.config.Hostname+" greets "+arg)
-	writeLine(conn, "250-STARTTLS")
-	writeLine(conn, "250-AUTH PLAIN LOGIN CRAM-MD5")
+	if s.config.TLSEnabled {
+		writeLine(conn, "250-STARTTLS")
+	}
+	writeLine(conn, "250-AUTH "+authMechanisms)
 	writeLine(conn, "250-8BITMIME")
 	writeLine(conn, "250 OK")
-	return nil
-}
-
-func (s *SMTPServer) cmdSTARTTLS(session *SMTPSession, conn net.Conn) error {
-	if !s.config.TLSEnabled {
-		writeLine(conn, "454 TLS not available")
-		return nil
-	}
-	writeLine(conn, "220 Ready to start TLS")
-	session.state = SMTPStateEHLO
 	return nil
 }
 
@@ -193,7 +209,13 @@ func (s *SMTPServer) cmdAUTH(session *SMTPSession, conn net.Conn, reader *bufio.
 			writeLine(conn, "501 Invalid auth data")
 			return nil
 		}
-		session.authUser = fields[1]
+		user := fields[1]
+		pass := fields[2]
+		if s.config.AuthRequired && !s.verifyCredentials(user, pass) {
+			writeLine(conn, "535 Authentication failed")
+			return nil
+		}
+		session.authUser = user
 		session.state = SMTPStateAUTH
 		writeLine(conn, "235 Authenticated")
 
@@ -205,17 +227,24 @@ func (s *SMTPServer) cmdAUTH(session *SMTPSession, conn net.Conn, reader *bufio.
 			writeLine(conn, "334 UGFzc3dvcmQ6")
 			pass, _ := reader.ReadString('\n')
 			pass = strings.TrimRight(pass, "\r\n")
-			_ = user
-			_ = pass
+			if s.config.AuthRequired && !s.verifyCredentials(user, pass) {
+				writeLine(conn, "535 Authentication failed")
+				return nil
+			}
+			session.authUser = user
 			session.state = SMTPStateAUTH
 			writeLine(conn, "235 Authenticated")
 		} else {
 			data, _ := base64.StdEncoding.DecodeString(param)
-			session.authUser = string(data)
+			user := string(data)
 			writeLine(conn, "334 UGFzc3dvcmQ6")
 			pass, _ := reader.ReadString('\n')
 			pass = strings.TrimRight(pass, "\r\n")
-			_ = pass
+			if s.config.AuthRequired && !s.verifyCredentials(user, pass) {
+				writeLine(conn, "535 Authentication failed")
+				return nil
+			}
+			session.authUser = user
 			session.state = SMTPStateAUTH
 			writeLine(conn, "235 Authenticated")
 		}
@@ -228,9 +257,17 @@ func (s *SMTPServer) cmdAUTH(session *SMTPSession, conn net.Conn, reader *bufio.
 		response = strings.TrimRight(response, "\r\n")
 		data, _ := base64.StdEncoding.DecodeString(response)
 		parts := strings.SplitN(string(data), " ", 2)
-		if len(parts) == 2 {
-			session.authUser = parts[0]
+		if len(parts) != 2 {
+			writeLine(conn, "501 Invalid auth data")
+			return nil
 		}
+		user := parts[0]
+		proof := parts[1]
+		if s.config.AuthRequired && !s.verifyCramMD5(user, challenge, proof) {
+			writeLine(conn, "535 Authentication failed")
+			return nil
+		}
+		session.authUser = user
 		session.state = SMTPStateAUTH
 		writeLine(conn, "235 Authenticated")
 
@@ -365,6 +402,33 @@ func (s *SMTPServer) cmdRSET(session *SMTPSession, conn net.Conn) error {
 	session.state = SMTPStateEHLO
 	writeLine(conn, "250 OK")
 	return nil
+}
+
+func (s *SMTPServer) verifyCredentials(user, pass string) bool {
+	if s.config.Credentials == nil {
+		return false
+	}
+	return s.config.Credentials.Verify(user, pass)
+}
+
+func (s *SMTPServer) verifyCramMD5(user, challenge, proof string) bool {
+	if s.config.Credentials == nil {
+		return false
+	}
+	store, ok := s.config.Credentials.(*CredentialStore)
+	if !ok {
+		return false
+	}
+	store.mu.RLock()
+	entry, exists := store.entries[user]
+	store.mu.RUnlock()
+	if !exists {
+		return false
+	}
+	digest := hmac.New(md5.New, entry.hashedPwd)
+	digest.Write([]byte(challenge))
+	expected := hex.EncodeToString(digest.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(proof)) == 1
 }
 
 func writeLine(w interface {

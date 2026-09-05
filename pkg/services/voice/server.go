@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/mrityunjay/LocalWEB/pkg/transport"
 	"github.com/rs/zerolog/log"
 )
@@ -34,16 +33,19 @@ type VoiceServer struct {
 	hubRole   bool                     // true if this node is the group-call hub
 	handlers  map[string]PeerHandler   // trackID -> handler
 	closed    bool
+	privKey   [32]byte // Ed25519 private key for signing signals
 }
 
 // NewVoiceServer wires the voice service into an existing QUIC server.
-func NewVoiceServer(srv *transport.Server, hubRole bool) *VoiceServer {
+// privKey is the node's Ed25519 private key used to sign signaling messages.
+func NewVoiceServer(srv *transport.Server, hubRole bool, privKey [32]byte) *VoiceServer {
 	v := &VoiceServer{
 		server:   srv,
 		calls:    NewCallManager(),
 		trackers: make(map[PeerID]*TrackManager),
 		hubRole:  hubRole,
 		handlers: make(map[string]PeerHandler),
+		privKey:  privKey,
 	}
 	srv.RegisterHandler(transport.ServiceVoice, v.handleStream)
 	return v
@@ -122,7 +124,11 @@ func (v *VoiceServer) StartCall(ctx context.Context, cfg CallConfig, channel Sig
 		return nil, errors.New("failed to create call")
 	}
 
-	sig := NewCallSignaling(call, NewMessagingSignaling(cfg.ChannelID, channel), cfg.Caller)
+	privKey := v.privKey
+	if cfg.PrivKey != nil {
+		privKey = *cfg.PrivKey
+	}
+	sig := NewCallSignaling(call, NewMessagingSignaling(cfg.ChannelID, channel), cfg.Caller, privKey)
 	return sig, nil
 }
 
@@ -142,8 +148,7 @@ func (v *VoiceServer) AcceptCall(ctx context.Context, callID CallID, channel Sig
 	if err != nil {
 		return err
 	}
-	pub, _, _ := crypto.GenerateX25519KeyPair()
-	sig := NewCallSignaling(call, NewMessagingSignaling(call.ChannelID(), channel), crypto.NodeID(pub))
+	sig := NewCallSignaling(call, NewMessagingSignaling(call.ChannelID(), channel), call.Callee(), v.privKey)
 	return sig.SendAnswer(ctx, localTracks)
 }
 
@@ -160,8 +165,7 @@ func (v *VoiceServer) EndCall(ctx context.Context, callID CallID, channel Signal
 	if err != nil {
 		return err
 	}
-	pub, _, _ := crypto.GenerateX25519KeyPair()
-	sig := NewCallSignaling(call, NewMessagingSignaling(call.ChannelID(), channel), crypto.NodeID(pub))
+	sig := NewCallSignaling(call, NewMessagingSignaling(call.ChannelID(), channel), call.Callee(), v.privKey)
 	_ = sig.SendBye(ctx)
 	return v.calls.End(callID)
 }

@@ -406,7 +406,7 @@ func encodeEntries(entries []struct {
 	Tags []string
 }, removes map[string]bool) ([]byte, error) {
 	var buf bytes.Buffer
-	buf.WriteByte(byte(len(entries)))
+	binary.Write(&buf, binary.BigEndian, uint32(len(entries)))
 	for _, e := range entries {
 		binary.Write(&buf, binary.BigEndian, uint16(len(e.Elem)))
 		buf.WriteString(e.Elem)
@@ -416,7 +416,7 @@ func encodeEntries(entries []struct {
 			buf.WriteString(t)
 		}
 	}
-	buf.WriteByte(byte(len(removes)))
+	binary.Write(&buf, binary.BigEndian, uint32(len(removes)))
 	for tag := range removes {
 		binary.Write(&buf, binary.BigEndian, uint16(len(tag)))
 		buf.WriteString(tag)
@@ -434,7 +434,10 @@ func decodeEntries(data []byte) ([]struct {
 	}
 	removes := make(map[string]bool)
 	buf := bytes.NewBuffer(data)
-	elemCount, _ := buf.ReadByte()
+	var elemCount uint32
+	if err := binary.Read(buf, binary.BigEndian, &elemCount); err != nil {
+		return nil, nil, err
+	}
 	for i := 0; i < int(elemCount); i++ {
 		var kLen uint16
 		if err := binary.Read(buf, binary.BigEndian, &kLen); err != nil {
@@ -465,7 +468,10 @@ func decodeEntries(data []byte) ([]struct {
 			Tags []string
 		}{Elem: string(elem), Tags: tags})
 	}
-	rmCount, _ := buf.ReadByte()
+	var rmCount uint32
+	if err := binary.Read(buf, binary.BigEndian, &rmCount); err != nil {
+		return nil, nil, err
+	}
 	for i := 0; i < int(rmCount); i++ {
 		var tLen uint16
 		if err := binary.Read(buf, binary.BigEndian, &tLen); err != nil {
@@ -598,21 +604,21 @@ func DiffMerkle(a, b *MerkleTree) ([][32]byte, [][32]byte) {
 		return nil, nil
 	}
 	var onlyA, onlyB [][32]byte
-	seen := make(map[[32]byte]bool)
-	for _, leaf := range b.Leaves {
-		seen[leaf] = true
-	}
+	leavesA := make(map[[32]byte]bool, len(a.Leaves))
 	for _, leaf := range a.Leaves {
-		if !seen[leaf] {
+		leavesA[leaf] = true
+	}
+	leavesB := make(map[[32]byte]bool, len(b.Leaves))
+	for _, leaf := range b.Leaves {
+		leavesB[leaf] = true
+	}
+	for leaf := range leavesA {
+		if !leavesB[leaf] {
 			onlyA = append(onlyA, leaf)
 		}
 	}
-	seen = make(map[[32]byte]bool)
-	for _, leaf := range a.Leaves {
-		seen[leaf] = true
-	}
-	for _, leaf := range b.Leaves {
-		if !seen[leaf] {
+	for leaf := range leavesB {
+		if !leavesA[leaf] {
 			onlyB = append(onlyB, leaf)
 		}
 	}

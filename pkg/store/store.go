@@ -69,6 +69,16 @@ func OpenInMemory() *Store {
 	return &Store{db: db}
 }
 
+// Flush flushes all pending writes to disk by syncing the underlying DB.
+func (s *Store) Flush() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return fmt.Errorf("store is closed")
+	}
+	return s.db.Sync()
+}
+
 // Close closes the underlying BadgerDB instance.
 func (s *Store) Close() error {
 	s.mu.Lock()

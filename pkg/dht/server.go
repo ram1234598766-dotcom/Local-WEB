@@ -6,6 +6,7 @@ import (
 	"crypto/sha3"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"sync"
 )
@@ -49,7 +50,7 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 	var hdr [65]byte
-	if _, err := conn.Read(hdr[:]); err != nil {
+	if _, err := io.ReadFull(conn, hdr[:]); err != nil {
 		return
 	}
 	msgType := MessageType(hdr[0])
@@ -58,12 +59,15 @@ func (s *Server) handleConn(conn net.Conn) {
 	copy(dst[:], hdr[33:65])
 
 	var lenBuf [4]byte
-	if _, err := conn.Read(lenBuf[:]); err != nil {
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
 		return
 	}
 	plLen := binary.BigEndian.Uint32(lenBuf[:])
+	if plLen > 1<<20 {
+		return
+	}
 	pl := make([]byte, plLen)
-	if _, err := conn.Read(pl); err != nil {
+	if _, err := io.ReadFull(conn, pl); err != nil {
 		return
 	}
 
@@ -143,7 +147,7 @@ func (w *WireProtocol) Handle(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	var hdr [65]byte
-	if _, err := reader.Read(hdr[:]); err != nil {
+	if _, err := io.ReadFull(reader, hdr[:]); err != nil {
 		return
 	}
 	msgType := MessageType(hdr[0])
@@ -152,12 +156,15 @@ func (w *WireProtocol) Handle(conn net.Conn) {
 	copy(dst[:], hdr[33:65])
 
 	var lenBuf [4]byte
-	if _, err := reader.Read(lenBuf[:]); err != nil {
+	if _, err := io.ReadFull(reader, lenBuf[:]); err != nil {
 		return
 	}
 	plLen := binary.BigEndian.Uint32(lenBuf[:])
+	if plLen > 1<<20 {
+		return
+	}
 	pl := make([]byte, plLen)
-	if _, err := reader.Read(pl); err != nil {
+	if _, err := io.ReadFull(reader, pl); err != nil {
 		return
 	}
 

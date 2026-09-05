@@ -15,6 +15,7 @@ import (
 
 	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/mrityunjay/LocalWEB/pkg/discovery"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -486,13 +487,21 @@ func (d *DHT) RegisterNode(ctx context.Context, pubKey [32]byte, name string, ad
 		Score:     0.5,
 		FirstSeen: time.Now(),
 	}
-	d.storePeer(pi)
-	_ = Message{
+	msg := Message{
 		Type:    MsgRegisterNode,
 		Src:     d.localID,
 		Dst:     d.localID,
 		Payload: encodeRegister(pi, nonce, difficulty),
 	}
+	client := NewRPCClient(d.node.transport.Dial)
+	target := NodeIDFromPub(pubKey)
+	peers := d.node.table.FindClosest(target, Alpha)
+	for _, p := range peers {
+		if _, err := client.Call(ctx, p.Info.Addrs[0], msg); err != nil {
+			log.Warn().Err(err).Str("peer", p.Info.ID.String()).Msg("failed to register node with peer")
+		}
+	}
+	d.storePeer(pi)
 	return nil
 }
 

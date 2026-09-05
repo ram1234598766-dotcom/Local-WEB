@@ -68,6 +68,13 @@ func (c *Call) Peers() (PeerID, PeerID) {
 	return c.caller, c.callee
 }
 
+// Callee returns the callee's PeerID.
+func (c *Call) Callee() PeerID {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.callee
+}
+
 // ChannelID returns the signaling channel.
 func (c *Call) ChannelID() string {
 	c.mu.RLock()

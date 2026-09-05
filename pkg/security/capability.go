@@ -62,10 +62,13 @@ func (t *CapabilityToken) Sign(priv [32]byte) error {
 }
 
 // Verify checks the token's signature against the issuer's public key and
-// validates expiry.
+// validates expiry. It also ensures the token is bound to a non-zero peer ID.
 func (t *CapabilityToken) Verify(issuerPub [32]byte) error {
 	if len(t.Signature) != 64 {
 		return errors.New("invalid signature length")
+	}
+	if t.PeerID == ([32]byte{}) {
+		return errors.New("peer ID must not be zero")
 	}
 	canonical, err := t.CanonicalForm()
 	if err != nil {

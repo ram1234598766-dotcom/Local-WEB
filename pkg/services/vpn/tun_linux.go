@@ -15,13 +15,6 @@ type linuxTUN struct {
 	fd   int
 }
 
-// ifreq mirrors the C struct ifreq for ioctl calls.
-type ifreq struct {
-	Name  [unix.IFNAMSIZ]byte
-	Flags uint16
-	_     [22]byte // pad to 40 bytes
-}
-
 // openTUN creates a TUN device on Linux via /dev/net/tun.
 func openTUN(name string) (Interface, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
@@ -29,11 +22,11 @@ func openTUN(name string) (Interface, error) {
 		return nil, fmt.Errorf("open /dev/net/tun: %w", err)
 	}
 
-	var req ifreq
-	copy(req.Name[:], name)
+	var req unix.Ifreq
+	copy(req.Ifr_name[:], name)
 
 	// IFF_TUN = layer 3 tunnel, IFF_NO_PI = no packet info header
-	*(*uint16)(unsafe.Pointer(&req.Flags)) = unix.IFF_TUN | unix.IFF_NO_PI
+	*(*uint16)(unsafe.Pointer(&req.Ifr_flags)) = unix.IFF_TUN | unix.IFF_NO_PI
 
 	if _, _, errno := unix.Syscall(
 		unix.SYS_IOCTL,
@@ -45,7 +38,7 @@ func openTUN(name string) (Interface, error) {
 		return nil, fmt.Errorf("TUNSETIFF ioctl: %w", errno)
 	}
 
-	actualName := trimCStr(req.Name[:])
+	actualName := trimCStr(req.Ifr_name[:])
 	if actualName == "" {
 		actualName = name
 	}
@@ -68,9 +61,10 @@ func (t *linuxTUN) setFlags(flags uint16) error {
 	}
 	defer unix.Close(sock)
 
-	var req ifreq
-	copy(req.Name[:], t.name)
-	req.Flags = flags
+	var req unix.Ifreq
+	copy(req.Ifr_name[:], t.name)
+
+	*(*uint16)(unsafe.Pointer(&req.Ifr_flags)) = flags
 
 	if _, _, errno := unix.Syscall(
 		unix.SYS_IOCTL,
@@ -90,8 +84,8 @@ func (t *linuxTUN) Addrs() ([]string, error) {
 	}
 	defer unix.Close(sock)
 
-	var req ifreq
-	copy(req.Name[:], t.name)
+	var req unix.Ifreq
+	copy(req.Ifr_name[:], t.name)
 
 	if _, _, errno := unix.Syscall(
 		unix.SYS_IOCTL,
@@ -102,8 +96,8 @@ func (t *linuxTUN) Addrs() ([]string, error) {
 		return nil, fmt.Errorf("SIOCGIFADDR ioctl: %w", errno)
 	}
 
-	addr := (*[16]byte)(unsafe.Pointer(&req.Flags))
-	ip := fmt.Sprintf("%d.%d.%d.%d", addr[2], addr[3], addr[4], addr[5])
+	addr := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req.Ifr_addr))
+	ip := fmt.Sprintf("%d.%d.%d.%d", addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
 	return []string{ip}, nil
 }
 
@@ -114,18 +108,17 @@ func (t *linuxTUN) AddRoute(dst string, gw string) error {
 	}
 	defer unix.Close(sock)
 
-	var req struct {
-		Name [unix.IFNAMSIZ]byte
-		Addr unix.RawSockaddrInet4
-		_    [8]byte
-	}
-	copy(req.Name[:], t.name)
-
 	parsed := parseIPv4(gw)
 	if parsed == nil {
 		return fmt.Errorf("invalid gateway address: %s", gw)
 	}
-	req.Addr.Addr = *parsed
+
+	var req unix.Ifreq
+	copy(req.Ifr_name[:], t.name)
+
+	addr := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req.Ifr_addr))
+	addr.Family = unix.AF_INET
+	addr.Addr = *parsed
 
 	if _, _, errno := unix.Syscall(
 		unix.SYS_IOCTL,

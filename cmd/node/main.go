@@ -44,6 +44,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		log.Println("received shutdown signal, flushing and closing...")
 		cancel()
 	}()
 
@@ -63,7 +64,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
-	defer dbStore.Close()
+
+	// Graceful shutdown: flush pending writes before close
+	go func() {
+		<-ctx.Done()
+		if err := dbStore.Flush(); err != nil {
+			log.Printf("flush error: %v", err)
+		}
+		if err := dbStore.Close(); err != nil {
+			log.Printf("close error: %v", err)
+		}
+	}()
 
 	wifi, _ := link.NewWiFiStation()
 	wifiDirect, _ := link.NewWiFiDirect()

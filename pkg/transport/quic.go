@@ -56,10 +56,11 @@ type ServerStats struct {
 // ServerOption configures a Server.
 type ServerOption func(*Server)
 
-// WithEnforceTLSVerify enables server certificate verification in the QUIC
-// TLS handshake. When false (default), InsecureSkipVerify is set because peer
-// identity is authenticated via the Noise XX protocol. Production deployments
-// SHOULD pin server certificates and set this to true.
+// WithEnforceTLSVerify controls server certificate verification in the QUIC
+// TLS handshake. By default (false), InsecureSkipVerify is set because peer
+// identity is authenticated via the Noise XX protocol layer — the TLS layer
+// provides encryption and integrity, while Noise provides mutual authentication.
+// Set to true only when you have a PKI or certificate pinning to enforce.
 func WithEnforceTLSVerify(v bool) ServerOption {
 	return func(s *Server) { s.enforceTLS = v }
 }

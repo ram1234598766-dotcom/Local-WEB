@@ -2,11 +2,13 @@ package voice
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
+
+	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 )
 
 var (
@@ -133,13 +135,41 @@ func DecodeSignal(data []byte) (*SignalMessage, error) {
 	return &msg, nil
 }
 
-// ValidateSignal verifies the signature on a signaling message.
-func ValidateSignal(msg *SignalMessage, pub [32]byte) bool {
-	data := fmt.Sprintf("%s:%d:%x", msg.CallID[:], msg.Type, msg.Payload)
-	// In production, the signature is embedded in the messaging layer.
-	_ = data
-	_ = pub
-	return true
+// ValidateSignal verifies the Ed25519 signature on a signaling message.
+// Returns an error if the signature is missing or invalid.
+func ValidateSignal(msg *SignalMessage, pub [32]byte) error {
+	if len(msg.Signature) != 64 {
+		return errors.New("invalid signature length")
+	}
+	canonical := msg.CanonicalForm()
+	if !crypto.Verify(pub, canonical, msg.Signature) {
+		return errors.New("signal signature verification failed")
+	}
+	return nil
+}
+
+// Sign signs a signal message with the given private key.
+func Sign(msg *SignalMessage, priv [32]byte) error {
+	canonical := msg.CanonicalForm()
+	sig, err := crypto.Sign(priv, canonical)
+	if err != nil {
+		return err
+	}
+	msg.Signature = sig
+	return nil
+}
+
+// CanonicalForm returns the byte representation that is signed/verified.
+func (m *SignalMessage) CanonicalForm() []byte {
+	buf := make([]byte, 0, 16+1+8+len(m.Payload))
+	buf = append(buf, m.CallID[:]...)
+	buf = append(buf, byte(m.Type))
+	buf = append(buf, byte(m.Sender[0]))
+	ts := make([]byte, 8)
+	binary.BigEndian.PutUint64(ts, uint64(m.Timestamp))
+	buf = append(buf, ts...)
+	buf = append(buf, m.Payload...)
+	return buf
 }
 
 // CallSignaling bridges a Call with the signaling channel.
@@ -150,10 +180,12 @@ type CallSignaling struct {
 	callee    PeerID
 	channel   *MessagingSignaling
 	callerKey [32]byte
+	privKey   [32]byte
 }
 
 // NewCallSignaling creates a signaling bridge for a call.
-func NewCallSignaling(call *Call, channel *MessagingSignaling, callerKey [32]byte) *CallSignaling {
+// privKey is the Ed25519 private key of the caller, used to sign signals.
+func NewCallSignaling(call *Call, channel *MessagingSignaling, callerKey, privKey [32]byte) *CallSignaling {
 	caller, callee := call.Peers()
 	return &CallSignaling{
 		callID:    call.ID(),
@@ -161,30 +193,43 @@ func NewCallSignaling(call *Call, channel *MessagingSignaling, callerKey [32]byt
 		callee:    callee,
 		channel:   channel,
 		callerKey: callerKey,
+		privKey:   privKey,
 	}
 }
 
-// SendOffer sends an offer to the callee.
+// SendOffer sends a signed offer to the callee.
 func (s *CallSignaling) SendOffer(ctx context.Context, tracks []TrackInfo) error {
 	msg := SignalOffer(s.callID, s.caller, tracks)
+	if err := Sign(&msg, s.privKey); err != nil {
+		return err
+	}
 	return s.channel.SendSignal(ctx, s.callerKey, msg)
 }
 
-// SendAnswer sends an answer to the caller.
+// SendAnswer sends a signed answer to the caller.
 func (s *CallSignaling) SendAnswer(ctx context.Context, tracks []TrackInfo) error {
 	msg := SignalAnswer(s.callID, s.callee, tracks)
+	if err := Sign(&msg, s.privKey); err != nil {
+		return err
+	}
 	return s.channel.SendSignal(ctx, s.callerKey, msg)
 }
 
-// SendICE sends an ICE candidate.
+// SendICE sends a signed ICE candidate.
 func (s *CallSignaling) SendICE(ctx context.Context, cand ICECandidate) error {
 	msg := SignalICE(s.callID, s.caller, cand)
+	if err := Sign(&msg, s.privKey); err != nil {
+		return err
+	}
 	return s.channel.SendSignal(ctx, s.callerKey, msg)
 }
 
-// SendBye sends a bye signal.
+// SendBye sends a signed bye signal.
 func (s *CallSignaling) SendBye(ctx context.Context) error {
 	msg := SignalBye(s.callID, s.caller)
+	if err := Sign(&msg, s.privKey); err != nil {
+		return err
+	}
 	return s.channel.SendSignal(ctx, s.callerKey, msg)
 }
 

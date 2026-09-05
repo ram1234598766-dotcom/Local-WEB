@@ -41,7 +41,7 @@ func (m *mockSignalingChannel) Subscribe(_ string) (<-chan struct{}, error) {
 }
 
 func TestSignalMessageRoundTrip(t *testing.T) {
-	pub, _, _ := crypto.GenerateX25519KeyPair()
+	pub, priv, _ := crypto.GenerateKeyPair()
 	caller := crypto.NodeID(pub)
 	callee := crypto.NodeID([32]byte{})
 	for i := range callee {
@@ -50,7 +50,7 @@ func TestSignalMessageRoundTrip(t *testing.T) {
 
 	call := NewCall(CallConfig{Caller: caller, Callee: callee, ChannelID: "ch"})
 	ch := newMockSignalingChannel()
-	sig := NewCallSignaling(call, NewMessagingSignaling("ch", ch), pub)
+	sig := NewCallSignaling(call, NewMessagingSignaling("ch", ch), caller, priv)
 
 	tracks := []TrackInfo{
 		{ID: "audio-1", Kind: TrackKindAudio, Direction: TrackDirectionSendRecv, Codec: CodecOpus, MimeType: "audio/opus", SampleRate: 48000, Bitrate: 64},

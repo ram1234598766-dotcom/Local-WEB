@@ -127,6 +127,7 @@ type CallConfig struct {
 	VideoCodec  CodecID
 	EnableVideo bool
 	EnableData  bool
+	PrivKey     *[32]byte // caller's Ed25519 private key for signing (optional)
 }
 
 // MediaStats carries per-track quality metrics.
@@ -159,6 +160,7 @@ type SignalMessage struct {
 	Sender    PeerID
 	Timestamp int64
 	Payload   []byte
+	Signature []byte // 64-byte Ed25519 signature over canonical form
 }
 
 // GroupCallRole identifies the star-topology role of a peer.

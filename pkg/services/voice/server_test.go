@@ -74,30 +74,32 @@ func (m *mockStream) PeerID() [32]byte {
 func TestNewVoiceServer(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
-	_, _ = pubA, privA
+	edPub, edPriv, _ := crypto.GenerateKeyPair()
 
 	srv, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srv.Stop()
 
-	v := NewVoiceServer(srv, true)
+	v := NewVoiceServer(srv, true, edPriv)
 	require.NotNil(t, v)
 	require.True(t, v.hubRole)
+	_ = edPub
 }
 
 func TestStartCall(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
 	pubB, _, _ := crypto.GenerateX25519KeyPair()
+	edPub, edPriv, _ := crypto.GenerateKeyPair()
 
 	srvA, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srvA.Stop()
 
-	v := NewVoiceServer(srvA, false)
+	v := NewVoiceServer(srvA, false, edPriv)
 	ch := newMockSignalingChannel()
 	sig, err := v.StartCall(ctx, CallConfig{
-		Caller:    [32]byte(pubA),
+		Caller:    [32]byte(edPub),
 		Callee:    [32]byte(pubB),
 		ChannelID: "ch-voice",
 	}, ch)
@@ -109,15 +111,15 @@ func TestStartCall(t *testing.T) {
 func TestAcceptCall(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
-	_, _ = pubA, privA
+	edPub, edPriv, _ := crypto.GenerateKeyPair()
 
 	srvA, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srvA.Stop()
 
-	v := NewVoiceServer(srvA, false)
+	v := NewVoiceServer(srvA, false, edPriv)
 	ch := newMockSignalingChannel()
-	caller := [32]byte(pubA)
+	caller := [32]byte(edPub)
 	callee := [32]byte{}
 	for i := range callee {
 		callee[i] = byte(i + 1)
@@ -130,23 +132,23 @@ func TestAcceptCall(t *testing.T) {
 	require.NoError(t, err)
 
 	callID := sig.CallID()
-	_ = sig // keep reference
+	_ = sig
 
-	// Accept as callee.
 	require.NoError(t, v.AcceptCall(ctx, callID, ch, []TrackInfo{}))
 }
 
 func TestEndCall(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
+	edPub, edPriv, _ := crypto.GenerateKeyPair()
 
 	srvA, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srvA.Stop()
 
-	v := NewVoiceServer(srvA, false)
+	v := NewVoiceServer(srvA, false, edPriv)
 	ch := newMockSignalingChannel()
-	caller := [32]byte(pubA)
+	caller := [32]byte(edPub)
 	callee := [32]byte{}
 	for i := range callee {
 		callee[i] = byte(i + 1)
@@ -183,12 +185,13 @@ func TestMarshalUnmarshalFrame(t *testing.T) {
 func TestTrackManagerPerPeer(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
+	_, edPriv, _ := crypto.GenerateKeyPair()
 
 	srvA, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srvA.Stop()
 
-	v := NewVoiceServer(srvA, false)
+	v := NewVoiceServer(srvA, false, edPriv)
 	peer := [32]byte{}
 	for i := range peer {
 		peer[i] = byte(i + 1)
@@ -206,16 +209,17 @@ func TestTrackManagerPerPeer(t *testing.T) {
 func TestVoiceServerClose(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
+	edPub, edPriv, _ := crypto.GenerateKeyPair()
 
 	srvA, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srvA.Stop()
 
-	v := NewVoiceServer(srvA, false)
+	v := NewVoiceServer(srvA, false, edPriv)
 	v.Close()
 
 	ch := newMockSignalingChannel()
-	caller := [32]byte(pubA)
+	caller := [32]byte(edPub)
 	callee := [32]byte{}
 	for i := range callee {
 		callee[i] = byte(i + 1)
@@ -231,12 +235,13 @@ func TestVoiceServerClose(t *testing.T) {
 func TestRegisterPeerHandler(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA, _ := crypto.GenerateX25519KeyPair()
+	_, edPriv, _ := crypto.GenerateKeyPair()
 
 	srvA, err := transport.NewServer(ctx, "127.0.0.1:0", pubA, privA)
 	require.NoError(t, err)
 	defer srvA.Stop()
 
-	v := NewVoiceServer(srvA, false)
+	v := NewVoiceServer(srvA, false, edPriv)
 	called := false
 	v.RegisterPeerHandler("track-1", func(_ context.Context, _ PeerID, _ string, _ []byte) {
 		called = true

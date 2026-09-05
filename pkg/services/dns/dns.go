@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/mrityunjay/LocalWEB/pkg/discovery"
 )
 
@@ -86,8 +88,9 @@ type Zone struct {
 	SOA       SOARecord
 	Records   map[string][]ResourceRecord
 	Transfers map[[32]byte]bool
+	Signer    [32]byte // Ed25519 public key of the zone signer
 	SignedAt  time.Time
-	Sig       [64]byte
+	Sig       [64]byte // Ed25519 signature
 }
 
 type SOARecord struct {
@@ -198,6 +201,9 @@ func (s *Server) handleQuery(ctx context.Context, conn *net.UDPConn, remote *net
 	}
 
 	key := q.Name
+	if len(key) > 255 {
+		key = key[:255]
+	}
 	s.mu.RLock()
 	if entry, ok := s.cache[key]; ok && time.Now().Before(entry.expires) {
 		s.mu.RUnlock()
@@ -210,7 +216,9 @@ func (s *Server) handleQuery(ctx context.Context, conn *net.UDPConn, remote *net
 		} else {
 			response.Answers = append(response.Answers, record)
 			s.mu.Lock()
-			s.cache[key] = cacheEntry{record: record, expires: time.Now().Add(CacheTTL)}
+			if len(s.cache) < 10000 {
+				s.cache[key] = cacheEntry{record: record, expires: time.Now().Add(CacheTTL)}
+			}
 			s.mu.Unlock()
 		}
 	}
@@ -228,6 +236,17 @@ func (s *Server) resolve(q DNSQuestion) (DNSRecord, error) {
 	if !ok {
 		return DNSRecord{}, errors.New("not found")
 	}
+
+	if pub := s.zone.Signer; pub != ([32]byte{}) {
+		zoneMsg := s.zoneCanonical()
+		if len(s.zone.Sig) != 64 {
+			return DNSRecord{}, errors.New("zone signature missing but signer key is set")
+		}
+		if !crypto.Verify(pub, zoneMsg, s.zone.Sig[:]) {
+			return DNSRecord{}, errors.New("zone signature verification failed")
+		}
+	}
+
 	for _, rr := range records {
 		if rr.Record.Type == q.Type {
 			rec := rr.Record
@@ -243,6 +262,17 @@ func (s *Server) resolve(q DNSQuestion) (DNSRecord, error) {
 	return DNSRecord{}, errors.New("not found")
 }
 
+func (s *Server) zoneCanonical() []byte {
+	var buf bytes.Buffer
+	for name, rrs := range s.zone.Records {
+		buf.WriteString(name)
+		for _, rr := range rrs {
+			buf.Write(rr.Data)
+		}
+	}
+	return buf.Bytes()
+}
+
 func reverseName(addr string) string {
 	ip := net.ParseIP(addr)
 	if ip == nil {
@@ -252,8 +282,7 @@ func reverseName(addr string) string {
 	if ip == nil {
 		return addr
 	}
-	_ = ip
-	return "in-addr.arpa"
+	return fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa", ip[3], ip[2], ip[1], ip[0])
 }
 
 func (s *Server) Advertise(ctx context.Context) error {
@@ -363,13 +392,24 @@ func SerializeMessage(msg *DNSMessage) ([]byte, error) {
 		buf = append(buf, byte(q.Type>>8), byte(q.Type), byte(q.Class>>8), byte(q.Class))
 	}
 	for _, r := range msg.Answers {
-		buf = append(buf, encodeName(r.Name)...)
-		buf = append(buf, byte(r.Type>>8), byte(r.Type), byte(r.Class>>8), byte(r.Class))
-		buf = append(buf, byte(r.TTL>>24), byte(r.TTL>>16), byte(r.TTL>>8), byte(r.TTL))
-		buf = append(buf, byte(len(r.RData)>>8), byte(len(r.RData)))
-		buf = append(buf, r.RData...)
+		buf = appendRecord(buf, r)
+	}
+	for _, r := range msg.Authorities {
+		buf = appendRecord(buf, r)
+	}
+	for _, r := range msg.Additionals {
+		buf = appendRecord(buf, r)
 	}
 	return buf, nil
+}
+
+func appendRecord(buf []byte, r DNSRecord) []byte {
+	buf = append(buf, encodeName(r.Name)...)
+	buf = append(buf, byte(r.Type>>8), byte(r.Type), byte(r.Class>>8), byte(r.Class))
+	buf = append(buf, byte(r.TTL>>24), byte(r.TTL>>16), byte(r.TTL>>8), byte(r.TTL))
+	buf = append(buf, byte(len(r.RData)>>8), byte(len(r.RData)))
+	buf = append(buf, r.RData...)
+	return buf
 }
 
 func readName(data []byte, offset int) (string, int, error) {

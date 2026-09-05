@@ -119,6 +119,7 @@ func (r *Relay) pumpID(id string, src, dst Stream) {
 			if _, werr := dst.Write(buf[:n]); werr != nil {
 				break
 			}
+			r.recordBytes(id, uint64(n))
 		}
 		if err != nil {
 			break

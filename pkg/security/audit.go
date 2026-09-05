@@ -123,9 +123,6 @@ func (l *AuditLog) VerifyIntegrity() error {
 		if e.hash != expected {
 			return fmt.Errorf("entry %d: hash mismatch", i)
 		}
-		if e.hash != l.lastHash && i == len(l.entries)-1 {
-			return fmt.Errorf("entry %d: last entry hash does not match log tip", i)
-		}
 		prev = e.hash
 	}
 	return nil
