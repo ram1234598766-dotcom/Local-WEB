@@ -84,8 +84,13 @@ func main() {
 	usb, _ := link.NewUSB()
 	adhoc, _ := link.NewAdHocWiFi()
 
+	links := []link.Link{wifi, wifiDirect, ble, adhoc}
+	if usb != nil {
+		links = append(links, usb)
+	}
+
 	linkMgr := link.NewManager(link.ManagerConfig{
-		Links: []link.Link{wifi, wifiDirect, ble, usb, adhoc},
+		Links:      links,
 		Preferences: []link.LinkMode{
 			link.ModeWiFiDirect,
 			link.ModeWiFiStation,
