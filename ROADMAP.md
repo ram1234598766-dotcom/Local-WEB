@@ -47,11 +47,12 @@
 - **Files:** `pkg/plugin/`
 - **Status:** Implemented `PluginManager`, `Host` interface, `BuiltinPlugin` framework with example Echo/Metrics plugins, Go plugin loader stub
 
-### 6.5 Chaos/Fault Injection in CI
-- **Goal:** Automated partition, packet loss, churn tests
+### 6.5 Chaos/Fault Injection in CI ✅
+- **Goal:** Automate packet loss, partition, and churn simulation in CI
 - **Work:** Extend `pkg/chaos` with CI pipelines, scheduled runs
 - **Tests:** Nightly chaos runs, flaky test detection
-- **Files:** `.github/workflows/chaos.yml`, `pkg/chaos/`
+- **Files:** `.github/workflows/ci.yml`, `pkg/chaos/`
+- **Status:** Implemented `ChaosRunner` with built-in scenarios (partition, latency, loss, duplication, corruption), CI workflow with nightly chaos runs, 12 test cases passing
 
 ### 6.6 QoS/Bandwidth Shaping
 - **Goal:** Voice, VPN, Files compete fairly

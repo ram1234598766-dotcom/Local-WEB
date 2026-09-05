@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # Nightly chaos tests
 
 jobs:
   build:
@@ -66,6 +68,27 @@ jobs:
       - name: Run integration tests
         run: go test -tags=integration ./test/integration/... -v -count=1 -timeout 120s
 
+  chaos-tests:
+    name: Chaos/Fault Injection Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Run chaos unit tests
+        run: CGO_ENABLED=1 go test -race -v ./pkg/chaos/... -count=1
+
+      - name: Run chaos integration tests
+        run: CGO_ENABLED=1 go test -race -v ./test/chaos/... -count=1 -timeout 300s
+
+      - name: Run chaos suite (quick)
+        run: CGO_ENABLED=1 go test -race -v ./test/chaos/... -run QuickSuite -count=1 -timeout 60s
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -83,3 +106,19 @@ jobs:
 
       - name: Run golangci-lint
         run: golangci-lint run ./...
+
+  govulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

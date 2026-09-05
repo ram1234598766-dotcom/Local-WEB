@@ -1,47 +1,57 @@
-# package chaos
+# Chaos Engineering for LocalWEB
 
-`pkg/chaos` provides fault-injection primitives for testing Local-WEB's
-distributed protocols (DHT, CRDT, federation) under adverse network conditions.
+This package provides fault injection primitives for chaos engineering and resilience testing.
 
 ## Components
 
-### FaultyConn
+- **FaultyConn** - Wraps connections with packet loss, latency, duplication, partition
+- **Pipe** - In-memory lossy pipe for testing
+- **ChaosRunner** - Orchestrates chaos experiments with scenarios
+- **Scenario** - Defines a chaos experiment (partition, latency, loss, etc.)
 
-A synthetic `net.Conn` for tests that need to simulate:
-
-- **Packet loss** — `lossRate` (0.0 = perfect, 1.0 = all dropped)
-- **Latency** — `WithLatency(conn, duration)`
-- **Duplication** — `WithDuplicate(conn, n)` (each packet sent n extra times)
-- **Partitioning** — `WithPartition(conn, true)` simulates network partition
-  (all reads return 0)
+## Usage
 
 ```go
-c := chaos.NewFaultyConn(100, 0.3)
-chaos.WithLatency(c, 100*time.Millisecond)
-// Use c as a net.Conn in tests
+// Create a lossy pipe
+conn1, conn2 := chaos.NewPipe(4096, 0.1) // 10% packet loss
+
+// Run a chaos scenario
+runner := chaos.NewRunner()
+runner.AddScenario(chaos.Scenario{
+    Name:        "network-partition",
+    Duration:    30 * time.Second,
+    LossRate:    0.5,
+    Latency:     100 * time.Millisecond,
+    Partition:   true,
+    TargetPeers: []string{"*"}, // all peers
+})
+runner.Run(ctx)
 ```
 
-### NewPipe
+## CI Integration
 
-Creates a pair of connected `net.Conn`s with configurable packet loss.
-Data written to one end can be read from the other:
-
-```go
-a, b := chaos.NewPipe(1024, 0.1)
-a.Write([]byte("hello"))
-buf := make([]byte, 5)
-n, _ := b.Read(buf) // reads "hello" with 10% chance of drop
+Add to `.github/workflows/chaos.yml`:
+```yaml
+name: Chaos Tests
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Nightly
+  push:
+    branches: [main]
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: go test -race -v ./pkg/chaos/...
+      - run: go test -race -v -run ChaosIntegration ./test/chaos/...
 ```
 
-## Usage in Tests
+## Built-in Scenarios
 
-Chaos components implement `net.Conn` directly, so they can be used
-anywhere a `net.Conn` or `io.Reader`/`io.Writer` is expected. They are
-**opt-in only** — importing `pkg/chaos` does not affect production behavior
-because nothing in production depends on it.
-
-## Running
-
-```bash
-make test-chaos
-```
+- `partition` - Network partition (drop all packets)
+- `high-latency` - Add 100-500ms latency
+- `packet-loss` - 10-50% packet loss
+- `duplicate` - Duplicate packets
+- `corruption` - Corrupt packet data
+- `mixed` - Combination of above
