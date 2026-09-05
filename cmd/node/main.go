@@ -11,7 +11,9 @@ import (
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/gui"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/link"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/security"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
@@ -126,6 +128,28 @@ func main() {
 	})
 
 	log.Printf("node listening on %s", *addr)
+
+	// Start GUI API + SPA on :8080 (localhost-only read-only dashboard)
+	api := gui.NewAPI(pub)
+	if dbStore != nil {
+		api.SetStore(dbStore)
+		api.SetPeerStore(store.NewPeerStore(dbStore))
+	}
+	api.SetDiscovery(disc)
+
+	auditLog := security.NewAuditLog()
+	if auditLog != nil {
+		api.SetAuditLog(auditLog)
+	}
+
+	guiHandler := gui.NewHandler(api)
+	go func() {
+		if err := guiHandler.ListenAndServe("localhost:8080"); err != nil {
+			log.Printf("gui server: %v", err)
+		}
+	}()
+	defer guiHandler.Shutdown(context.Background())
+
 	<-ctx.Done()
 	log.Println("shutting down")
 }
