@@ -40,11 +40,12 @@
 - **Files:** `pkg/link/multipath.go`, `pkg/link/manager.go`
 - **Status:** Implemented `MultiPathManager` with 4 aggregation modes (failover, round-robin, bandwidth, latency), concurrent connections, redundancy, dynamic primary selection
 
-### 6.4 Plugin/Extension Interface
+### 6.4 Plugin/Extension Interface ✅
 - **Goal:** Third-party services without forking daemon
 - **Work:** Define `ServicePlugin` interface, registration API, capability tokens
 - **Tests:** Load external .so/.dll, register service, verify sandbox
-- **Files:** New `pkg/plugin/`
+- **Files:** `pkg/plugin/`
+- **Status:** Implemented `PluginManager`, `Host` interface, `BuiltinPlugin` framework with example Echo/Metrics plugins, Go plugin loader stub
 
 ### 6.5 Chaos/Fault Injection in CI
 - **Goal:** Automated partition, packet loss, churn tests
