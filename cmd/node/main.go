@@ -6,22 +6,35 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/mrityunjay/LocalWEB/pkg/discovery"
 	"github.com/mrityunjay/LocalWEB/pkg/link"
+	"github.com/mrityunjay/LocalWEB/pkg/store"
 	"github.com/mrityunjay/LocalWEB/pkg/transport"
 )
 
 func main() {
 	addr := flag.String("addr", "0.0.0.0:4443", "listen address")
 	name := flag.String("name", "", "node name")
+	storage := flag.String("storage", "", "path to BadgerDB storage directory")
+	dataDir := flag.String("data-dir", "", "path to store node identity and keys")
 	flag.Parse()
 
 	if *name == "" {
 		hostname, _ := os.Hostname()
 		*name = hostname
+	}
+
+	if *dataDir == "" {
+		homeDir, _ := os.UserHomeDir()
+		*dataDir = filepath.Join(homeDir, ".localweb")
+	}
+
+	if *storage == "" {
+		*storage = filepath.Join(*dataDir, "data")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -34,12 +47,23 @@ func main() {
 		cancel()
 	}()
 
-	pub, priv, err := crypto.GenerateKeyPair()
+	// Load or generate persistent identity — keys are NOT regenerated on every startup
+	pub, priv, err := crypto.LoadOrGenerateIdentity(*dataDir)
 	if err != nil {
-		log.Fatalf("generate keys: %v", err)
+		log.Fatalf("load identity: %v", err)
 	}
 	nodeID := crypto.NodeID(pub)
 	log.Printf("node ID: %x", nodeID[:8])
+
+	// Derive store encryption key from node identity
+	encKey := crypto.DeriveStorageKey(priv)
+
+	// Open encrypted store
+	dbStore, err := store.Open(*storage, encKey)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer dbStore.Close()
 
 	wifi, _ := link.NewWiFiStation()
 	wifiDirect, _ := link.NewWiFiDirect()

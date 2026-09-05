@@ -72,13 +72,13 @@ func TestDNSServerResolveA(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Bind test client to random port, query server on DefaultPort
+	// Bind test client to random port, query server on dynamically assigned port
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	require.NoError(t, err)
 	defer conn.Close()
 
-	serverPort := dns.DefaultPort
-	_ = srv.Start(ctx, "127.0.0.1")
+	require.NoError(t, srv.Start(ctx, "127.0.0.1:0"))
+	serverPort := portFromAddr(srv.Addr())
 
 	// Build a DNS query for host1.localweb A record
 	query := buildDNSQuery(0xABCD, "host1.localweb", dns.TypeA)
@@ -116,10 +116,11 @@ func TestDNSServerResolvePTR(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	_ = srv.Start(ctx, "127.0.0.1")
+	require.NoError(t, srv.Start(ctx, "127.0.0.1:0"))
+	serverPort := portFromAddr(srv.Addr())
 
 	query := buildDNSQuery(0x1111, "1.0.0.127.in-addr.arpa", dns.TypePTR)
-	_, err = conn.WriteToUDP(query, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: dns.DefaultPort})
+	_, err = conn.WriteToUDP(query, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverPort})
 	require.NoError(t, err)
 
 	buf := make([]byte, dns.MaxMsgSize)
@@ -148,10 +149,11 @@ func TestDNSServerNXDomain(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	_ = srv.Start(ctx, "127.0.0.1")
+	require.NoError(t, srv.Start(ctx, "127.0.0.1:0"))
+	serverPort := portFromAddr(srv.Addr())
 
 	query := buildDNSQuery(0x2222, "nonexistent.localweb", dns.TypeA)
-	_, err = conn.WriteToUDP(query, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: dns.DefaultPort})
+	_, err = conn.WriteToUDP(query, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverPort})
 	require.NoError(t, err)
 
 	buf := make([]byte, dns.MaxMsgSize)
@@ -172,10 +174,10 @@ func TestDNSEndToEndResolution(t *testing.T) {
 	zone := &dns.Zone{
 		SOA: dns.SOARecord{MName: "ns1.localweb", RName: "admin.localweb", Serial: 1, Refresh: 300, Retry: 60, Expire: 86400, Minimum: 60},
 		Records: map[string][]dns.ResourceRecord{
-			"web1.localweb":  {{Record: dns.DNSRecord{Name: "web1.localweb", Type: dns.TypeA, Class: 1, TTL: 300}, Data: []byte{10, 0, 0, 1}}},
-			"web2.localweb":  {{Record: dns.DNSRecord{Name: "web2.localweb", Type: dns.TypeA, Class: 1, TTL: 300}, Data: []byte{10, 0, 0, 2}}},
-			"mail.localweb":  {{Record: dns.DNSRecord{Name: "mail.localweb", Type: dns.TypeA, Class: 1, TTL: 300}, Data: []byte{10, 0, 0, 3}}},
-			"srv1.localweb":  {{Record: dns.DNSRecord{Name: "srv1.localweb", Type: dns.TypeSRV, Class: 1, TTL: 300}, Data: []byte{0, 0, 0, 0, 0, 0x11, 0x94}}},
+			"web1.localweb": {{Record: dns.DNSRecord{Name: "web1.localweb", Type: dns.TypeA, Class: 1, TTL: 300}, Data: []byte{10, 0, 0, 1}}},
+			"web2.localweb": {{Record: dns.DNSRecord{Name: "web2.localweb", Type: dns.TypeA, Class: 1, TTL: 300}, Data: []byte{10, 0, 0, 2}}},
+			"mail.localweb": {{Record: dns.DNSRecord{Name: "mail.localweb", Type: dns.TypeA, Class: 1, TTL: 300}, Data: []byte{10, 0, 0, 3}}},
+			"srv1.localweb": {{Record: dns.DNSRecord{Name: "srv1.localweb", Type: dns.TypeSRV, Class: 1, TTL: 300}, Data: []byte{0, 0, 0, 0, 0, 0x11, 0x94}}},
 		},
 	}
 
@@ -188,14 +190,14 @@ func TestDNSEndToEndResolution(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	_ = srv.Start(ctx, "127.0.0.1")
-	_ = conn // client port not used; server always on DefaultPort
+	require.NoError(t, srv.Start(ctx, "127.0.0.1:0"))
+	serverPort := portFromAddr(srv.Addr())
 
 	testCases := []struct {
-		name     string
-		qName    string
-		qType    dns.RecordType
-		wantAns  bool
+		name    string
+		qName   string
+		qType   dns.RecordType
+		wantAns bool
 	}{
 		{"resolve_web1", "web1.localweb", dns.TypeA, true},
 		{"resolve_web2", "web2.localweb", dns.TypeA, true},
@@ -206,7 +208,7 @@ func TestDNSEndToEndResolution(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			query := buildDNSQuery(uint16(t.Name()[0]), tc.qName, tc.qType)
-			_, err := conn.WriteToUDP(query, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: dns.DefaultPort})
+			_, err := conn.WriteToUDP(query, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverPort})
 			require.NoError(t, err)
 
 			buf := make([]byte, dns.MaxMsgSize)
@@ -248,11 +250,12 @@ func TestDNSCacheIntegration(t *testing.T) {
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	require.NoError(t, err)
 	defer conn.Close()
-	_ = srv.Start(ctx, "127.0.0.1")
+	require.NoError(t, srv.Start(ctx, "127.0.0.1:0"))
+	serverPort := portFromAddr(srv.Addr())
 
 	// First query – cache miss
 	query1 := buildDNSQuery(0x3001, "cached.localweb", dns.TypeA)
-	_, err = conn.WriteToUDP(query1, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: dns.DefaultPort})
+	_, err = conn.WriteToUDP(query1, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverPort})
 	require.NoError(t, err)
 	buf1 := make([]byte, dns.MaxMsgSize)
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -263,7 +266,7 @@ func TestDNSCacheIntegration(t *testing.T) {
 
 	// Second query – cache hit (within TTL)
 	query2 := buildDNSQuery(0x3002, "cached.localweb", dns.TypeA)
-	_, err = conn.WriteToUDP(query2, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: dns.DefaultPort})
+	_, err = conn.WriteToUDP(query2, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverPort})
 	require.NoError(t, err)
 	buf2 := make([]byte, dns.MaxMsgSize)
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -287,13 +290,18 @@ func buildDNSQuery(id uint16, name string, qType dns.RecordType) []byte {
 	binary.BigEndian.PutUint16(buf[10:12], 0)
 
 	nameStr := name
-	if nameStr[len(nameStr)-1] != '.' {
-		nameStr += "."
+	if len(nameStr) > 0 && nameStr[len(nameStr)-1] == '.' {
+		nameStr = nameStr[:len(nameStr)-1]
 	}
 	i := 0
 	for i < len(nameStr) {
 		dot := indexOfByte(nameStr[i:], '.')
 		if dot < 0 {
+			label := nameStr[i:]
+			if len(label) > 0 {
+				buf = append(buf, byte(len(label)))
+				buf = append(buf, []byte(label)...)
+			}
 			break
 		}
 		label := nameStr[i : i+dot]
@@ -315,4 +323,20 @@ func indexOfByte(s string, b byte) int {
 		}
 	}
 	return -1
+}
+
+// portFromAddr extracts the UDP port from a "host:port" address string.
+func portFromAddr(addr string) int {
+	if addr == "" {
+		return dns.DefaultPort
+	}
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return dns.DefaultPort
+	}
+	port, err := net.LookupPort("udp", p)
+	if err != nil {
+		return dns.DefaultPort
+	}
+	return port
 }

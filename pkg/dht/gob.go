@@ -2,15 +2,19 @@ package dht
 
 import (
 	"bytes"
-	"errors"
+	"encoding/gob"
 )
 
 func marshalGob(v interface{}) ([]byte, error) {
-	return nil, errors.New("not implemented")
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func unmarshalGob(data []byte, v interface{}) error {
-	return errors.New("not implemented")
+	return gob.NewDecoder(bytes.NewReader(data)).Decode(v)
 }
 
 type networkReader struct {

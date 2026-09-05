@@ -204,6 +204,15 @@ func TestRPCRoundTrip(t *testing.T) {
 				if _, err := io.ReadFull(c, hdr[:]); err != nil {
 					return
 				}
+				var lenBuf [4]byte
+				if _, err := io.ReadFull(c, lenBuf[:]); err != nil {
+					return
+				}
+				plLen := binary.BigEndian.Uint32(lenBuf[:])
+				pl := make([]byte, plLen)
+				if _, err := io.ReadFull(c, pl); err != nil {
+					return
+				}
 				resp := dht.Message{Type: dht.MsgFoundNode, Src: dht.NodeID{}, Dst: dht.NodeID{}, Payload: []byte("ok-payload")}
 				var out [1 + 32 + 32]byte
 				out[0] = byte(resp.Type)

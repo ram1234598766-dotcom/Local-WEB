@@ -12,7 +12,7 @@ import (
 
 // mockTransportServer is a minimal fake for testing.
 type mockTransportServer struct {
-	handlers map[transport.ServiceID]transport.StreamHandler
+	handlers        map[transport.ServiceID]transport.StreamHandler
 	registerHandler func(transport.ServiceID, transport.StreamHandler)
 }
 
@@ -65,6 +65,10 @@ func (m *mockStream) ServiceID() transport.ServiceID {
 
 func (m *mockStream) ID() uint64 {
 	return 1
+}
+
+func (m *mockStream) PeerID() [32]byte {
+	return [32]byte{}
 }
 
 func TestNewVoiceServer(t *testing.T) {

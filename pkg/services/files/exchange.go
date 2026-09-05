@@ -15,13 +15,13 @@ import (
 
 // exchangeProtocol implements Bitswap-like block exchange over QUIC streams.
 type exchangeProtocol struct {
-	mu       sync.RWMutex
-	server   *transport.Server
-	store    BlockStore
+	mu        sync.RWMutex
+	server    *transport.Server
+	store     BlockStore
 	fileStore FileStore
-	peerID   [32]byte
-	handler  ExchangeHandler
-	peers    map[[32]byte]*peerExchange
+	peerID    [32]byte
+	handler   ExchangeHandler
+	peers     map[[32]byte]*peerExchange
 }
 
 type peerExchange struct {
@@ -35,19 +35,19 @@ type ExchangeHandler func(ctx context.Context, peerID [32]byte, msg *ExchangeMes
 
 // ExchangeMessage is a wire-level exchange message.
 type ExchangeMessage struct {
-	Type  MessageType
-	CID   cid.Cid
-	Data  []byte
+	Type MessageType
+	CID  cid.Cid
+	Data []byte
 }
 
 // MessageType enumerates exchange message types.
 type MessageType uint8
 
 const (
-	MsgWant    MessageType = 0x01
-	MsgHave    MessageType = 0x02
-	MsgBlock   MessageType = 0x03
-	MsgCancel  MessageType = 0x04
+	MsgWant   MessageType = 0x01
+	MsgHave   MessageType = 0x02
+	MsgBlock  MessageType = 0x03
+	MsgCancel MessageType = 0x04
 )
 
 // NewExchangeProtocol creates a new exchange protocol handler.
@@ -206,9 +206,7 @@ func (e *exchangeProtocol) handleCancel(ctx context.Context, peerID [32]byte, pa
 }
 
 func extractPeerID(stream transport.Stream) [32]byte {
-	// In a real implementation, this would extract the peer ID from the connection context
-	// For now, return zero value
-	return [32]byte{}
+	return stream.PeerID()
 }
 
 // encodeWantEntries serializes want entries.
@@ -267,6 +265,9 @@ func (e *exchangeStream) Write(p []byte) (int, error) {
 
 func (e *exchangeStream) Close() error {
 	return e.stream.Close()
+}
+func (e *exchangeStream) PeerID() [32]byte {
+	return e.stream.PeerID()
 }
 
 // noopExchange is a no-op exchange protocol for testing.

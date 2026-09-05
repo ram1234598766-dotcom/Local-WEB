@@ -113,7 +113,7 @@ func TestTCPServerAcceptAndRespond(t *testing.T) {
 	resp, err := client.Call(context.Background(), ln.Addr().String(), msg)
 	require.NoError(t, err)
 	require.Equal(t, dht.MsgPong, resp.Type)
-	require.Equal(t, dht.MessageType(0), receivedType)
+	require.Equal(t, dht.MsgPing, receivedType)
 }
 
 // ---------------------------------------------------------------------------

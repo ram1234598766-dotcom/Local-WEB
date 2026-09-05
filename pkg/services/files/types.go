@@ -79,8 +79,8 @@ const (
 
 // WantEntry is a want/have advertisement in the exchange protocol.
 type WantEntry struct {
-	CID   cid.Cid
-	Type  WantType
+	CID      cid.Cid
+	Type     WantType
 	Priority uint8
 }
 
@@ -118,13 +118,13 @@ type SyncEngine interface {
 
 // SyncStats tracks synchronization statistics.
 type SyncStats struct {
-	BlocksSent    uint64
-	BlocksRecv    uint64
-	BytesSent     uint64
-	BytesRecv     uint64
-	ActiveSyncs   int
-	TotalSyncs    uint64
-	FailedSyncs   uint64
+	BlocksSent  uint64
+	BlocksRecv  uint64
+	BytesSent   uint64
+	BytesRecv   uint64
+	ActiveSyncs int
+	TotalSyncs  uint64
+	FailedSyncs uint64
 }
 
 // ExchangeProtocol handles block exchange between peers.
@@ -141,6 +141,7 @@ type ExchangeStream interface {
 	Read(p []byte) (n int, err error)
 	Write(p []byte) (n int, err error)
 	Close() error
+	PeerID() [32]byte
 }
 
 // PeerInfo holds information about a sync peer.

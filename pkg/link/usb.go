@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -13,10 +14,10 @@ import (
 
 // USB implements Link for USB tethering (cable connection).
 type USB struct {
-	iface      string // USB network interface (usb0, enx*, etc.)
-	gateway    net.IP
-	localIP    net.IP
-	connected  bool
+	iface     string // USB network interface (usb0, enx*, etc.)
+	gateway   net.IP
+	localIP   net.IP
+	connected bool
 }
 
 // NewUSB creates a USB tethering link.
@@ -45,12 +46,12 @@ func NewUSB() (*USB, error) {
 	return u, nil
 }
 
-func (u *USB) Name() string           { return "usb-tether" }
-func (u *USB) Mode() LinkMode         { return ModeUSBTether }
-func (u *USB) RequiresWiFi() bool     { return false }
-func (u *USB) RequiresRouter() bool   { return false }
-func (u *USB) Bandwidth() int         { return 480 } // USB 2.0 = 480 Mbps
-func (u *USB) MaxPeers() int          { return 2 }   // Usually 1:1
+func (u *USB) Name() string         { return "usb-tether" }
+func (u *USB) Mode() LinkMode       { return ModeUSBTether }
+func (u *USB) RequiresWiFi() bool   { return false }
+func (u *USB) RequiresRouter() bool { return false }
+func (u *USB) Bandwidth() int       { return 480 } // USB 2.0 = 480 Mbps
+func (u *USB) MaxPeers() int        { return 2 }   // Usually 1:1
 
 func (u *USB) IsAvailable(ctx context.Context) bool {
 	iface, err := net.InterfaceByName(u.iface)
@@ -160,6 +161,16 @@ func (u *USB) scanUSBSubnet(ctx context.Context, events chan<- PeerEvent) {
 }
 
 // findUSBInterface finds the USB network interface.
+
+// isLinux reports whether the current OS is Linux.
+func isLinux() bool { return runtime.GOOS == "linux" }
+
+// isMacOS reports whether the current OS is macOS.
+func isMacOS() bool { return runtime.GOOS == "darwin" }
+
+// isWindows reports whether the current OS is Windows.
+func isWindows() bool { return runtime.GOOS == "windows" }
+
 func (u *USB) findUSBInterface() (string, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -242,16 +253,4 @@ func SetupUSBGuest() error {
 	default:
 		return nil
 	}
-}
-
-func isLinux() bool {
-	return exec.Command("uname", "-s").Run() == nil
-}
-
-func isMacOS() bool {
-	return exec.Command("uname", "-s").Run() == nil // Check for Darwin
-}
-
-func isWindows() bool {
-	return exec.Command("ver").Run() == nil
 }

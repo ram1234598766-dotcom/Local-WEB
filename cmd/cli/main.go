@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/mrityunjay/LocalWEB/pkg/crypto"
 	"github.com/spf13/cobra"
@@ -22,22 +23,29 @@ var nodeCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		addr, _ := cmd.Flags().GetString("addr")
 		name, _ := cmd.Flags().GetString("name")
-		startNode(cmd.Context(), addr, name)
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		startNode(cmd.Context(), addr, name, dataDir)
 	},
 }
 
 var idCmd = &cobra.Command{
 	Use:   "id",
-	Short: "Generate node identity",
+	Short: "Generate or display node identity",
 	Run: func(cmd *cobra.Command, args []string) {
-		pub, priv, err := crypto.GenerateKeyPair()
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		if dataDir == "" {
+			homeDir, _ := os.UserHomeDir()
+			dataDir = filepath.Join(homeDir, ".localweb")
+		}
+
+		pub, _, err := crypto.LoadOrGenerateIdentity(dataDir)
 		if err != nil {
-			log.Fatalf("generate keys: %v", err)
+			log.Fatalf("identity: %v", err)
 		}
 		nodeID := crypto.NodeID(pub)
-		fmt.Printf("Node ID: %x\n", nodeID[:])
+		fmt.Printf("Node ID: %x\n", nodeID[:8])
 		fmt.Printf("Public:  %x\n", pub[:])
-		fmt.Printf("Private: %x\n", priv[:])
+		fmt.Printf("Identity stored in %s/identity.json (private key not displayed)\n", dataDir)
 	},
 }
 
@@ -52,26 +60,34 @@ var peersCmd = &cobra.Command{
 func init() {
 	nodeCmd.Flags().StringP("addr", "a", "0.0.0.0:4443", "listen address")
 	nodeCmd.Flags().StringP("name", "n", "", "node name")
+	nodeCmd.Flags().StringP("data-dir", "d", "", "path to store node identity and keys")
 	rootCmd.AddCommand(nodeCmd)
 	rootCmd.AddCommand(idCmd)
 	rootCmd.AddCommand(peersCmd)
 }
 
-func startNode(ctx context.Context, addr, name string) {
+func startNode(ctx context.Context, addr, name, dataDir string) {
 	if name == "" {
 		hostname, _ := os.Hostname()
 		name = hostname
 	}
 
-	pub, _, err := crypto.GenerateKeyPair()
+	if dataDir == "" {
+		homeDir, _ := os.UserHomeDir()
+		dataDir = filepath.Join(homeDir, ".localweb")
+	}
+
+	// Load or generate persistent identity — keys are NOT regenerated on every startup
+	pub, priv, err := crypto.LoadOrGenerateIdentity(dataDir)
 	if err != nil {
-		log.Fatalf("generate keys: %v", err)
+		log.Fatalf("load identity: %v", err)
 	}
 	nodeID := crypto.NodeID(pub)
 	log.Printf("node ID: %x", nodeID[:8])
 
 	fmt.Printf("Starting node %s on %s\n", name, addr)
 	fmt.Printf("Node ID: %x\n", nodeID[:8])
+	_ = priv
 	fmt.Println("Node started successfully")
 }
 

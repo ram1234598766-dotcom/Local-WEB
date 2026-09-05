@@ -3,6 +3,7 @@ package dht
 import (
 	"context"
 	"encoding/binary"
+	"io"
 	"net"
 	"testing"
 )
@@ -84,7 +85,16 @@ func TestRPCClientRoundTrip(t *testing.T) {
 		}
 		defer conn.Close()
 		var hdr [65]byte
-		if _, err := conn.Read(hdr[:]); err != nil {
+		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+			return
+		}
+		var lenBuf [4]byte
+		if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+			return
+		}
+		plLen := binary.BigEndian.Uint32(lenBuf[:])
+		pl := make([]byte, plLen)
+		if _, err := io.ReadFull(conn, pl); err != nil {
 			return
 		}
 		resp := Message{Type: MsgFoundNode, Src: NodeID{}, Dst: NodeID{}, Payload: []byte("ok")}
@@ -92,10 +102,10 @@ func TestRPCClientRoundTrip(t *testing.T) {
 		out[0] = byte(MsgFoundNode)
 		copy(out[1:33], resp.Src[:])
 		copy(out[33:65], resp.Dst[:])
-		var lenBuf [4]byte
-		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(resp.Payload)))
+		var rl [4]byte
+		binary.BigEndian.PutUint32(rl[:], uint32(len(resp.Payload)))
 		conn.Write(out[:])
-		conn.Write(lenBuf[:])
+		conn.Write(rl[:])
 		conn.Write(resp.Payload)
 	}()
 

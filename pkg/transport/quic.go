@@ -24,33 +24,33 @@ import (
 // It uses quic-go for the underlying QUIC transport (RFC 9000) and verifies
 // peer identity via the Noise protocol layer above TLS.
 type Server struct {
-	mu           sync.RWMutex
-	addr         string
-	tr           *quic.Transport
-	ln           *quic.Listener
-	conns        map[[32]byte]*Connection
-	handlers     map[ServiceID]StreamHandler
-	ctx          context.Context
-	cancel       context.CancelFunc
-	pubKey       [32]byte
-	privKey      [32]byte
-	flow         FlowControl
-	relay        *Relay
-	started      time.Time
-	stats        ServerStats
-	wg           sync.WaitGroup
-	enforceTLS   bool
-	allowedSvcs  map[ServiceID]bool
+	mu          sync.RWMutex
+	addr        string
+	tr          *quic.Transport
+	ln          *quic.Listener
+	conns       map[[32]byte]*Connection
+	handlers    map[ServiceID]StreamHandler
+	ctx         context.Context
+	cancel      context.CancelFunc
+	pubKey      [32]byte
+	privKey     [32]byte
+	flow        FlowControl
+	relay       *Relay
+	started     time.Time
+	stats       ServerStats
+	wg          sync.WaitGroup
+	enforceTLS  bool
+	allowedSvcs map[ServiceID]bool
 }
 
 // ServerStats tracks server-level statistics.
 type ServerStats struct {
-	TotalConns     uint64
-	ActiveConns    uint64
-	TotalStreams   uint64
-	TotalBytesIn   uint64
-	TotalBytesOut  uint64
-	TotalRelays    uint64
+	TotalConns    uint64
+	ActiveConns   uint64
+	TotalStreams  uint64
+	TotalBytesIn  uint64
+	TotalBytesOut uint64
+	TotalRelays   uint64
 }
 
 // ServerOption configures a Server.
@@ -181,13 +181,13 @@ func (s *Server) handleConn(qc *quic.Conn) {
 	}
 
 	conn := &Connection{
-		handle:   qc,
-		peerID:   peerID,
-		addr:     qc.RemoteAddr().String(),
-		state:    StateReady,
-		services: make(map[ServiceID]bool),
-		server:   s,
-		lastSeen: time.Now(),
+		handle:          qc,
+		peerID:          peerID,
+		addr:            qc.RemoteAddr().String(),
+		state:           StateReady,
+		services:        make(map[ServiceID]bool),
+		server:          s,
+		lastSeen:        time.Now(),
 		allowedServices: s.allowedSvcs,
 	}
 
@@ -254,7 +254,7 @@ func (s *Server) handleConn(qc *quic.Conn) {
 				}
 			}()
 			handler(ctx, stm)
-		}(s.ctx, newQuicStream(stream, svcID), svcID)
+		}(s.ctx, newQuicStream(stream, svcID, conn.peerID), svcID)
 	}
 
 	s.mu.Lock()
@@ -545,20 +545,20 @@ func (s *Server) Stop() {
 
 // Connection represents a QUIC connection to a peer.
 type Connection struct {
-	mu             sync.Mutex
-	handle         *quic.Conn
-	peerID         [32]byte
-	addr           string
-	state          ConnectionState
-	services       map[ServiceID]bool
-	server         *Server
-	lastSeen       time.Time
+	mu              sync.Mutex
+	handle          *quic.Conn
+	peerID          [32]byte
+	addr            string
+	state           ConnectionState
+	services        map[ServiceID]bool
+	server          *Server
+	lastSeen        time.Time
 	allowedServices map[ServiceID]bool
 }
 
-func (c *Connection) PeerID() [32]byte           { return c.peerID }
-func (c *Connection) Addr() string                { return c.addr }
-func (c *Connection) State() ConnectionState      { return c.state }
+func (c *Connection) PeerID() [32]byte       { return c.peerID }
+func (c *Connection) Addr() string           { return c.addr }
+func (c *Connection) State() ConnectionState { return c.state }
 
 // OpenStream opens a new stream for a service.
 func (c *Connection) OpenStream(ctx context.Context, svc ServiceID) (Stream, error) {
@@ -585,7 +585,7 @@ func (c *Connection) OpenStream(ctx context.Context, svc ServiceID) (Stream, err
 	c.server.stats.TotalStreams++
 	c.server.mu.Unlock()
 
-	return newQuicStream(qstream, svc), nil
+	return newQuicStream(qstream, svc, c.peerID), nil
 }
 
 // AcceptStream accepts an incoming stream.
@@ -594,7 +594,7 @@ func (c *Connection) AcceptStream(ctx context.Context) (Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newQuicStream(qstream, ServiceControl), nil
+	return newQuicStream(qstream, ServiceControl, c.peerID), nil
 }
 
 // RTT returns the round-trip time estimate.
@@ -614,19 +614,21 @@ func (c *Connection) Close() error {
 
 // quicStream adapts a quic-go *quic.Stream to the transport.Stream interface.
 type quicStream struct {
-	q     *quic.Stream
-	svcID ServiceID
+	q      *quic.Stream
+	svcID  ServiceID
+	peerID [32]byte
 }
 
-func newQuicStream(q *quic.Stream, svc ServiceID) *quicStream {
-	return &quicStream{q: q, svcID: svc}
+func newQuicStream(q *quic.Stream, svc ServiceID, peerID [32]byte) *quicStream {
+	return &quicStream{q: q, svcID: svc, peerID: peerID}
 }
 
-func (w *quicStream) Read(p []byte) (int, error)       { return w.q.Read(p) }
-func (w *quicStream) Write(p []byte) (int, error)      { return w.q.Write(p) }
-func (w *quicStream) Close() error                     { return w.q.Close() }
-func (w *quicStream) ServiceID() ServiceID             { return w.svcID }
-func (w *quicStream) ID() uint64                       { return uint64(w.q.StreamID()) }
+func (w *quicStream) Read(p []byte) (int, error)  { return w.q.Read(p) }
+func (w *quicStream) Write(p []byte) (int, error) { return w.q.Write(p) }
+func (w *quicStream) Close() error                { return w.q.Close() }
+func (w *quicStream) ServiceID() ServiceID        { return w.svcID }
+func (w *quicStream) ID() uint64                  { return uint64(w.q.StreamID()) }
+func (w *quicStream) PeerID() [32]byte            { return w.peerID }
 
 // MaxFrameSize is the maximum allowed payload size for a single frame (1 MiB).
 const MaxFrameSize = 1 << 20

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -12,10 +13,10 @@ import (
 )
 
 const (
-	TLD           = ".localweb"
-	DefaultPort   = 5353
-	CacheTTL      = 5 * time.Minute
-	MaxMsgSize    = 512
+	TLD         = ".localweb"
+	DefaultPort = 5353
+	CacheTTL    = 5 * time.Minute
+	MaxMsgSize  = 512
 )
 
 type RecordType uint16
@@ -105,10 +106,11 @@ type ResourceRecord struct {
 }
 
 type Server struct {
-	zone      *Zone
-	peers     *discovery.PeerDatabase
-	mu        sync.RWMutex
-	cache     map[string]cacheEntry
+	zone  *Zone
+	peers *discovery.PeerDatabase
+	mu    sync.RWMutex
+	cache map[string]cacheEntry
+	conn  *net.UDPConn
 }
 
 type cacheEntry struct {
@@ -125,12 +127,38 @@ func NewServer(zone *Zone, peers *discovery.PeerDatabase) *Server {
 }
 
 func (s *Server) Start(ctx context.Context, addr string) error {
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(addr), Port: DefaultPort})
+	host := addr
+	portStr := ""
+	if h, p, err := net.SplitHostPort(addr); err == nil {
+		host = h
+		portStr = p
+	}
+	if portStr == "" {
+		portStr = fmt.Sprintf("%d", DefaultPort)
+	}
+	udpPort, err := net.LookupPort("udp", portStr)
 	if err != nil {
 		return err
 	}
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(host), Port: udpPort})
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.conn = conn
+	s.mu.Unlock()
 	go s.readLoop(ctx, conn)
 	return nil
+}
+
+// Addr returns the actual address the DNS server is listening on.
+func (s *Server) Addr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.conn == nil {
+		return ""
+	}
+	return s.conn.LocalAddr().String()
 }
 
 func (s *Server) readLoop(ctx context.Context, conn *net.UDPConn) {
@@ -202,11 +230,15 @@ func (s *Server) resolve(q DNSQuestion) (DNSRecord, error) {
 	}
 	for _, rr := range records {
 		if rr.Record.Type == q.Type {
-			return rr.Record, nil
+			rec := rr.Record
+			rec.RData = rr.Data
+			return rec, nil
 		}
 	}
 	if len(records) > 0 {
-		return records[0].Record, nil
+		rec := records[0].Record
+		rec.RData = records[0].Data
+		return rec, nil
 	}
 	return DNSRecord{}, errors.New("not found")
 }
@@ -263,17 +295,69 @@ func ParseMessage(data []byte) (*DNSMessage, error) {
 		})
 		offset += 4
 	}
+	for i := 0; i < int(msg.Header.ANCOUNT); i++ {
+		rr, off, err := readRecord(data, offset)
+		if err != nil {
+			return nil, err
+		}
+		msg.Answers = append(msg.Answers, rr)
+		offset = off
+	}
+	for i := 0; i < int(msg.Header.NSCOUNT); i++ {
+		rr, off, err := readRecord(data, offset)
+		if err != nil {
+			return nil, err
+		}
+		msg.Authorities = append(msg.Authorities, rr)
+		offset = off
+	}
+	for i := 0; i < int(msg.Header.ARCOUNT); i++ {
+		rr, off, err := readRecord(data, offset)
+		if err != nil {
+			return nil, err
+		}
+		msg.Additionals = append(msg.Additionals, rr)
+		offset = off
+	}
 	return msg, nil
+}
+
+func readRecord(data []byte, offset int) (DNSRecord, int, error) {
+	name, off, err := readName(data, offset)
+	if err != nil {
+		return DNSRecord{}, offset, err
+	}
+	offset = off
+	if offset+10 > len(data) {
+		return DNSRecord{}, offset, errors.New("dns record truncated")
+	}
+	rr := DNSRecord{
+		Name:  name,
+		Type:  RecordType(binary.BigEndian.Uint16(data[offset : offset+2])),
+		Class: binary.BigEndian.Uint16(data[offset+2 : offset+4]),
+		TTL:   binary.BigEndian.Uint32(data[offset+4 : offset+8]),
+	}
+	offset += 8
+	rdlen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
+	offset += 2
+	if offset+rdlen > len(data) {
+		return DNSRecord{}, offset, errors.New("dns rdata truncated")
+	}
+	rr.RDLength = uint16(rdlen)
+	rr.RData = make([]byte, rdlen)
+	copy(rr.RData, data[offset:offset+rdlen])
+	offset += rdlen
+	return rr, offset, nil
 }
 
 func SerializeMessage(msg *DNSMessage) ([]byte, error) {
 	buf := make([]byte, 12)
 	binary.BigEndian.PutUint16(buf[0:2], msg.Header.ID)
 	binary.BigEndian.PutUint16(buf[2:4], msg.Header.Flags)
-	binary.BigEndian.PutUint16(buf[4:6], msg.Header.QDCOUNT)
-	binary.BigEndian.PutUint16(buf[6:8], msg.Header.ANCOUNT)
-	binary.BigEndian.PutUint16(buf[8:10], msg.Header.NSCOUNT)
-	binary.BigEndian.PutUint16(buf[10:12], msg.Header.ARCOUNT)
+	binary.BigEndian.PutUint16(buf[4:6], uint16(len(msg.Questions)))
+	binary.BigEndian.PutUint16(buf[6:8], uint16(len(msg.Answers)))
+	binary.BigEndian.PutUint16(buf[8:10], uint16(len(msg.Authorities)))
+	binary.BigEndian.PutUint16(buf[10:12], uint16(len(msg.Additionals)))
 	for _, q := range msg.Questions {
 		buf = append(buf, encodeName(q.Name)...)
 		buf = append(buf, byte(q.Type>>8), byte(q.Type), byte(q.Class>>8), byte(q.Class))

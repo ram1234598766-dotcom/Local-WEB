@@ -336,19 +336,19 @@ make test      # full test suite with race detection
 
 ## Status
 
-All 9 architecture layers and 9 services are **production-ready**, tested with integration tests in `test/integration/`, and committed to the repository.
-
 | Layer | Component | Status | Tests |
 |---|---|---|---|
-| L1 | Transport (QUIC) | Production-ready | `quic_test.go` |
-| L2 | Link (6 link types) | Production-ready | — |
-| L3 | Discovery (mDNS/BLE/WiFi) | Production-ready | `discovery_test.go` |
-| L4 | DHT (Kademlia) | Production-ready | `dht_test.go` |
-| L5 | Security (Noise XX, PoW, Audit) | Production-ready | `audit_test.go`, `capability_test.go`, `pow_test.go` |
-| L6 | Store (BadgerDB + AES-GCM) | Production-ready | `store_test.go`, `block_store_test.go`, `peer_store_test.go` |
-| L7 | CRDT (OR-Set, RGA) | Production-ready | `crdt_test.go` |
-| L8 | Services (9 services) | Production-ready | `dns_test.go`, `messaging_test.go`, `full_stack_test.go` + per-service tests |
-| L9 | App (node + CLI) | Production-ready | — |
+| L1 | Transport (QUIC) | Verified | `quic_test.go`, `TestTCPServerAcceptAndRespond`, `TestTCPConcurrentRPCCalls` |
+| L2 | Link (6 link types) | Verified (runtime detection) | `TestTwoNodeDiscoveryAllLinkTypes` |
+| L3 | Discovery (mDNS/BLE/WiFi) | Verified | `discovery_test.go`, `TestTwoNodeDiscoveryAllLinkTypes` |
+| L4 | DHT (Kademlia) | Verified | `dht_test.go`, `TestRPCRoundTrip`, `TestTCPMultipleSequentialRPCCalls` |
+| L5 | Security (Noise XX, PoW, Audit) | Verified | `audit_test.go`, `capability_test.go`, `pow_test.go` |
+| L6 | Store (BadgerDB + AES-GCM) | Verified | `store_test.go`, `block_store_test.go`, `peer_store_test.go` |
+| L7 | Sync (CRDT + Merkle) | Verified | `crdt_test.go`, `TestComputeMerkleRoot` |
+| L8 | Services (DNS, HTTP, Email, Messaging, Files, Docs, Registry, Voice, VPN) | Verified | Integration tests for DNS, Messaging, Full-Stack |
+| L9 | App (node + CLI) | Verified (identity persistence, BadgerDB encryption) | — |
+
+Phase 1 (security, crypto, critical transport, DNS, identity persistence) is complete and all Phase 1 integration tests pass. See `PHASE2_PLAN.md` for remaining Phase 2 work.
 
 ## Security
 
@@ -361,19 +361,7 @@ All 9 architecture layers and 9 services are **production-ready**, tested with i
 
 ## License
 
-MIT
-
-## Contributing
-
-PRs welcome. Please follow the workflow:
-1. Plan the change before implementing
-2. Write tests first (TDD)
-3. Review for correctness, performance, and security
-4. Commit with conventional commits (`feat:`, `fix:`, `refactor:`, etc.)
-
-## License
-
-MIT
+MIT. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Links
 

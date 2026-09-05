@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"sort"
@@ -286,25 +287,37 @@ func (c *rpcClient) Call(ctx context.Context, addr string, msg Message) (Message
 		return Message{}, err
 	}
 
+	// Write payload length prefix and payload
+	var payloadLenBuf [4]byte
+	binary.BigEndian.PutUint32(payloadLenBuf[:], uint32(len(msg.Payload)))
+	if _, err := conn.Write(payloadLenBuf[:]); err != nil {
+		return Message{}, err
+	}
+	if len(msg.Payload) > 0 {
+		if _, err := conn.Write(msg.Payload); err != nil {
+			return Message{}, err
+		}
+	}
+
 	var typeBuf [1]byte
-	if _, err := conn.Read(typeBuf[:]); err != nil {
+	if _, err := io.ReadFull(conn, typeBuf[:]); err != nil {
 		return Message{}, err
 	}
 	respType := MessageType(typeBuf[0])
 	var src, dst NodeID
-	if _, err := conn.Read(src[:]); err != nil {
+	if _, err := io.ReadFull(conn, src[:]); err != nil {
 		return Message{}, err
 	}
-	if _, err := conn.Read(dst[:]); err != nil {
+	if _, err := io.ReadFull(conn, dst[:]); err != nil {
 		return Message{}, err
 	}
 	var lenBuf [4]byte
-	if _, err := conn.Read(lenBuf[:]); err != nil {
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
 		return Message{}, err
 	}
 	plLen := binary.BigEndian.Uint32(lenBuf[:])
 	pl := make([]byte, plLen)
-	if _, err := conn.Read(pl); err != nil {
+	if _, err := io.ReadFull(conn, pl); err != nil {
 		return Message{}, err
 	}
 
@@ -329,13 +342,13 @@ type DHT struct {
 func NewDHT(localID NodeID, pubKey [32]byte, name string, transport QUICTransport) *DHT {
 	table := NewRoutingTable(localID)
 	node := &Node{
-		id:         localID,
-		pubKey:     pubKey,
-		name:       name,
-		table:      table,
-		peers:      make(map[NodeID]*Peer),
-		store:      make(map[string][]byte),
-		transport:  transport,
+		id:        localID,
+		pubKey:    pubKey,
+		name:      name,
+		table:     table,
+		peers:     make(map[NodeID]*Peer),
+		store:     make(map[string][]byte),
+		transport: transport,
 	}
 	return &DHT{
 		localID: localID,

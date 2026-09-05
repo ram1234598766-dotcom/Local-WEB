@@ -11,24 +11,24 @@ import (
 )
 
 const (
-	relayMaxStreams = 100       // Max concurrent streams per relay
-	relayIdleTO     = 60 * time.Second
+	relayMaxStreams  = 100 // Max concurrent streams per relay
+	relayIdleTO      = 60 * time.Second
 	relayHandshakeTO = 10 * time.Second
 )
 
 // Relay provides circuit relay functionality (relay data between peers).
 type Relay struct {
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	circuits map[string]*Circuit // circuitID → circuit
-	load    float64              // Current load 0.0 → 1.0
+	load     float64             // Current load 0.0 → 1.0
 	capacity int                 // Max circuits
-	ctx     context.Context
-	cancel  context.CancelFunc
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // Circuit represents an active relayed connection.
 type Circuit struct {
-	ID       string // Circuit identifier
+	ID        string // Circuit identifier
 	Initiator [32]byte
 	Target    [32]byte
 	CreatedAt time.Time
@@ -187,16 +187,20 @@ func EncodeRelayExtend(circuitID string, target [32]byte) []byte {
 }
 
 // DecodeRelayExtend parses a RELAY_EXTEND message.
+// Wire format: [MsgRelay(1)] [circuitID_len(4)] [circuitID(N)] [target(32)]
 func DecodeRelayExtend(data []byte) (string, [32]byte, error) {
 	if len(data) < 5 {
 		return "", [32]byte{}, fmt.Errorf("relay extend too short")
 	}
-	idLen := int(binary.BigEndian.Uint32(data[0:4]))
-	if len(data) < 4+idLen+32 {
+	if MessageType(data[0]) != MsgRelay {
 		return "", [32]byte{}, fmt.Errorf("relay extend invalid")
 	}
-	circuitID := string(data[4 : 4+idLen])
+	idLen := int(binary.BigEndian.Uint32(data[1:5]))
+	if len(data) < 5+idLen+32 {
+		return "", [32]byte{}, fmt.Errorf("relay extend invalid")
+	}
+	circuitID := string(data[5 : 5+idLen])
 	var target [32]byte
-	copy(target[:], data[4+idLen:])
+	copy(target[:], data[5+idLen:])
 	return circuitID, target, nil
 }

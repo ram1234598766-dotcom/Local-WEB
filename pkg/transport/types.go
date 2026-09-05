@@ -52,14 +52,14 @@ const (
 
 // PeerInfo holds transport-level peer information.
 type PeerInfo struct {
-	ID        [32]byte
-	Addr      string
-	PubKey    [32]byte
-	Latency   time.Duration
-	State     ConnectionState
-	Streams   int
-	LastPong  time.Time
-	Score     float64
+	ID       [32]byte
+	Addr     string
+	PubKey   [32]byte
+	Latency  time.Duration
+	State    ConnectionState
+	Streams  int
+	LastPong time.Time
+	Score    float64
 }
 
 // StreamHandler is a function that handles a multiplexed stream.
@@ -72,6 +72,7 @@ type Stream interface {
 	Close() error
 	ServiceID() ServiceID
 	ID() uint64
+	PeerID() [32]byte
 }
 
 // RelayInfo holds information about a circuit relay.
@@ -107,7 +108,7 @@ func DefaultFlowControl() FlowControl {
 		connWindow:      16 << 20, // 16MB
 		streamRecvWin:   1 << 20,
 		connRecvWin:     16 << 20,
-		maxStreamWindow: 16 << 20, // 16MB max
+		maxStreamWindow: 16 << 20,  // 16MB max
 		maxConnWindow:   256 << 20, // 256MB max
 	}
 }
