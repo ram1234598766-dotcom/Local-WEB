@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crdt"
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
-	"github.com/mrityunjay/LocalWEB/pkg/dht"
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
-	"github.com/mrityunjay/LocalWEB/pkg/services/files"
-	"github.com/mrityunjay/LocalWEB/pkg/services/messaging"
-	"github.com/mrityunjay/LocalWEB/pkg/services/voice"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crdt"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/dht"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/messaging"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/voice"
 	"github.com/stretchr/testify/require"
 )
 

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
-	"github.com/mrityunjay/LocalWEB/pkg/services/dns"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/dns"
 	"github.com/stretchr/testify/require"
 )
 

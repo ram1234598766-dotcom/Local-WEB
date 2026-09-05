@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 )
 
 // EntryTTL is the default TTL for a registered peer.

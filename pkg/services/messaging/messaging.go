@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 )
 
 type ChannelID [32]byte
@@ -141,7 +141,11 @@ func (s *Service) Publish(ctx context.Context, channelID ChannelID, sender [32]b
 		return Message{}, err
 	}
 	msg.Signature = sig
+
+	s.mu.Lock()
 	ch.LastSeen = time.Now()
+	s.mu.Unlock()
+
 	if err := s.store.Append(channelID, msg); err != nil {
 		return Message{}, err
 	}

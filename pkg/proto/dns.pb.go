@@ -205,7 +205,7 @@ const file_dns_proto_rawDesc = "" +
 	"\bTYPE_SRV\x10!\x12\x0e\n" +
 	"\n" +
 	"TYPE_HTTPS\x10A\x12\r\n" +
-	"\tTYPE_SVCB\x10@B*Z(github.com/mrityunjay/LocalWEB/pkg/protob\x06proto3"
+	"\tTYPE_SVCB\x10@B5Z3github.com/ram1234598766-dotcom/Local-WEB/pkg/protob\x06proto3"
 
 var (
 	file_dns_proto_rawDescOnce sync.Once

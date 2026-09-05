@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 )
 
 func TestPeerStorePutGet(t *testing.T) {

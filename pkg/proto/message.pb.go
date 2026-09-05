@@ -188,7 +188,7 @@ const file_message_proto_rawDesc = "" +
 	"\rMSG_HEARTBEAT\x10\t\x12\r\n" +
 	"\tMSG_RELAY\x10\n" +
 	"\x12\x11\n" +
-	"\rMSG_RELAY_ACK\x10\vB*Z(github.com/mrityunjay/LocalWEB/pkg/protob\x06proto3"
+	"\rMSG_RELAY_ACK\x10\vB5Z3github.com/ram1234598766-dotcom/Local-WEB/pkg/protob\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once

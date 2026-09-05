@@ -280,7 +280,7 @@ dig peer1.localweb @127.0.0.1 -p 5353
 
 ```go
 // From Go code
-import "github.com/mrityunjay/LocalWEB/pkg/services/messaging"
+import "github.com/ram1234598766-dotcom/Local-WEB/pkg/services/messaging"
 
 svc := messaging.NewService(store, privateKey)
 chID := svc.CreateChannel([]*[32]byte{pubKey1, pubKey2})

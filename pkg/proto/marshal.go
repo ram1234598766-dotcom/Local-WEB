@@ -4,9 +4,9 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
-	"github.com/mrityunjay/LocalWEB/pkg/dht"
-	"github.com/mrityunjay/LocalWEB/pkg/services/dns"
-	"github.com/mrityunjay/LocalWEB/pkg/services/files"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/dht"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/dns"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )

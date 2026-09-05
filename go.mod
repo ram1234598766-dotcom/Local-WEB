@@ -1,4 +1,4 @@
-module github.com/mrityunjay/LocalWEB
+module github.com/ram1234598766-dotcom/Local-WEB
 
 go 1.26.0
 

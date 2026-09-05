@@ -358,7 +358,7 @@ const file_file_proto_rawDesc = "" +
 	"\apub_key\x18\x01 \x01(\fR\x06pubKey\x12\x12\n" +
 	"\x04read\x18\x02 \x01(\bR\x04read\x12\x14\n" +
 	"\x05write\x18\x03 \x01(\bR\x05write\x12\x14\n" +
-	"\x05admin\x18\x04 \x01(\bR\x05adminB*Z(github.com/mrityunjay/LocalWEB/pkg/protob\x06proto3"
+	"\x05admin\x18\x04 \x01(\bR\x05adminB5Z3github.com/ram1234598766-dotcom/Local-WEB/pkg/protob\x06proto3"
 
 var (
 	file_file_proto_rawDescOnce sync.Once

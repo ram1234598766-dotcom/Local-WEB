@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 )
 
 func TestRendezvousRegisterAndLookup(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 )
 
 // Cursor represents a user's cursor position in a document.

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
-	"github.com/mrityunjay/LocalWEB/pkg/transport"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
 
 // Service manages collaborative documents over QUIC.

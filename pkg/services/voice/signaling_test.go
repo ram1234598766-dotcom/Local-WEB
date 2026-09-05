@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/stretchr/testify/require"
 )
 

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package peer;
 
-option go_package = "github.com/mrityunjay/LocalWEB/pkg/proto";
+option go_package = "github.com/ram1234598766-dotcom/Local-WEB/pkg/proto";
 
 message PeerInfo {
   bytes id = 1;

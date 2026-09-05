@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 )
 
 // PeerStore persists discovered peers to the underlying BadgerDB store.

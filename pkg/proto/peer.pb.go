@@ -146,7 +146,7 @@ const file_peer_proto_rawDesc = "" +
 	"\tlast_seen\x18\a \x01(\x03R\blastSeen\x12\x1d\n" +
 	"\n" +
 	"first_seen\x18\b \x01(\x03R\tfirstSeen\x12\x18\n" +
-	"\aversion\x18\t \x01(\tR\aversionB*Z(github.com/mrityunjay/LocalWEB/pkg/protob\x06proto3"
+	"\aversion\x18\t \x01(\tR\aversionB5Z3github.com/ram1234598766-dotcom/Local-WEB/pkg/protob\x06proto3"
 
 var (
 	file_peer_proto_rawDescOnce sync.Once

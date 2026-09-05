@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
-	"github.com/mrityunjay/LocalWEB/pkg/transport"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
 
 // BlockType identifies a rich-text block in a document.

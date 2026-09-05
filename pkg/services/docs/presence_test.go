@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
-	"github.com/mrityunjay/LocalWEB/pkg/transport"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
 
 func TestPresenceCreate(t *testing.T) {

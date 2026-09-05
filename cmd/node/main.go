@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/mrityunjay/LocalWEB/pkg/crypto"
-	"github.com/mrityunjay/LocalWEB/pkg/discovery"
-	"github.com/mrityunjay/LocalWEB/pkg/link"
-	"github.com/mrityunjay/LocalWEB/pkg/store"
-	"github.com/mrityunjay/LocalWEB/pkg/transport"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/link"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
 
 func main() {
