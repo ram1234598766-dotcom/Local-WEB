@@ -52,6 +52,7 @@ class LocalWEBApp {
   setupRoutes() {
     this.routes = {
       dashboard: () => this.renderDashboard(),
+      onboarding: () => this.renderOnboarding(),
       peers: () => this.renderPeers(),
       files: () => this.renderFiles(),
       dns: () => this.renderDNS(),
@@ -69,8 +70,10 @@ class LocalWEBApp {
 
   setupNav() {
     const items = [
+      { id: 'onboarding', label: 'Onboarding', icon: '🚀' },
       { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
       { id: 'peers', label: 'Network', icon: '🌐' },
+      { type: 'separator' },
       { id: 'files', label: 'Files', icon: '📁' },
       { id: 'dns', label: 'DNS', icon: '🔍' },
       { id: 'http', label: 'HTTP', icon: '🌍' },
@@ -80,15 +83,18 @@ class LocalWEBApp {
       { id: 'registry', label: 'Registry', icon: '📦' },
       { id: 'voice', label: 'Voice', icon: '🎙️' },
       { id: 'vpn', label: 'VPN', icon: '🔒' },
+      { type: 'separator' },
       { id: 'security', label: 'Security', icon: '🛡️' },
       { id: 'settings', label: 'Settings', icon: '⚙' },
     ];
 
     const nav = document.getElementById('nav');
     nav.innerHTML = items.map(item =>
-      `<div class="nav-item" data-route="${item.id}" tabindex="0">
-        <span class="nav-icon">${item.icon}</span>${item.label}
-      </div>`
+      item.type === 'separator'
+        ? '<div style="border-top: 1px solid var(--color-border); margin: 0.5rem 0;"></div>'
+        : `<div class="nav-item" data-route="${item.id}" tabindex="0">
+             <span class="nav-icon">${item.icon}</span>${item.label}
+           </div>`
     ).join('');
 
     document.querySelectorAll('.nav-item').forEach(el => {
@@ -185,6 +191,42 @@ class LocalWEBApp {
     toast.setAttribute('role', 'alert');
     container.appendChild(toast);
     setTimeout(() => container.removeChild(toast), 5000);
+  }
+
+  renderOnboarding() {
+    document.getElementById('content').innerHTML = `
+      <div style="max-width: 640px; margin: 0 auto;">
+        <h1 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 1rem; color: var(--color-primary);">
+          Welcome to LocalWEB
+        </h1>
+        <p style="color: var(--color-text-muted); margin-bottom: 1.5rem; line-height: 1.6;">
+          LocalWEB is a local-first, encrypted mesh network. Connect nodes
+          on the same network without any central server or internet.
+        </p>
+        <div class="grid" style="grid-template-columns: 1fr; gap: 1rem;">
+          <div class="stat-card">
+            <div class="stat-label">Your Node ID</div>
+            <div class="stat-value" style="font-size: 1rem; font-family: monospace; word-break: break-all;">
+              ${this.state.nodeID || 'loading…'}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Next Steps</div>
+            <div class="card-body">
+              <ol style="color: var(--color-text-muted); line-height: 1.8;">
+                <li>Run this node on another machine on the same network.</li>
+                <li>Navigate to <strong>Network</strong> to see connected peers.</li>
+                <li>Browse <strong>Files</strong>, <strong>Messaging</strong>, or <strong>Docs</strong> to start collaborating.</li>
+              </ol>
+            </div>
+          </div>
+          <p style="color: var(--color-text-muted); font-size: 0.8125rem; text-align: center;">
+            GUI served on localhost:8080 — read-only dashboard.
+            Full node runs on port 4443 with Noise-encrypted QUIC.
+          </p>
+        </div>
+      </div>
+    `;
   }
 
   renderDashboard() {
