@@ -90,7 +90,7 @@ func main() {
 	}
 
 	linkMgr := link.NewManager(link.ManagerConfig{
-		Links:      links,
+		Links: links,
 		Preferences: []link.LinkMode{
 			link.ModeWiFiDirect,
 			link.ModeWiFiStation,
@@ -149,7 +149,7 @@ func main() {
 
 	guiHandler := gui.NewHandler(api)
 	go func() {
-		if err := guiHandler.ListenAndServe("localhost:8080"); err != nil {
+		if err := guiHandler.ListenAndServe("0.0.0.0:8080"); err != nil {
 			log.Printf("gui server: %v", err)
 		}
 	}()

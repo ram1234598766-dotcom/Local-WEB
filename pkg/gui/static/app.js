@@ -530,12 +530,12 @@ class LocalWEBApp {
             <table class="table">
               <thead><tr><th>Name</th><th>Version</th><th>Author</th><th>Status</th></tr></thead>
               <tbody>
-                ${pkgs.map(p => `<tr>
+                  ${pkgs.map(p => `<tr>
                   <td>${p.name}</td>
                   <td>${p.version}</td>
                   <td>${p.author}</td>
-                  <td>${p.installed ? 'installed' : '<button class="btn btn-sm btn-secondary" onclick="app.installPkg('${p.name}')">Install</button>'}</td>
-                </tr>`).join('')}
+                  <td>${p.installed ? 'installed' : '<button class="btn btn-sm btn-secondary" onclick="app.installPkg(\'' + p.name + '\')">Install</button>'}
+                  </tr>`).join('')}
               </tbody>
             </table>
           </div>
@@ -747,7 +747,7 @@ class LocalWEBApp {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  new LocalWEBApp();
+  window.app = new LocalWEBApp();
 });
 
 window.addEventListener('hashchange', () => {

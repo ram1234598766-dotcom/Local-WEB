@@ -1,0 +1,7 @@
+{
+  "created_at": "now",
+  "data_dir": "n",
+  "listen": "0.0.0.0:4443",
+  "name": "laptop",
+  "node_id": "9e2053cf72f56479"
+}
