@@ -1,96 +1,151 @@
-# ROADMAP
+# LocalWEB — Master Roadmap
 
-This is the consolidated roadmap reflecting the **actual implemented state** of the Local-WEB Go P2P networking stack. It merges the previously separate ROADMAP_V2.md and ROADMAP_V3.md into a single v4 document aligned with the 9-layer architecture defined in `ARCHITECTURE_V3.md`.
+**Status: Phase 6 Complete (Production Hardening) | Next: Phase 7 Advanced UX**
 
-## Status Legend
+---
 
-- **COMPLETE** — Fully implemented, tested with `-race`, lint clean, no known vulnerabilities
-- **STUB** — Interface/skeleton exists, not yet wired to real functionality
+## 🎯 Current State: Phase 6 Complete ✅
 
-## Layer Map
+**What's Shipped (Phase 1-6):**
+- **Phase 1-2**: Core P2P stack — 9 layers, 9 services, Noise XX + AES-GCM security
+- **Phase 3**: Beginner experience — `make quickstart`, `cli init`, plain-language README
+- **Phase 4**: Advanced capabilities — Federation, PQ hybrid, multi-path links, plugins, chaos, QoS
+- **Phase 5**: Web GUI — 13-screen SPA with real-time SSE, topology, live audit verification
+- **Phase 6**: Production hardening — Federation, PQ handshake, multi-path, plugins, chaos CI, QoS, module publishing
 
-| Layer | Component | Package | Status | Notes |
-|---|---|---|---|---|
-| L1 | Transport | `pkg/transport/` | COMPLETE | QUIC via quic-go v0.62.0; stream multiplexing with 1-byte ServiceID; circuit relay; UDP hole-punch NAT. **Note: Noise XX layer does not verify peer certificates (intentional, Noise provides auth)** |
-| L2 | Link | `pkg/link/` | COMPLETE | 6 link types: WiFi Station, WiFi Direct, Ad-hoc, USB Tether, BLE, Acoustic. Auto-escalation (BLE→WiFi Direct) |
-| L3 | Discovery | `pkg/discovery/` | COMPLETE | Orchestrator merging WiFi/BLE/mDNS modes; PeerDatabase with scoring/dedup |
-| L3 | Federation | `pkg/federation/` | COMPLETE | **New**: rendezvous server for cross-internet discovery (opt-in, `--rendezvous <url>`) |
-| L4 | Routing | `pkg/dht/` | COMPLETE | Kademlia DHT: KBucket=20, α=3, XOR routing. **Fixed: RegisterNode was discarding PoW message; now sends to closest peers; server uses `io.ReadFull` to prevent partial-read DoS** |
-| L5 | Security | `pkg/security/` | COMPLETE | Noise XX handshake, Ed25519 identity, AES-GCM at rest, capability tokens, PoW with constant-time comparison, append-only audit log |
-| L6 | Store | `pkg/store/` | COMPLETE | BadgerDB-backed store with AES-GCM encryption; encryption key derived from node identity; added `Flush()` for graceful shutdown |
-| L7 | CRDT | `pkg/crdt/` | COMPLETE | ORSet (add-wins) + RGA (collaborative text). **Fixed: encodeEntries count truncated to `byte`; DiffMerkle uses set-difference** |
-| L8 | Services | `pkg/services/` | COMPLETE | All 9 services implemented (see Service Breakdown below) |
-| L9 | App | `cmd/node/main.go` | COMPLETE | Full component wiring: link → discovery → transport → control handler. **Fixed: SIGTERM now flushes store via `dbStore.Sync()`** |
-| L9 | App | `cmd/cli/main.go` | COMPLETE | Cobra CLI with `node`, `id`, `peers` subcommands |
+**Verified on:** Go 1.27 (local) + Go 1.26 (WSL CI) | `make lint` + `make test -race` all green
 
-## Service Breakdown
+---
 
-| Service | Package | Status | Key Implementation Details |
-|---|---|---|---|
-| DNS | `pkg/services/dns/` | COMPLETE | `.localweb` TLD, UDP 5353. **Fixed: reverseName now returns correct in-addr.arpa PTR; SerializeMessage now includes Authorities/Additionals; zone signature validation added for signed zones** |
-| HTTP Gateway | `pkg/services/http/` | COMPLETE | Per-site mux, `/health`, logging middleware, graceful shutdown |
-| Email | `pkg/services/email/` | COMPLETE | SMTP server, IMAP server, Maildir storage, PoW antispam challenge. **Fixed: SMTP PLAIN/LOGIN/CRAM-MD5 now verify credentials; STARTTLS wraps connection with `tls.Server`; IMAP login calls `Credentials.Verify()`** |
-| Messaging | `pkg/services/messaging/` | COMPLETE | Pub/sub channels, Ed25519-signed messages, offline queue. **Fixed: Publish race on `ch.LastSeen` (was writing under RLock, now uses Lock)** |
-| Files | `pkg/services/files/` | COMPLETE | BlockStore + FileStore (zstd), syncEngine with Merkle DAG diff, Bitswap-like exchange protocol, FUSE mount stub |
-| Docs | `pkg/services/docs/` | COMPLETE | RGA-backed collaborative text editor, presence/cursors/selections, broadcast + pending-op queue for offline |
-| Registry | `pkg/services/registry/` | COMPLETE | LWPKG package format (tar.gz + sig), YAML manifest validation, HTTP API, DHT distribution |
-| Voice | `pkg/services/voice/` | COMPLETE | Call state machine, ICE candidate exchange, Opus/VP9 codec profiles. **Fixed: ValidateSignal now verifies Ed25519 signature; NewVoiceServer takes privKey and signs call signals** |
-| VPN | `pkg/services/vpn/` | COMPLETE | Tunnel creation via SHA3-256, route distribution, TUN interface (Linux/macOS real, graceful fallback on unsupported platforms). **Fixed: TUN Linux now uses `unix.Ifreq`; Darwin rewritten with correct `sockaddrIn` struct** |
+## 🔄 Development Protocol (Mandatory)
 
-## Proto Layer
+**After EVERY phase:**
+1. Complete phase work (code, tests, docs)
+2. Run `make lint && make test -race`
+3. Fix ALL errors (lint, tests, build)
+4. Commit to GitHub with descriptive message
+5. Update ROADMAP.md with phase status
+6. **Only then proceed** to next phase
 
-| Package | Status | Notes |
-|---|---|---|
-| `pkg/proto/` | COMPLETE | Protobuf definitions + `marshal.go` converting between Go structs and protobuf messages for DHT types. **Regenerated after module path fix** |
+---
 
-## Build & Tooling
+## 📅 Phase History
 
-All build/test/lint tooling is in place via `Makefile`:
+| Phase | Theme | Status | Commit |
+|-------|-------|--------|--------|
+| 1-2 | Core P2P Stack | ✅ | `9918745` |
+| 3 | Beginner UX | ✅ | `44aea3f` |
+| 4 | Advanced Capabilities | ✅ | `0ea7376` |
+| 5 | Web GUI | ✅ | `bfe5804` |
+| 6.1 | Federation (Rendezvous) | ✅ | `e98e233` |
+| 6.2 | PQ Hybrid Handshake | ✅ | `7259890` |
+| 6.3 | Multi-Path Aggregation | ✅ | `5066d66` |
+| 6.4 | Plugin Interface | ✅ | `fef2cee` |
+| 6.5 | Chaos CI | ✅ | `1c5c7fe` |
+| 6.6 | QoS/Bandwidth Shaping | ✅ | `254c579` |
+| 6.7 | Module Publishing | ✅ | `375c935` |
 
-- `make build` — compile all binaries
-- `make test` — run tests with race detector + coverage
-- `make bench` — benchmark suite
-- `make lint` — golangci-lint + go vet + gofmt check
-- `make cross-compile` — builds for 5 target platforms
-- `make generate` — runs `protoc` for proto generation
-- `make run-node` / `make run-cli` — run entry points
+---
 
-## Hygiene
+## 🚀 Phase 7: Advanced UX & Power Features (Next)
 
-- **LICENSE**: MIT file present (was missing — README claimed MIT but no file existed)
-- **Module path**: Fixed mismatch — go.mod now declares `github.com/ram1234598766-dotcom/Local-WEB` matching the repo URL; all 62 Go files + 4 .proto files updated
-- **CI**: `.github/workflows/ci.yml` runs build + vet + lint + test(-race) + govulncheck on push/PR
-- **SECURITY.md**: Present, documents vulnerability reporting
-- **CONTRIBUTING.md**: Present, covers build/test/lint workflow
-- **govulncheck**: 0 vulnerabilities (glog upgraded from v0.0.0-20160126 to v1.2.4)
+| Sub-phase | Goal | Priority |
+|-----------|------|----------|
+| 7.1 | Onboarding Wizard (QR pairing, passphrase backup) | High |
+| 7.2 | File Transfer UX (drag-drop, progress, resume) | High |
+| 7.3 | Collaborative Docs (RGA editor + presence) | High |
+| 7.4 | Voice/Video Call UI (WebRTC, screenshare) | High |
+| 7.5 | VPN Dashboard (routes, split tunnel, ACLs) | High |
+| 7.6 | Registry Search/Install (DHT-backed) | Medium |
+| 7.7 | Native Desktop (Wails v3 + system tray) | Medium |
+| 7.8 | Mobile Apps (iOS/Android) | Medium |
 
-## Testing
+---
 
-| Test Area | Package | Status |
-|---|---|---|
-| Transport | `test/integration/transport_test.go` | COMPLETE |
-| Discovery | `test/integration/discovery_test.go` | COMPLETE |
-| DHT | `test/integration/dht_test.go` | COMPLETE |
-| DNS | `test/integration/dns_test.go` | COMPLETE |
-| Messaging | `test/integration/messaging_test.go` | COMPLETE |
-| Full-stack | `test/integration/full_stack_test.go` | COMPLETE |
-| Federation | `pkg/federation/federation_test.go` | COMPLETE — 9 tests covering register/lookup/GC/timeout/concurrency |
+## 🏗️ Phase 8: Native Desktop & Mobile (Future)
 
-## Summary
+| Sub-phase | Goal |
+|-----------|------|
+| 8.1 | Wails v3 Desktop (native window, tray, notifications) |
+| 8.2 | System Tray + Autostart (LaunchAgent/plist, systemd, Task Scheduler) |
+| 8.3 | Native Notifications (peer connect, file received, call) |
+| 8.4 | iOS App (NetworkExtension + SwiftUI) |
+| 8.5 | Android App (VpnService + Jetpack Compose) |
+| 8.6 | QR Pairing (mobile ↔ desktop) |
 
-**All 9 architecture layers are COMPLETE and verified with `go build`, `go vet`, `golangci-lint` (0 issues), `gofmt`, `go test -race ./...`, and `govulncheck` (0 vulnerabilities).**
+---
 
-Key bugs fixed during the security audit:
-- SMTP/IMAP auth bypass (credentials now verified via `ConstantTimeCompare`)
-- Voice signal signature not validated (now verifies Ed25519)
-- DNS reverseName broken (correct in-addr.arpa format)
-- DHT RegisterNode discarded PoW message (now sends to peers)
-- DHT server partial-read DoS (now uses `io.ReadFull` with 1MB limit)
-- CRDT encodeEntries count truncation (`byte` → `uint32`)
-- Messaging Publish race condition (`ch.LastSeen` written under write lock)
-- BadgerDB glog vulnerability (upgraded)
-- Module path mismatch (go.mod and all imports fixed)
-- Missing LICENSE file (added)
+## 🏢 Phase 9: Enterprise & Scale (Future)
 
-New capability added:
-- **Federation** (`pkg/federation/`) — rendezvous server for cross-internet node discovery, opt-in via `--rendezvous <url>`, 8 tests covering register/lookup/GC/timeout/concurrency.
+| Sub-phase | Goal |
+|-----------|------|
+| 9.1 | Multi-Node Cluster (100+ nodes, gossip discovery) |
+| 9.2 | Policy Engine (OPA/Rego, capability tokens) |
+| 9.3 | Observability (Prometheus, Grafana, OpenTelemetry) |
+| 9.4 | Backup/DR (Age encryption, Shamir social recovery) |
+
+---
+
+## 🔬 Phase 10: Research & Innovation (Future)
+
+| Sub-phase | Goal |
+|-----------|------|
+| 10.1 | Anonymous Routing (Mixnet, cover traffic) |
+| 10.2 | Delay-Tolerant Networking (Bundle protocol, DTN) |
+| 10.3 | ML Link Selection (TinyML, federated learning) |
+
+---
+
+## 📋 Definition of Done (All Phases)
+
+- [ ] All tests pass with `-race` on Go 1.26 + 1.27
+- [ ] `make lint` = 0 issues
+- [ ] E2E tests in `test/integration/` pass
+- [ ] Documentation updated (README, godoc, ROADMAP, ARCHITECTURE, TECH_STACK)
+- [ ] CHANGELOG entry for each release
+- [ ] Signed releases with cosign/sigstore
+- [ ] SBOM generated (Syft)
+- [ ] Vulnerability scan (govulncheck, Trivy)
+
+---
+
+## 📂 Documentation Structure
+
+```
+docs/
+├── README.md                 # Quick links
+├── architecture/
+│   ├── ARCHITECTURE.md      # System architecture (this file)
+│   ├── TECH_STACK.md        # Technology stack details
+│   └── ROADMAP.md           # This roadmap
+├── guides/
+│   ├── QUICKSTART.md        # 2-command setup
+│   ├── ONBOARDING.md        # First-time user guide
+│   ├── CLI_REFERENCE.md     # CLI command reference
+│   ├── GUI_GUIDE.md         # Web GUI walkthrough
+│   └── SERVICES.md          # All 9 services deep-dive
+├── api/
+│   ├── REST_API.md          # HTTP API reference
+│   ├── WS_API.md            # WebSocket/SSE events
+│   └── PLUGIN_API.md        # Plugin development
+└── operations/
+    ├── DEPLOYMENT.md        # Production deployment
+    ├── MONITORING.md        # Observability setup
+    └── TROUBLESHOOTING.md   # Common issues
+```
+
+---
+
+## 🔗 Quick Links
+
+- **Quickstart**: `make quickstart` (2 commands)
+- **CLI Help**: `bin/localweb-cli --help`
+- **Web GUI**: `http://localhost:8080` (after node start)
+- **API Docs**: `docs/api/REST_API.md`
+- **Architecture**: `docs/architecture/ARCHITECTURE.md`
+- **Tech Stack**: `docs/architecture/TECH_STACK.md`
+- **Roadmap**: `docs/architecture/ROADMAP.md` (this file)
+
+---
+
+*Last updated: 2025-09-05 | Commit: `beff4fd`*

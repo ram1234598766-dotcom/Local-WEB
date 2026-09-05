@@ -1,8 +1,8 @@
-# Local-WEB
+# LocalWEB
 
 **Real working P2P internet stack. Zero infrastructure required. Better than centralized.**
 
-Local-WEB lets two laptops (or phones, or servers) talk directly to each other
+LocalWEB lets two laptops (or phones, or servers) talk directly to each other
 without a VPN, a server, or any account. It figures out the best path between
 you — WiFi, Bluetooth, USB, or audio — and encrypts every byte end-to-end.
 No cloud. No sign-up. Just two devices on the same network, connecting.
@@ -18,443 +18,240 @@ make quickstart          # then run: bin/localweb-cli peers
 That's it. Your node IDs will appear, and the two machines will find each
 other automatically.
 
-## Core Principle
+---
+
+## 🎯 What Makes LocalWEB Different
+
+| Traditional | LocalWEB |
+|-------------|----------|
+| Central server required | **Zero infrastructure** |
+| Single point of failure | **Mesh resilience** |
+| ISP/cloud sees all traffic | **E2E encryption (Noise XX)** |
+| Account required | **No accounts, no sign-up** |
+| Single network path | **6 link types + multi-path** |
+| Cloud-dependent | **Works offline (BLE, acoustic)** |
+| Closed source | **Open source, auditable** |
+
+---
+
+## 🏗️ Architecture: 9-Layer P2P Stack
 
 ```
-Mode 1: NO WiFi (zero infrastructure)
-  → BLE advertising + scanning
-  → WiFi Direct (peer-to-peer)
-  → Ad-hoc WiFi network
-  → USB tethering
-  → Acoustic coupling (audio FSK)
-
-Mode 2: WITH WiFi (standard networking)
-  → mDNS-SD (subnet discovery)
-  → ARP scan (subnet sweep)
-  → Internet relay (cross-subnet)
-
-Mode 3: HYBRID (best of both)
-  → BLE discovers peer → exchanges WiFi Direct credentials → high-bandwidth transfer
-  → mDNS fails → BLE fallback → escalate to direct connection
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  L9: APPLICATION          Node Daemon │ CLI Client │ Web GUI (SPA)         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L8: SERVICES           DNS │ HTTP │ Email │ Docs │ Files │ Messaging │   │
+│       │  Registry │ Voice │ VPN                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L7: CRDT               ORSet │ RGA │ LWW-Register │ Merkle DAG Sync       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L6: DATA               BadgerDB (AES-GCM) │ BlockStore │ PeerStore │     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L5: DHT                Kademlia (k=20, α=3) │ XOR Routing │ PoW Anti-Sybil│
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L4: SECURITY           Noise XX │ AES-GCM │ Ed25519 │ SHA3-256 │        │
+│       │  Capability Tokens │ PoW │ Audit Log (SHA3 Hash Chain)            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L3: DISCOVERY          mDNS-SD │ BLE │ Rendezvous (Federation) │        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L2: LINK               WiFi │ WiFi-Direct │ Ad-hoc │ USB │ BLE │ Acoustic│
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L1: TRANSPORT          QUIC (Noise XX) │ Stream Mux (1-byte ServiceID)   │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Architecture (9-Layer)
+---
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  L9: APPLICATION                                                     │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ Node     │ CLI      │          │          │                   │  │
-│  │ Daemon   │ Client   │          │          │                   │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L8: SERVICES                                                        │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ DNS      │ HTTP     │ Email    │ Docs     │ Files / Messaging /│  │
-│  │ (.localweb)│ Gateway │ (SMTP/  │ (CRDT   │ Registry / Voice /│  │
-│  │          │          │ IMAP)   │ text)   │ VPN                │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L7: SYNC ENGINE                                                     │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ OR-Set   │ RGA      │ Merkle   │ Merkle   │ Encrypted         │  │
-│  │ (CRDT)   │ (CRDT)   │ DAG      │ Sync     │ Store             │  │
-│  │          │ (text)   │ diff     │ diff     │ (BadgerDB)        │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L6: STORE                                                           │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ Peer     │ Block    │ Encrypted│ Key-Value│ Content-Addressed │  │
-│  │ Store    │ Store    │ Blocks   │ (Badger) │ Storage           │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L5: SECURITY                                                        │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ Key Mgmt │ Noise    │ Capability│ Spam    │ Audit             │  │
-│  │ (Ed25519)│ XX       │ Access   │ (PoW)   │ Log               │  │
-│  │          │ handshake│ Control   │         │ (hash chain)      │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L4: ROUTING (DHT)                                                   │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ Kademlia │ KBucket  │ XOR      │ Iterative│ PoW               │  │
-│  │ DHT      │ (k=20)   │ Routing  │ Lookup   │ (Sybil resist)   │  │
-│  │          │          │          │          │                  │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L3: DISCOVERY                                                       │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ mDNS-SD  │ BLE      │ WiFi     │ WiFi     │ Orchestrator      │  │
-│  │ (WiFi)   │ (no WiFi)│ Direct   │ Ad-hoc   │ (merge + score)   │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L2: LINK                                                            │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ WiFi     │ WiFi     │ BLE      │ USB      │ Acoustic          │  │
-│  │ Station  │ Direct   │ (GATT)   │ Tether   │ (FSK modem)       │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-├─────────────────────────────────────────────────────────────────────┤
-│  L1: TRANSPORT                                                       │
-│  ┌──────────┬──────────┬──────────┬──────────┬───────────────────┐  │
-│  │ QUIC     │ Stream   │ Circuit  │ NAT      │ Flow Control      │  │
-│  │ (v0.62)  │ Mux      │ Relay    │ Traversal│ + Backpressure    │  │
-│  └──────────┴──────────┴──────────┴──────────┴───────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## Key Features
-
-- **Noise XX Protocol**: X25519 + SHA3-256 handshake for identity-authenticated key exchange
-- **QUIC Transport**: `quic-go` v0.62.0 with stream multiplexing (1-byte ServiceID routing), circuit relay, UDP hole-punching NAT traversal
-- **Multi-Modal Discovery**: mDNS, BLE, WiFi Direct, ad-hoc — merged and scored by an orchestrator
-- **Adaptive Link Layer**: 6 link types with automatic failover and BLE→WiFi Direct escalation
-- **Kademlia DHT**: 256-bit XOR routing, KBucket k=20, α=3, PoW anti-Sybil
-- **CRDT Sync**: OR-Set (add-wins) + RGA (collaborative text) with Merkle DAG diff sync
-- **BadgerDB Store**: Encrypted at rest (AES-GCM via Badger's `WithEncryptionKey`), content-addressed blocks, peer metadata
-- **9 P2P Services**: DNS (.localweb), HTTP, Email (SMTP/IMAP), Messaging, Files, Collaborative Docs, App Registry, Voice, Mesh VPN
-- **Capability Tokens**: Ed25519-signed, canonical JSON for fine-grained access control
-- **Proof of Work**: SHA3-based challenge/verify for spam and Sybil resistance
-- **Audit Trail**: Append-only SHA3-256 hash chain for tamper-evident logging
-
-## Project Structure
-
-```
-Local-WEB/
-├── cmd/
-│   ├── node/              # Node daemon entry point (full component wiring)
-│   └── cli/               # CLI client (cobra: node, id, peers)
-├── pkg/
-│   ├── crypto/            # Noise XX handshake, Ed25519/X25519 keys, SHA3-256
-│   ├── transport/         # QUIC server, stream mux, circuit relay, NAT traversal
-│   ├── link/              # Adaptive link layer (WiFi, WiFi Direct, BLE, USB, ad-hoc, acoustic)
-│   ├── discovery/         # mDNS, BLE discovery, orchestrator, peer database
-│   ├── dht/               # Kademlia DHT (XOR routing, FindNode/Store/Lookup/PoW)
-│   ├── security/          # Capability tokens, PoW, append-only audit log
-│   ├── store/             # BadgerDB with AES-GCM encryption, peer store, block store
-│   ├── crdt/              # ORSet + RGA with serialization
-│   ├── proto/             # Protobuf definitions + Go conversions
-│   └── services/
-│       ├── dns/           # .localweb TLD, UDP 5353, signed records
-│       ├── http/          # HTTP gateway, per-site mux, health checks
-│       ├── email/         # SMTP + IMAP server, maildir, PoW antispam
-│       ├── docs/          # RGA collaborative text, presence, cursors
-│       ├── files/         # BlockStore + FileStore, zstd, Merkle DAG sync
-│       ├── messaging/     # Pub/sub, signed messages, offline queue
-│       ├── registry/      # LWPKG format, YAML manifests, DHT distribution
-│       ├── voice/         # Call state machine, ICE, Opus/VP9 codec
-│       └── vpn/           # TUN interface, SHA3-256 tunnels
-├── test/integration/      # Integration tests (DHT, discovery, DNS, messaging, full-stack)
-├── docs/architecture/     # Architecture v3, roadmap, tech stack
-├── Makefile               # build, test, bench, lint, cross-compile, generate
-├── go.mod
-└── README.md
-```
-
-## Getting Started
-
-### Quick Start
-
-Get two machines talking in one command:
+## 🚀 Quick Start (2 Commands)
 
 ```bash
-make quickstart            # Builds, generates identity, starts node
-```
-
-On the second machine (same local network), run the same command, then check
-for peers:
-
-```bash
-./bin/localweb-cli peers   # Lists discovered peers on the network
-```
-
-Your node ID is printed on startup and stored in `~/.localweb/identity.json`.
-
-### Prerequisites
-
-- Go 1.26+
-- Git
-- `protoc` (only needed for proto code generation)
-- `make` (for Makefile targets)
-
-### Clone
-
-```bash
+# Machine A
 git clone https://github.com/ram1234598766-dotcom/Local-WEB.git
 cd Local-WEB
+make quickstart
+
+# Machine B (same network)
+make quickstart
+# Then:
+bin/localweb-cli peers
 ```
 
-### Build
+Your node ID prints on startup and is stored in `~/.localweb/identity.json`.
+
+---
+
+## ✨ Key Features
+
+| Category | Feature |
+|----------|---------|
+| **Transport** | QUIC (quic-go v0.62) + Noise XX (X25519 + SHA3-256) + **Post-Quantum Hybrid (X25519 + Kyber-768)** |
+| **Link Layer** | 6 types: WiFi Station, WiFi Direct, Ad-hoc, USB Tether, BLE, Acoustic FSK |
+| **Discovery** | mDNS-SD, BLE GATT, **Rendezvous (cross-LAN federation)** |
+| **DHT** | Kademlia (k=20, α=3), XOR routing, PoW anti-Sybil |
+| **CRDT** | ORSet (add-wins), RGA (collab text), Merkle DAG sync |
+| **Store** | BadgerDB + AES-256-GCM, content-addressed (CID), Merkle DAG |
+| **Security** | Noise XX + AES-GCM, Ed25519 identity, **Hybrid PQ (X25519+Kyber)**, Capability tokens, PoW, Audit log (SHA3 hash chain) |
+| **QoS** | Token bucket per service/peer, HTB hierarchy, 9 pre-configured classes |
+| **Chaos Engineering** | 6 built-in scenarios, nightly CI, fault injection |
+| **Plugin System** | Go plugin loader + BuiltinPlugin framework |
+
+---
+
+## 📦 9 Built-in Services
+
+| Service | Protocol | Port | Key Feature |
+|---------|----------|------|-------------|
+| **DNS** | mDNS/DoH | 5353 | `.localweb` TLD, signed records |
+| **HTTP** | HTTP/1.1 over QUIC | 8080 | Per-site routing, health |
+| **Email** | SMTP + IMAP | 587/993 | Maildir, PoW antispam |
+| **Messaging** | Pub/sub over QUIC | 9090 | Signed, offline queue |
+| **Files** | Bitswap-like | 9091 | BlockStore + Merkle DAG sync |
+| **Docs** | RGA over messaging | 9092 | Real-time cursors/selections |
+| **Registry** | HTTP + DHT | 9093 | LWPKG (tar.gz + Ed25519 sig) |
+| **Voice** | WebRTC (ICE, Opus/VP9) | 9093 | Call state machine |
+| **VPN** | TUN + QUIC | 9094 | Route dist, split tunnel |
+
+---
+
+## 📚 Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) | Complete system architecture (9 layers) |
+| [`docs/architecture/TECH_STACK.md`](docs/architecture/TECH_STACK.md) | Technology stack details |
+| [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md) | Master roadmap + dev protocol |
+| [`docs/guides/QUICKSTART.md`](docs/guides/QUICKSTART.md) | 2-command setup guide |
+| [`docs/guides/CLI_REFERENCE.md`](docs/guides/CLI_REFERENCE.md) | CLI command reference |
+| [`docs/guides/GUI_GUIDE.md`](docs/guides/GUI_GUIDE.md) | Web GUI walkthrough |
+| [`docs/guides/SERVICES.md`](docs/guides/SERVICES.md) | All 9 services deep-dive |
+| [`docs/api/REST_API.md`](docs/api/REST_API.md) | HTTP API reference |
+| [`docs/api/WS_API.md`](docs/api/WS_API.md) | WebSocket/SSE events |
+| [`docs/api/PLUGIN_API.md`](docs/api/PLUGIN_API.md) | Plugin development |
+
+---
+
+## 🛠️ Quick Commands
 
 ```bash
-# Build all binaries
+# Build everything
 make build
 
-# Or build directly
-go build ./...
-go build -o bin/node ./cmd/node
-go build -o bin/cli ./cmd/cli
-```
-
-### Test
-
-```bash
-# Run all tests with race detector and coverage
+# Run all tests with race detector
 make test
 
-# Run integration tests only
-go test ./test/integration/... -v
+# Run linting
+make lint
+
+# Start node (quickstart = build + identity + run)
+make quickstart
+
+# Run CLI
+make run-cli
 
 # Run benchmarks
 make bench
+
+# Cross-compile for all platforms
+make cross-compile
 ```
 
-### Run
+---
 
-```bash
-# Start node daemon (listens on UDP 4443 for QUIC)
-make run-node
-# or: go run ./cmd/node
-
-# Use CLI client
-make run-cli
-# or: go run ./cmd/cli
-
-# CLI commands:
-#   cli id          — generate/display node identity
-#   cli peers       — list discovered peers
-#   cli node        — start the node daemon
-#
-# Advanced usage:
-#   cli id --json    — machine-readable output
-#   cli peers --json — machine-readable output
-#   --rendezvous <url> — enable cross-internet federation (Phase 4)
-```
-
-## Dashboard (Optional)
-
-Local-WEB ships with an optional, read-only web dashboard for a visual
-overview of your node. It is **disabled by default** and only listens on
-`localhost` when enabled.
-
-**Enable it:**
-
-```bash
-go run ./cmd/node --dashboard
-```
-
-Then open `http://localhost:8080` in your browser.
-
-What you get:
-- **Dashboard**: node identity, uptime, active connections
-- **Network/Peers**: topology visualization showing which peers are
-  connected via which link type, with RTT
-- **Service health**: per-service status for all 9 built-in services
-- **DNS**: record browser and search
-- **Messaging**: channel list and message history
-- **Files**: transfer progress and peer browsing
-- **Audit log**: tamper-chain verification status (live recompute)
-- **Settings**: ports, paths, storage, dark/light theme toggle
-
-The dashboard speaks to the node over a WebSocket stream for real-time
-updates. It is read-only by design — no destructive actions are available
-through the UI.
-
-For monitoring, `/metrics` (Prometheus format), `/healthz`, and `/readyz`
-endpoints are always available when the node is running, regardless of
-dashboard status.
-
-## Services
-
-All 9 services are fully implemented and integrated. Each runs as a handler on a QUIC stream (identified by 1-byte ServiceID):
-
-| Service | Package | Protocol | Port |
-|---|---|---|---|
-| DNS | `pkg/services/dns/` | UDP mDNS (5353) | 5353 |
-| HTTP | `pkg/services/http/` | HTTP/3 over QUIC | 8080 |
-| Email | `pkg/services/email/` | SMTP + IMAP | 587/993 |
-| Messaging | `pkg/services/messaging/` | Custom pub/sub | 9090 |
-| Files | `pkg/services/files/` | Bitswap-like | — |
-| Docs | `pkg/services/docs/` | CRDT over messaging | 9091 |
-| Registry | `pkg/services/registry/` | HTTP API + DHT | 9092 |
-| Voice | `pkg/services/voice/` | Signaling + media | 9093 |
-| VPN | `pkg/services/vpn/` | TUN interface | 9094 |
-
-## Author
-
-Mrityunjay K — architect and core contributor of Local-WEB.
-
-## Usage
-
-### Starting a Node Daemon
-
-```bash
-# Build the node binary
-go build -o bin/node ./cmd/node
-
-# Start the node daemon (listens on UDP 4443 for QUIC transport)
-./bin/node --name "my-laptop" --listen :4443
-
-# Available flags:
-#   --name       Human-readable node name
-#   --listen     Address to bind QUIC transport (default :4443)
-#   --storage    Path to BadgerDB storage directory (default ./data)
-#   --data-dir   Path to store node identity and keys (default ./keys)
-```
-
-### Using the CLI
-
-```bash
-# Build the CLI
-go build -o bin/cli ./cmd/cli
-
-# Generate or display your node identity
-./bin/cli id
-
-# List discovered peers on the local network
-./bin/cli peers
-
-# Start the node daemon from CLI
-./bin cli node
-```
-
-### Running Services
-
-Services start automatically when the node daemon runs. Each service listens on its own QUIC stream (identified by 1-byte ServiceID):
-
-| Service | How to Use |
-|---|---|
-| **DNS** | `nslookup host.localweb 127.0.0.1 -port=5353` |
-| **HTTP Gateway** | `curl http://localhost:8080/health` |
-| **Email** | Configure SMTP client to `localhost:587` |
-| **Messaging** | Use the CLI or SDK to publish/subscribe to channels |
-| **Files** | `curl http://localhost:9090/files/` |
-| **Docs** | Open `http://localhost:9091/docs/` in a browser |
-| **Registry** | `GET http://localhost:9092/packages` |
-| **Voice** | Use WebRTC-compatible client pointed at signaling port |
-| **VPN** | Routes are automatically installed on TUN interface |
-
-### DNS Resolution
-
-Once your node is running, `.localweb` domains resolve automatically on your local network:
-
-```bash
-# Query a peer's .localweb address
-nslookup peer1.localweb
-
-# Test with dig
-dig peer1.localweb @127.0.0.1 -p 5353
-```
-
-### Messaging
-
-```go
-// From Go code
-import "github.com/ram1234598766-dotcom/Local-WEB/pkg/services/messaging"
-
-svc := messaging.NewService(store, privateKey)
-chID := svc.CreateChannel([]*[32]byte{pubKey1, pubKey2})
-msg, _ := svc.Publish(ctx, chID, myPubKey, []byte("hello"), "")
-history, _ := svc.History(chID, "", 100)
-```
-
-### File Sharing
-
-Share a file with a peer:
-```bash
-# On sender node
-curl -T myfile.zip http://localhost:9090/files/myfile.zip
-
-# On receiver node
-curl http://localhost:9090/files/myfile.zip --output myfile.zip
-```
-
-### VPN
-
-Start the VPN service (creates a TUN interface):
-```bash
-# TUN interface is created automatically when vpn service starts
-ip addr show dev tun0  # Linux: tun0 created
-ifconfig utun0         # macOS: utun0 created
-```
-
-## Development
-
-### Code Review
-
-All changes follow a disciplined workflow:
-- TDD-first development
-- Security review for crypto/transport layer
-- Go vet and test gates (`make lint`)
-- Subagent analysis for deep backend review
-
-### Lint & Verify
-
-```bash
-make lint      # golangci-lint + go vet + gofmt
-make test      # full test suite with race detection
-```
-
-### Commit Convention
-
-- `feat:` new features
-- `fix:` bug fixes
-- `refactor:` code restructuring
-- `test:` test additions
-- `docs:` documentation
-- `chore:` maintenance
-
-## Status
+## 📋 Status Dashboard
 
 | Layer | Component | Status | Tests |
-|---|---|---|---|
-| L1 | Transport (QUIC) | Verified | `quic_test.go`, `TestTCPServerAcceptAndRespond`, `TestTCPConcurrentRPCCalls` |
-| L2 | Link (6 link types) | Verified (runtime detection) | `TestTwoNodeDiscoveryAllLinkTypes` |
-| L3 | Discovery (mDNS/BLE/WiFi) | Verified | `discovery_test.go`, `TestTwoNodeDiscoveryAllLinkTypes` |
-| L4 | DHT (Kademlia) | Verified | `dht_test.go`, `TestRPCRoundTrip`, `TestTCPMultipleSequentialRPCCalls` |
-| L5 | Security (Noise XX, PoW, Audit) | Verified | `audit_test.go`, `capability_test.go`, `pow_test.go` |
-| L6 | Store (BadgerDB + AES-GCM) | Verified | `store_test.go`, `block_store_test.go`, `peer_store_test.go` |
-| L7 | Sync (CRDT + Merkle) | Verified | `crdt_test.go`, `TestComputeMerkleRoot` |
-| L8 | Services (DNS, HTTP, Email, Messaging, Files, Docs, Registry, Voice, VPN) | Verified | Integration tests for DNS, Messaging, Full-Stack |
-| L9 | App (node + CLI) | Verified (identity persistence, BadgerDB encryption) | — |
+|-------|-----------|--------|-------|
+| L1 | Transport (QUIC + Noise XX) | ✅ Verified | `quic_test.go` |
+| L2 | Link (6 types) | ✅ Verified | Runtime detection |
+| L3 | Discovery (mDNS/BLE/Rendezvous) | ✅ Verified | Orchestrator tests |
+| L4 | DHT (Kademlia) | ✅ Verified | `dht_test.go` |
+| L5 | Security (Noise XX + Hybrid PQ) | ✅ Verified | `audit_test.go`, `pow_test.go` |
+| L6 | Store (BadgerDB + AES-GCM) | ✅ Verified | `store_test.go` |
+| L7 | CRDT (ORSet + RGA) | ✅ Verified | `crdt_test.go` |
+| L8 | Services (9) | ✅ Verified | Integration tests |
+| L9 | App (Node + CLI + Web GUI) | ✅ Verified | Identity persistence |
 
-Phase 1 (security, crypto, critical transport, DNS, identity persistence) is complete and all Phase 1 integration tests pass. See `PHASE2_PLAN.md` for remaining Phase 2 work.
+---
 
-## Troubleshooting / FAQ
+## 🔐 Security
 
-**"No peers found"** — Both machines must be on the same local network.
-Local-WEB currently discovers peers via mDNS (same subnet) and BLE. If
-Firewalls are blocking discovery on macOS, go to
-System Settings → Network → Firewall and allow incoming connections for
-Local-WEB.
+| Layer | Mechanism |
+|-------|-----------|
+| **Transport** | Noise XX (X25519 + SHA3-256) + **Hybrid PQ (X25519 + Kyber-768)** |
+| **Identity** | Ed25519 keypair, NodeID = SHA3-256(PubKey) |
+| **Store** | AES-256-GCM at rest (BadgerDB) |
+| **Access Control** | Ed25519-signed capability tokens (canonical JSON) |
+| **Spam/Sybil** | SHA3-based Proof of Work (auto-adjusting difficulty) |
+| **Audit** | Append-only SHA3-256 hash chain (tamper-evident) |
 
-**"Port already in use"** — Local-WEB listens on UDP 4443 by default. If
-another process is using that port, pass a different one:
+---
+
+## 🌐 Web GUI (Optional)
 
 ```bash
-./bin/localweb --addr 0.0.0.0:4444
+# Enable web dashboard (read-only, localhost only)
+go run ./cmd/node --dashboard
+# Open http://localhost:8080
 ```
 
-**"VPN requires elevated privileges"** — The VPN service (L8, port :9094)
-creates TUN/TAP interfaces, which requires root on Linux (`sudo`) or
-`sudo` on macOS. This is documented in `docs/architecture/TECH_STACK.md`.
-The VPN service is optional — it can be disabled with `--no-vpn` if you
-don't need it.
+**13 Screens:** Dashboard, Network/Peers (topology), Files, DNS, HTTP, Email, Messaging, Docs, Registry, Voice, VPN, Security (live audit-chain), Settings
 
-## Security
+---
 
-- **Transport encryption**: Noise XX handshake over QUIC (X25519 + SHA3-256)
-- **Identity**: Ed25519 keypair, NodeID = SHA3-256(static public key)
-- **Store encryption**: AES-256-GCM at rest via BadgerDB `WithEncryptionKey`
-- **Access control**: Ed25519-signed capability tokens with canonical JSON
-- **Spam resistance**: SHA3-based Proof of Work for email and DHT storage
-- **Audit trail**: Append-only SHA3-256 hash chain log
+## 🧪 Testing
 
-## License
+```bash
+# Full suite with race detector
+make test
+
+# Linting
+make lint
+
+# Benchmarks
+make bench
+
+# Coverage
+go test -coverprofile=coverage.out ./...
+```
+
+---
+
+## 📄 License
 
 MIT. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-## Links
+---
 
-- Documentation: `docs/architecture/TECH_STACK.md` (dependency details)
-- Roadmap: `docs/architecture/ROADMAP.md` (implementation checklist)
-- Architecture: `docs/architecture/ARCHITECTURE_V3.md`
+## 📖 Quick Links
+
+| Topic | Link |
+|-------|------|
+| Architecture | `docs/architecture/ARCHITECTURE.md` |
+| Tech Stack | `docs/architecture/TECH_STACK.md` |
+| Roadmap | `docs/architecture/ROADMAP.md` |
+| Quickstart | `docs/guides/QUICKSTART.md` |
+| CLI Reference | `docs/guides/CLI_REFERENCE.md` |
+| GUI Guide | `docs/guides/GUI_GUIDE.md` |
+| Services | `docs/guides/SERVICES.md` |
+| REST API | `docs/api/REST_API.md` |
+| Plugin API | `docs/api/PLUGIN_API.md` |
+
+---
+
+## 🤝 Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- TDD workflow
+- Commit conventions (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`)
+- Security review process
+- Code review gates
+
+---
+
+## ⚖️ License
+
+MIT. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+---
+
+*LocalWEB v1.0.0 | Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26+*
