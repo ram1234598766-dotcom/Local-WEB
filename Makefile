@@ -29,6 +29,10 @@ lint:
 	$(GO) vet ./...
 	$(GO) fmt ./...
 
+bench:
+	go test -bench=. -benchmem -benchtime=1s -run=. ./pkg/crdt/ ./pkg/dht/ ./pkg/crypto/
+	go test -bench=. -benchmem -benchtime=1s -run=. ./pkg/chaos/
+
 test-chaos:
 	$(GO) test -race -v ./pkg/chaos/...
 
