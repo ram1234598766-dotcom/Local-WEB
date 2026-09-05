@@ -144,11 +144,11 @@ func ValidateSignal(msg *SignalMessage, pub [32]byte) bool {
 
 // CallSignaling bridges a Call with the signaling channel.
 type CallSignaling struct {
-	mu       sync.RWMutex
-	callID   CallID
-	caller   PeerID
-	callee   PeerID
-	channel  *MessagingSignaling
+	mu        sync.RWMutex
+	callID    CallID
+	caller    PeerID
+	callee    PeerID
+	channel   *MessagingSignaling
 	callerKey [32]byte
 }
 

@@ -23,11 +23,11 @@ func (noopTransport) Listen(addr string) (net.Listener, error) {
 
 type noopConn struct{}
 
-func (c noopConn) Read(p []byte) (int, error)  { return 0, contextDone() }
-func (c noopConn) Write(p []byte) (int, error) { return 0, contextDone() }
-func (c noopConn) Close() error                { return nil }
-func (c noopConn) LocalAddr() net.Addr         { return &noopAddr{} }
-func (c noopConn) RemoteAddr() net.Addr        { return &noopAddr{} }
+func (c noopConn) Read(p []byte) (int, error)         { return 0, contextDone() }
+func (c noopConn) Write(p []byte) (int, error)        { return 0, contextDone() }
+func (c noopConn) Close() error                       { return nil }
+func (c noopConn) LocalAddr() net.Addr                { return &noopAddr{} }
+func (c noopConn) RemoteAddr() net.Addr               { return &noopAddr{} }
 func (c noopConn) SetDeadline(t time.Time) error      { return nil }
 func (c noopConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c noopConn) SetWriteDeadline(t time.Time) error { return nil }
@@ -35,8 +35,8 @@ func (c noopConn) SetWriteDeadline(t time.Time) error { return nil }
 type noopListener struct{}
 
 func (l noopListener) Accept() (net.Conn, error) { return &noopConn{}, contextDone() }
-func (l noopListener) Close() error             { return nil }
-func (l noopListener) Addr() net.Addr           { return &noopAddr{} }
+func (l noopListener) Close() error              { return nil }
+func (l noopListener) Addr() net.Addr            { return &noopAddr{} }
 
 type noopAddr struct{}
 

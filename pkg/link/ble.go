@@ -28,11 +28,11 @@ var (
 
 // BLEIdentity is the data exchanged via the Identity characteristic.
 type BLEIdentity struct {
-	NodeID      [32]byte // SHA3-256 of public key
-	PublicKey   [32]byte // Ed25519 public key
-	Name        [32]byte // Node name (null-padded)
-	Capabilities uint32  // Bitmask of services
-	Version     uint16   // Protocol version
+	NodeID       [32]byte // SHA3-256 of public key
+	PublicKey    [32]byte // Ed25519 public key
+	Name         [32]byte // Node name (null-padded)
+	Capabilities uint32   // Bitmask of services
+	Version      uint16   // Protocol version
 }
 
 // BLECapabilities bitmask.
@@ -51,26 +51,26 @@ const (
 
 // BLE implements Link for Bluetooth Low Energy (no WiFi needed).
 type BLE struct {
-	mu          sync.Mutex
-	nodeID      [32]byte
-	publicKey   [32]byte
-	name        string
+	mu           sync.Mutex
+	nodeID       [32]byte
+	publicKey    [32]byte
+	name         string
 	capabilities uint32
-	peers       map[[32]byte]*BLEPeer
-	adapter     *bleAdapter
-	ctx         context.Context
-	cancel      context.CancelFunc
+	peers        map[[32]byte]*BLEPeer
+	adapter      *bleAdapter
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 // BLEPeer holds BLE peer information.
 type BLEPeer struct {
-	ID          [32]byte
-	PublicKey   [32]byte
-	Name        string
+	ID           [32]byte
+	PublicKey    [32]byte
+	Name         string
 	Capabilities uint32
-	RSSI        int32
-	Address     string // BLE MAC address
-	LastSeen    time.Time
+	RSSI         int32
+	Address      string // BLE MAC address
+	LastSeen     time.Time
 }
 
 // NewBLE creates a BLE link.
@@ -95,12 +95,12 @@ func NewBLE(nodeID, publicKey [32]byte, name string, caps uint32) (*BLE, error) 
 	}, nil
 }
 
-func (b *BLE) Name() string           { return "ble" }
-func (b *BLE) Mode() LinkMode         { return ModeBLE }
-func (b *BLE) RequiresWiFi() bool     { return false }
-func (b *BLE) RequiresRouter() bool   { return false }
-func (b *BLE) Bandwidth() int         { return 1 }   // ~1 Mbps
-func (b *BLE) MaxPeers() int          { return 10 }
+func (b *BLE) Name() string         { return "ble" }
+func (b *BLE) Mode() LinkMode       { return ModeBLE }
+func (b *BLE) RequiresWiFi() bool   { return false }
+func (b *BLE) RequiresRouter() bool { return false }
+func (b *BLE) Bandwidth() int       { return 1 } // ~1 Mbps
+func (b *BLE) MaxPeers() int        { return 10 }
 
 func (b *BLE) IsAvailable(ctx context.Context) bool {
 	return b.adapter != nil && b.adapter.IsPowered()
@@ -192,12 +192,12 @@ func (b *BLE) scanLoop(ctx context.Context, events chan<- PeerEvent) {
 				events <- PeerEvent{
 					Type: evtType,
 					Peer: PeerInfo{
-						ID:         peer.ID,
-						PublicKey:  peer.PublicKey,
-						Name:       peer.Name,
-						LinkMode:   ModeBLE,
-						RSSI:       peer.RSSI,
-						LastSeen:   peer.LastSeen,
+						ID:        peer.ID,
+						PublicKey: peer.PublicKey,
+						Name:      peer.Name,
+						LinkMode:  ModeBLE,
+						RSSI:      peer.RSSI,
+						LastSeen:  peer.LastSeen,
 					},
 					Time: time.Now(),
 				}
@@ -266,7 +266,7 @@ func (b *BLE) buildAdvertData() []byte {
 
 	// Service UUID (128-bit)
 	svcUUID := make([]byte, 17)
-	svcUUID[0] = 16 // length
+	svcUUID[0] = 16   // length
 	svcUUID[1] = 0x07 // Complete List of 128-bit Service UUIDs
 	copy(svcUUID[2:], LocalWEBServiceUUID[:])
 	data = append(data, svcUUID...)
@@ -354,11 +354,11 @@ type GATTCharacteristic struct {
 
 // GATT property flags.
 const (
-	GATTRead                    uint8 = 0x02
-	GATTWrite                   uint8 = 0x08
-	GATTWriteWithoutResponse    uint8 = 0x04
-	GATTNotify                  uint8 = 0x10
-	GATTIndicate                uint8 = 0x20
+	GATTRead                 uint8 = 0x02
+	GATTWrite                uint8 = 0x08
+	GATTWriteWithoutResponse uint8 = 0x04
+	GATTNotify               uint8 = 0x10
+	GATTIndicate             uint8 = 0x20
 )
 
 func newBLEAdapter() (*bleAdapter, error) {

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ipfs/go-cid"
-	mh "github.com/multiformats/go-multihash"
 	"github.com/mrityunjay/LocalWEB/pkg/services/files"
+	mh "github.com/multiformats/go-multihash"
 )
 
 func computeTestCID(data []byte) cid.Cid {
@@ -99,7 +99,7 @@ func TestBadgerBlockStoreList(t *testing.T) {
 	c3 := computeTestCID(data3)
 
 	for _, entry := range []struct {
-		c   cid.Cid
+		c    cid.Cid
 		data []byte
 	}{{c1, data1}, {c2, data2}, {c3, data3}} {
 		err := bs.Put(ctx, &files.Block{CID: entry.c, Data: entry.data})

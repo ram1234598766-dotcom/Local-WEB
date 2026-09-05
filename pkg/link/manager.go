@@ -12,27 +12,27 @@ import (
 
 // Manager orchestrates all link types and selects the best available one.
 type Manager struct {
-	mu          sync.RWMutex
-	links       []Link
-	active      Link
-	peers       map[[32]byte]*PeerInfo // nodeID → peer info
-	configs     map[LinkMode]LinkConfig
-	preferences []LinkMode
-	events      chan PeerEvent
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	onPeer      func(PeerEvent)
+	mu           sync.RWMutex
+	links        []Link
+	active       Link
+	peers        map[[32]byte]*PeerInfo // nodeID → peer info
+	configs      map[LinkMode]LinkConfig
+	preferences  []LinkMode
+	events       chan PeerEvent
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	onPeer       func(PeerEvent)
 	autoEscalate bool
 }
 
 // ManagerConfig holds configuration for the link manager.
 type ManagerConfig struct {
-	Links          []Link
-	Preferences    []LinkMode
-	Configs        map[LinkMode]LinkConfig
-	AutoEscalate   bool // BLE → WiFi Direct automatically
-	OnPeer         func(PeerEvent)
+	Links        []Link
+	Preferences  []LinkMode
+	Configs      map[LinkMode]LinkConfig
+	AutoEscalate bool // BLE → WiFi Direct automatically
+	OnPeer       func(PeerEvent)
 }
 
 // NewManager creates a new adaptive link manager.

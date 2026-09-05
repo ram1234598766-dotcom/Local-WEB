@@ -12,12 +12,12 @@ import (
 
 // HTTPServer serves the registry HTTP API.
 type HTTPServer struct {
-	mu        sync.RWMutex
-	registry  Registry
-	packages  map[string]*PackageMeta
-	started   time.Time
-	server    *http.Server
-	url       string
+	mu       sync.RWMutex
+	registry Registry
+	packages map[string]*PackageMeta
+	started  time.Time
+	server   *http.Server
+	url      string
 }
 
 // ServerConfig configures the registry HTTP server.

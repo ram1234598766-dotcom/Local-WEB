@@ -151,12 +151,12 @@ type RGANode struct {
 }
 
 type RGA struct {
-	mu       sync.RWMutex
-	head     *RGANode
-	tail     *RGANode
-	length   int
-	clock    int64
-	nodeID   string
+	mu     sync.RWMutex
+	head   *RGANode
+	tail   *RGANode
+	length int
+	clock  int64
+	nodeID string
 }
 
 func NewRGA(nodeID string) *RGA {
@@ -461,8 +461,8 @@ func decodeEntries(data []byte) ([]struct {
 			tags = append(tags, string(tag))
 		}
 		entries = append(entries, struct {
-			Elem  string
-			Tags  []string
+			Elem string
+			Tags []string
 		}{Elem: string(elem), Tags: tags})
 	}
 	rmCount, _ := buf.ReadByte()
@@ -618,4 +618,3 @@ func DiffMerkle(a, b *MerkleTree) ([][32]byte, [][32]byte) {
 	}
 	return onlyA, onlyB
 }
-

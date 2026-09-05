@@ -9,10 +9,10 @@ import (
 
 // WiFiStation implements Link for standard WiFi (connected to router).
 type WiFiStation struct {
-	iface    *net.Interface
-	gateway  net.IP
-	ssid     string
-	channel  int
+	iface   *net.Interface
+	gateway net.IP
+	ssid    string
+	channel int
 }
 
 // NewWiFiStation creates a WiFi station link from an active WiFi interface.
@@ -33,12 +33,12 @@ func NewWiFiStation() (*WiFiStation, error) {
 	}, nil
 }
 
-func (w *WiFiStation) Name() string           { return "wifi-station" }
-func (w *WiFiStation) Mode() LinkMode         { return ModeWiFiStation }
-func (w *WiFiStation) RequiresWiFi() bool     { return true }
-func (w *WiFiStation) RequiresRouter() bool   { return true }
-func (w *WiFiStation) Bandwidth() int         { return 1000 } // Up to 1 Gbps
-func (w *WiFiStation) MaxPeers() int          { return 1000 }
+func (w *WiFiStation) Name() string         { return "wifi-station" }
+func (w *WiFiStation) Mode() LinkMode       { return ModeWiFiStation }
+func (w *WiFiStation) RequiresWiFi() bool   { return true }
+func (w *WiFiStation) RequiresRouter() bool { return true }
+func (w *WiFiStation) Bandwidth() int       { return 1000 } // Up to 1 Gbps
+func (w *WiFiStation) MaxPeers() int        { return 1000 }
 
 func (w *WiFiStation) IsAvailable(ctx context.Context) bool {
 	if w.iface == nil {

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
-	mh "github.com/multiformats/go-multihash"
 	"github.com/klauspost/compress/zstd"
+	mh "github.com/multiformats/go-multihash"
 )
 
 // memoryStore is a simple in-memory block store for testing and lightweight use.

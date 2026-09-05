@@ -68,10 +68,10 @@ func (s *memoryStore) History(channel ChannelID, after string, limit int) ([]Mes
 }
 
 type Service struct {
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	channels map[ChannelID]*Channel
 	store    Store
-	privKey   [32]byte
+	privKey  [32]byte
 }
 
 type Channel struct {

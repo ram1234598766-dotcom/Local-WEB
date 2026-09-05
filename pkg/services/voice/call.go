@@ -10,24 +10,24 @@ import (
 )
 
 var (
-	ErrCallNotFound     = errors.New("call not found")
+	ErrCallNotFound      = errors.New("call not found")
 	ErrInvalidTransition = errors.New("invalid state transition")
-	ErrCallEnded        = errors.New("call ended")
+	ErrCallEnded         = errors.New("call ended")
 )
 
 // Call represents a single voice/video call session.
 type Call struct {
-	mu        sync.RWMutex
-	id        CallID
-	state     CallState
-	caller    PeerID
-	callee    PeerID
-	channelID string
-	config    CallConfig
-	tracks    map[string]*TrackInfo
+	mu         sync.RWMutex
+	id         CallID
+	state      CallState
+	caller     PeerID
+	callee     PeerID
+	channelID  string
+	config     CallConfig
+	tracks     map[string]*TrackInfo
 	candidates map[string]ICECandidate
-	createdAt time.Time
-	endedAt   time.Time
+	createdAt  time.Time
+	endedAt    time.Time
 }
 
 // NewCall creates a new call in the idle state.
@@ -35,15 +35,15 @@ func NewCall(cfg CallConfig) *Call {
 	id := CallID{}
 	copy(id[:], fmt.Sprintf("%x-%x", cfg.Caller[:4], cfg.Callee[:4]))
 	return &Call{
-		id:        id,
-		state:     CallStateIdle,
-		caller:    cfg.Caller,
-		callee:    cfg.Callee,
-		channelID: cfg.ChannelID,
-		config:    cfg,
-		tracks:    make(map[string]*TrackInfo),
+		id:         id,
+		state:      CallStateIdle,
+		caller:     cfg.Caller,
+		callee:     cfg.Callee,
+		channelID:  cfg.ChannelID,
+		config:     cfg,
+		tracks:     make(map[string]*TrackInfo),
 		candidates: make(map[string]ICECandidate),
-		createdAt: time.Now(),
+		createdAt:  time.Now(),
 	}
 }
 
@@ -121,9 +121,9 @@ func (c *Call) transition(newState CallState) error {
 	defer c.mu.Unlock()
 
 	allowed := map[CallState][]CallState{
-		CallStateIdle:     {CallStateCalling},
-		CallStateCalling:  {CallStateRinging, CallStateConnected, CallStateEnded},
-		CallStateRinging:  {CallStateConnected, CallStateEnded},
+		CallStateIdle:      {CallStateCalling},
+		CallStateCalling:   {CallStateRinging, CallStateConnected, CallStateEnded},
+		CallStateRinging:   {CallStateConnected, CallStateEnded},
 		CallStateConnected: {CallStateEnded},
 	}
 
@@ -182,9 +182,9 @@ func (c *Call) EndedAt() (time.Time, bool) {
 
 // CallManager tracks active calls.
 type CallManager struct {
-	mu      sync.RWMutex
-	calls   map[CallID]*Call
-	byPeer  map[PeerID]CallID
+	mu     sync.RWMutex
+	calls  map[CallID]*Call
+	byPeer map[PeerID]CallID
 }
 
 // NewCallManager creates a new CallManager.

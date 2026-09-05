@@ -81,10 +81,10 @@ func setupFullStack(t *testing.T) ([]*fullStackNode, context.Context, context.Ca
 
 		fakeMode := newFakeDiscoveryMode(fmt.Sprintf("mode-%d", i), false)
 		orch := discovery.NewOrchestrator(discovery.OrchestratorConfig{
-			NodeID:      ids[i],
-			PublicKey:   pubs[i],
-			Name:        name,
-			Modes:       []discovery.DiscoveryMode{fakeMode},
+			NodeID:    ids[i],
+			PublicKey: pubs[i],
+			Name:      name,
+			Modes:     []discovery.DiscoveryMode{fakeMode},
 		})
 
 		msgSvc := messaging.NewService(nil, privs[i])

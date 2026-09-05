@@ -42,9 +42,9 @@ type Document struct {
 
 // DocumentConfig configures a new Document.
 type DocumentConfig struct {
-	ID          string
-	Title       string
-	NodeID      string
+	ID           string
+	Title        string
+	NodeID       string
 	EventHandler DocEventHandler
 }
 

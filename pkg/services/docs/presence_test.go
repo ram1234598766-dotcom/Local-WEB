@@ -21,7 +21,7 @@ func TestPresenceCreate(t *testing.T) {
 
 func TestPresenceUpdateCursor(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	id := strID(t,"peer-1")
+	id := strID(t, "peer-1")
 	pres.UpdateCursor(id, "Alice", 5, 10)
 	pp, ok := pres.GetPeer(id)
 	if !ok {
@@ -40,7 +40,7 @@ func TestPresenceUpdateCursor(t *testing.T) {
 
 func TestPresenceUpdateSelection(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	id := strID(t,"peer-1")
+	id := strID(t, "peer-1")
 	pres.UpdateSelection(id, "Bob", 1, 0, 3, 5)
 	pp, ok := pres.GetPeer(id)
 	if !ok {
@@ -59,7 +59,7 @@ func TestPresenceUpdateSelection(t *testing.T) {
 
 func TestPresenceRemovePeer(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	id := strID(t,"peer-1")
+	id := strID(t, "peer-1")
 	pres.UpdateCursor(id, "Alice", 0, 0)
 	if pres.Count() != 1 {
 		t.Fatalf("expected 1 peer, got %d", pres.Count())
@@ -76,9 +76,9 @@ func TestPresenceRemovePeer(t *testing.T) {
 
 func TestPresenceMultiplePeers(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	pres.UpdateCursor(strID(t,"peer-1"), "Alice", 0, 0)
-	pres.UpdateCursor(strID(t,"peer-2"), "Bob", 3, 5)
-	pres.UpdateCursor(strID(t,"peer-3"), "Charlie", 1, 2)
+	pres.UpdateCursor(strID(t, "peer-1"), "Alice", 0, 0)
+	pres.UpdateCursor(strID(t, "peer-2"), "Bob", 3, 5)
+	pres.UpdateCursor(strID(t, "peer-3"), "Charlie", 1, 2)
 
 	all := pres.GetAll()
 	if len(all) != 3 {
@@ -96,7 +96,7 @@ func TestPresenceMultiplePeers(t *testing.T) {
 
 func TestPresenceTimeout(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1", Timeout: 100 * time.Millisecond})
-	id := strID(t,"peer-1")
+	id := strID(t, "peer-1")
 	pres.UpdateCursor(id, "Alice", 0, 0)
 	if pres.Count() != 1 {
 		t.Fatalf("expected 1 peer, got %d", pres.Count())
@@ -110,7 +110,7 @@ func TestPresenceTimeout(t *testing.T) {
 
 func TestPresenceTouch(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1", Timeout: 200 * time.Millisecond})
-	id := strID(t,"peer-1")
+	id := strID(t, "peer-1")
 	pres.UpdateCursor(id, "Alice", 0, 0)
 	time.Sleep(100 * time.Millisecond)
 	pres.Touch(id)
@@ -122,7 +122,7 @@ func TestPresenceTouch(t *testing.T) {
 
 func TestPresenceMarkConnectedDisconnected(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	id := strID(t,"peer-1")
+	id := strID(t, "peer-1")
 	pres.MarkConnected(id, "Alice")
 	pp, ok := pres.GetPeer(id)
 	if !ok || !pp.Connected {
@@ -138,8 +138,8 @@ func TestPresenceMarkConnectedDisconnected(t *testing.T) {
 func TestPresenceFromDiscovery(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
 	peers := []discovery.PeerInfo{
-		{ID: strID(t,"peer-a"), Name: "Alice", Addrs: []string{"192.168.1.1:1234"}, LastSeen: time.Now()},
-		{ID: strID(t,"peer-b"), Name: "Bob", Addrs: []string{"192.168.1.2:1234"}, LastSeen: time.Now()},
+		{ID: strID(t, "peer-a"), Name: "Alice", Addrs: []string{"192.168.1.1:1234"}, LastSeen: time.Now()},
+		{ID: strID(t, "peer-b"), Name: "Bob", Addrs: []string{"192.168.1.2:1234"}, LastSeen: time.Now()},
 	}
 	pres.FromDiscovery(peers)
 	all := pres.GetAll()
@@ -150,8 +150,8 @@ func TestPresenceFromDiscovery(t *testing.T) {
 
 func TestPresenceMarshalRoundTrip(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	pres.UpdateCursor(strID(t,"peer-1"), "Alice", 5, 10)
-	pres.UpdateCursor(strID(t,"peer-2"), "Bob", 3, 2)
+	pres.UpdateCursor(strID(t, "peer-1"), "Alice", 5, 10)
+	pres.UpdateCursor(strID(t, "peer-2"), "Bob", 3, 2)
 
 	data := pres.Marshal()
 	pres2 := NewPresenceService(PresenceConfig{DocID: "doc-1"})
@@ -169,7 +169,7 @@ func TestPresenceConcurrentUpdates(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			id := strID(t,"peer-" + string(rune('A'+idx%26)))
+			id := strID(t, "peer-"+string(rune('A'+idx%26)))
 			pres.UpdateCursor(id, "User", idx, idx*2)
 		}(i)
 	}
@@ -178,7 +178,7 @@ func TestPresenceConcurrentUpdates(t *testing.T) {
 }
 
 func TestPresencePeerInfoFromTransport(t *testing.T) {
-	id := strID(t,"transport-peer")
+	id := strID(t, "transport-peer")
 	p := transport.PeerInfo{ID: id, Addr: "127.0.0.1:9999", State: transport.StateReady, LastPong: time.Now()}
 	pp := PeerInfoFromTransport(p, "doc-1", "TransportPeer")
 	if pp.PeerID != id {
@@ -194,9 +194,8 @@ func TestPresencePeerInfoFromTransport(t *testing.T) {
 
 func TestPresenceGetPeerNotExists(t *testing.T) {
 	pres := NewPresenceService(PresenceConfig{DocID: "doc-1"})
-	_, ok := pres.GetPeer(strID(t,"nonexistent"))
+	_, ok := pres.GetPeer(strID(t, "nonexistent"))
 	if ok {
 		t.Fatal("expected peer to not exist")
 	}
 }
-

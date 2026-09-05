@@ -11,15 +11,15 @@ import (
 
 // mockNotifier captures broadcast calls for testing.
 type mockNotifier struct {
-	mu          sync.Mutex
-	broadcasts  []BroadcastRecord
-	peerCount   int
+	mu         sync.Mutex
+	broadcasts []BroadcastRecord
+	peerCount  int
 }
 
 type BroadcastRecord struct {
-	DocID  string
+	DocID   string
 	Exclude [32]byte
-	Msg    *DocMessage
+	Msg     *DocMessage
 }
 
 func newMockNotifier() *mockNotifier {
@@ -127,7 +127,7 @@ func TestServiceApplyLocalOp(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	authorID := strID(t,"author-1")
+	authorID := strID(t, "author-1")
 	doc, result, err := svc.ApplyLocalOp(context.Background(), "doc-1", NewInsertOp("doc-1", authorID, 0, "hello", 1))
 	if err != nil {
 		t.Fatalf("apply local op failed: %v", err)
@@ -151,7 +151,7 @@ func TestServiceInsertText(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	authorID := strID(t,"author")
+	authorID := strID(t, "author")
 	doc, result, err := svc.InsertText(context.Background(), "doc-1", authorID, 0, "hello")
 	if err != nil {
 		t.Fatalf("insert text failed: %v", err)
@@ -169,7 +169,7 @@ func TestServiceDeleteLine(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	authorID := strID(t,"author")
+	authorID := strID(t, "author")
 	svc.InsertText(context.Background(), "doc-1", authorID, 0, "hello")
 	svc.InsertText(context.Background(), "doc-1", authorID, 1, "world")
 
@@ -191,7 +191,7 @@ func TestServiceFormatBlock(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	authorID := strID(t,"author")
+	authorID := strID(t, "author")
 	svc.InsertText(context.Background(), "doc-1", authorID, 0, "heading text")
 
 	_, result, err := svc.FormatBlock(context.Background(), "doc-1", authorID, 0, BlockHeading1)
@@ -225,7 +225,7 @@ func TestServiceStats(t *testing.T) {
 	svc := NewService(ServiceConfig{NodeID: "node-1"})
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
-	authorID := strID(t,"author")
+	authorID := strID(t, "author")
 	svc.InsertText(context.Background(), "doc-1", authorID, 0, "x")
 
 	stats := svc.Stats()
@@ -256,7 +256,7 @@ func TestServiceUpdatePresence(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	peerID := strID(t,"peer-1")
+	peerID := strID(t, "peer-1")
 	svc.UpdatePresence(context.Background(), "doc-1", "Alice", peerID, 5, 10)
 
 	presences := svc.GetDocPresence("doc-1")
@@ -272,7 +272,7 @@ func TestServiceUpdatePresenceNoDoc(t *testing.T) {
 	svc := NewService(ServiceConfig{NodeID: "node-1"})
 	_ = svc.eventCh
 	// Should not panic when doc doesn't exist
-	svc.UpdatePresence(context.Background(), "nonexistent", "Alice", strID(t,"p1"), 0, 0)
+	svc.UpdatePresence(context.Background(), "nonexistent", "Alice", strID(t, "p1"), 0, 0)
 }
 
 func TestServiceMarshalUnmarshal(t *testing.T) {
@@ -308,7 +308,7 @@ func TestServiceHandleOperation(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	peerID := strID(t,"peer-a")
+	peerID := strID(t, "peer-a")
 	op := NewInsertOp("doc-1", peerID, 0, "remote", 42)
 	payload, _ := encodeOpPayload(op, "doc-1")
 	msgBytes, _ := encodeDocMessage(&DocMessage{
@@ -329,7 +329,7 @@ func TestServiceHandleOperationUnknownDoc(t *testing.T) {
 	svc := NewService(ServiceConfig{NodeID: "node-1"})
 	_ = svc.eventCh
 
-	peerID := strID(t,"peer-a")
+	peerID := strID(t, "peer-a")
 	op := NewInsertOp("nonexistent", peerID, 0, "x", 1)
 	payload, _ := encodeOpPayload(op, "nonexistent")
 	msgBytes, _ := encodeDocMessage(&DocMessage{
@@ -368,7 +368,7 @@ func TestServiceHandlePresence(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	peerID := strID(t,"peer-1")
+	peerID := strID(t, "peer-1")
 	payload := marshalPresenceUpdate("doc-1", peerID, "Alice", 3, 7)
 	msgBytes, _ := encodeDocMessage(&DocMessage{Type: DocMsgPresence, DocID: "doc-1", Payload: payload})
 	msg, _ := decodeDocMessage(msgBytes)
@@ -421,7 +421,7 @@ func TestServiceBroadcastOnLocalOp(t *testing.T) {
 	svc := NewService(ServiceConfig{NodeID: "node-1", Notifier: mock})
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
-	authorID := strID(t,"author")
+	authorID := strID(t, "author")
 	svc.InsertText(context.Background(), "doc-1", authorID, 0, "broadcast test")
 
 	count := mock.count()
@@ -451,7 +451,7 @@ func TestServicePresenceBroadcast(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	peerID := strID(t,"peer-1")
+	peerID := strID(t, "peer-1")
 	svc.UpdatePresence(context.Background(), "doc-1", "Alice", peerID, 2, 3)
 
 	count := mock.count()
@@ -464,7 +464,7 @@ func TestDocMessageRoundTrip(t *testing.T) {
 	original := &DocMessage{
 		Type:      DocMsgOperation,
 		DocID:     "test-doc",
-		AuthorID:  strID(t,"author"),
+		AuthorID:  strID(t, "author"),
 		Timestamp: 1234567890,
 		Payload:   []byte("test payload"),
 	}
@@ -501,7 +501,7 @@ func TestDocMessageTooShort(t *testing.T) {
 }
 
 func TestOpRoundTrip(t *testing.T) {
-	original := NewInsertOp("doc-1", strID(t,"author"), 5, "hello world", 9999)
+	original := NewInsertOp("doc-1", strID(t, "author"), 5, "hello world", 9999)
 	payload := marshalOp(original)
 	decoded, err := unmarshalOp(payload)
 	if err != nil {
@@ -522,7 +522,7 @@ func TestOpRoundTrip(t *testing.T) {
 }
 
 func TestOpPayloadRoundTrip(t *testing.T) {
-	op := NewFormatBlockOp("doc-1", strID(t,"a"), 2, BlockHeading2, 5000)
+	op := NewFormatBlockOp("doc-1", strID(t, "a"), 2, BlockHeading2, 5000)
 	data, err := encodeOpPayload(op, "doc-1")
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -547,7 +547,7 @@ func TestOpPayloadRoundTrip(t *testing.T) {
 
 func TestPresenceUpdateRoundTrip(t *testing.T) {
 	docID := "doc-pres"
-	peerID := strID(t,"peer-x")
+	peerID := strID(t, "peer-x")
 	peerName := "Charlie"
 	line, col := 7, 12
 
@@ -602,7 +602,7 @@ func TestServiceConcurrentAccess(t *testing.T) {
 	_ = svc.eventCh
 	svc.CreateDocument("doc-1", "Doc")
 
-	authorID := strID(t,"author")
+	authorID := strID(t, "author")
 	var wg sync.WaitGroup
 	wg.Add(20)
 	for i := 0; i < 20; i++ {
@@ -655,4 +655,3 @@ func TestGenerateNodeID(t *testing.T) {
 		t.Fatal("expected GenerateNodeID to hash the key, not return it directly")
 	}
 }
-

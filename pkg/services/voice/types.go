@@ -13,7 +13,7 @@ type CodecID uint8
 
 const (
 	CodecOpus CodecID = iota + 1 // Opus audio
-	CodecVP9                      // VP9 video
+	CodecVP9                     // VP9 video
 )
 
 // MediaType classifies a media payload.
@@ -57,9 +57,9 @@ func (s CallState) String() string {
 type CandidateType uint8
 
 const (
-	CandidateHost             CandidateType = iota // host
-	CandidateServerReflexive                       // srflx
-	CandidateRelay                                 // relay
+	CandidateHost            CandidateType = iota // host
+	CandidateServerReflexive                      // srflx
+	CandidateRelay                                // relay
 )
 
 // ICECandidate describes a network candidate for peer connectivity.
@@ -77,7 +77,7 @@ type ICECandidate struct {
 type TrackDirection uint8
 
 const (
-	TrackDirectionSend    TrackDirection = iota + 1
+	TrackDirectionSend TrackDirection = iota + 1
 	TrackDirectionRecv
 	TrackDirectionSendRecv
 )
@@ -94,11 +94,11 @@ const (
 
 // TrackInfo describes a negotiated media track.
 type TrackInfo struct {
-	ID        string
-	Kind      TrackKind
-	Direction TrackDirection
-	Codec     CodecID
-	MimeType  string
+	ID         string
+	Kind       TrackKind
+	Direction  TrackDirection
+	Codec      CodecID
+	MimeType   string
 	SampleRate uint32 // audio: Hz; video: ignored
 	FrameRate  uint32 // video: fps; audio: ignored
 	Width      uint32 // video only
@@ -131,21 +131,21 @@ type CallConfig struct {
 
 // MediaStats carries per-track quality metrics.
 type MediaStats struct {
-	TrackID      string
-	BytesSent    uint64
-	BytesRecv    uint64
-	PacketsLost  uint32
-	Jitter       float64 // ms
-	RTT          float64 // ms
-	Bitrate      uint32  // kbps current
-	LastUpdate   time.Time
+	TrackID     string
+	BytesSent   uint64
+	BytesRecv   uint64
+	PacketsLost uint32
+	Jitter      float64 // ms
+	RTT         float64 // ms
+	Bitrate     uint32  // kbps current
+	LastUpdate  time.Time
 }
 
 // SignalType identifies a signaling message.
 type SignalType uint8
 
 const (
-	SignalTypeOffer  SignalType = iota + 1
+	SignalTypeOffer SignalType = iota + 1
 	SignalTypeAnswer
 	SignalTypeICECandidate
 	SignalTypeBye
@@ -165,14 +165,14 @@ type SignalMessage struct {
 type GroupCallRole uint8
 
 const (
-	GroupRoleHub   GroupCallRole = iota + 1 // hub
-	GroupRolePeer                            // leaf
+	GroupRoleHub  GroupCallRole = iota + 1 // hub
+	GroupRolePeer                          // leaf
 )
 
 // GroupCallConfig describes a multi-party call.
 type GroupCallConfig struct {
-	ChannelID string
-	Peers     []PeerID
+	ChannelID   string
+	Peers       []PeerID
 	EnableVideo bool
 	EnableData  bool
 }

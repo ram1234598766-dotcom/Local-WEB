@@ -157,7 +157,6 @@ func TestEncodeBlockRoundTrip(t *testing.T) {
 	}
 }
 
-
 func TestSyncProgressFields(t *testing.T) {
 	p := SyncProgress{
 		PeerID:    [32]byte{1},

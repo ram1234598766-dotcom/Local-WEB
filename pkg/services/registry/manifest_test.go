@@ -15,11 +15,11 @@ func TestValidateNilManifest(t *testing.T) {
 
 func TestValidateEmptyFields(t *testing.T) {
 	m := &Manifest{
-		Name:    "",
-		Version: "1.0.0",
-		Entry:   "main.go",
-		Author:  "test",
-		Size:    0,
+		Name:      "",
+		Version:   "1.0.0",
+		Entry:     "main.go",
+		Author:    "test",
+		Size:      0,
 		Checksums: map[string]string{},
 	}
 	err := Validate(m)
@@ -150,18 +150,18 @@ func TestIsValidPlatform(t *testing.T) {
 func TestMarshalUnmarshalManifest(t *testing.T) {
 	now := time.Now().UTC()
 	m := &Manifest{
-		Name:        "roundtrip-app",
-		Version:     "3.0.0",
-		Description: "Test roundtrip",
-		Author:      "tester",
-		Homepage:    "https://example.com",
-		License:     "BSD-3",
-		Entry:       "start.sh",
-		Platform:    []string{"linux", "darwin"},
+		Name:         "roundtrip-app",
+		Version:      "3.0.0",
+		Description:  "Test roundtrip",
+		Author:       "tester",
+		Homepage:     "https://example.com",
+		License:      "BSD-3",
+		Entry:        "start.sh",
+		Platform:     []string{"linux", "darwin"},
 		Dependencies: []string{"dep1"},
-		Checksums:   map[string]string{"a": "b"},
-		Size:        2048,
-		Created:     now,
+		Checksums:    map[string]string{"a": "b"},
+		Size:         2048,
+		Created:      now,
 	}
 
 	data, err := MarshalManifest(m)

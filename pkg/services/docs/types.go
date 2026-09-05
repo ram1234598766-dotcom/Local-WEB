@@ -13,7 +13,7 @@ import (
 type BlockType uint8
 
 const (
-	BlockParagraph   BlockType = iota // Plain text paragraph
+	BlockParagraph    BlockType = iota // Plain text paragraph
 	BlockHeading1                      // # Heading
 	BlockHeading2                      // ## Heading
 	BlockHeading3                      // ### Heading
@@ -70,10 +70,10 @@ func ParseBlockType(s string) BlockType {
 type OpType uint8
 
 const (
-	OpInsert OpType = iota // Insert text at a position
-	OpDelete               // Delete text at a position
-	OpFormatBlock          // Change a block's formatting
-	OpTitleChange          // Change the document title
+	OpInsert      OpType = iota // Insert text at a position
+	OpDelete                    // Delete text at a position
+	OpFormatBlock               // Change a block's formatting
+	OpTitleChange               // Change the document title
 )
 
 func (o OpType) String() string {

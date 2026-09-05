@@ -29,21 +29,19 @@ func openTUN(name string) (Interface, error) {
 	}
 
 	// Get a utun control identifier
-	var ctlID unix.Sysctl {
-		// This will be set by the kernel
-	}
+	ctlID := unix.Sysctl{}
 	_ = ctlID
 
 	// Use xcrun-style approach: connect to utun control
 	// The UTUN_CONTROL_IDENTIFIER is a fixed UUID in NetworkExtension
 	// For simplicity, we use the standard approach
 	var sc struct {
-		Id      uint32
-		Len     uint32
-		Status  uint32
-		Flags   uint32
-		RegId   uint32
-		Spad    [8]uint32
+		Id     uint32
+		Len    uint32
+		Status uint32
+		Flags  uint32
+		RegId  uint32
+		Spad   [8]uint32
 	}
 	_ = sc
 
@@ -62,10 +60,10 @@ func openTUNFallback(name string, sock int) (Interface, error) {
 	// Use the sys_control approach for utun
 	// Set up sockaddr_ctl to connect to the utun control
 	var addr struct {
-		ScArg   [16]byte
-		ScId    uint32
-		ScUnit  uint32
-		ScRsvd  [64]byte
+		ScArg  [16]byte
+		ScId   uint32
+		ScUnit uint32
+		ScRsvd [64]byte
 	}
 	_ = addr
 	_ = os.Stderr

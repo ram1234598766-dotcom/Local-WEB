@@ -26,24 +26,24 @@ type PeerHandler func(ctx context.Context, peer PeerID, trackID string, payload 
 
 // VoiceServer coordinates voice/video sessions over QUIC streams.
 type VoiceServer struct {
-	mu         sync.RWMutex
-	server     *transport.Server // QUIC transport server
-	messaging  transport.StreamHandler
-	calls      *CallManager
+	mu        sync.RWMutex
+	server    *transport.Server // QUIC transport server
+	messaging transport.StreamHandler
+	calls     *CallManager
 	trackers  map[PeerID]*TrackManager // per-peer track state
-	hubRole    bool                     // true if this node is the group-call hub
-	handlers   map[string]PeerHandler   // trackID -> handler
-	closed     bool
+	hubRole   bool                     // true if this node is the group-call hub
+	handlers  map[string]PeerHandler   // trackID -> handler
+	closed    bool
 }
 
 // NewVoiceServer wires the voice service into an existing QUIC server.
 func NewVoiceServer(srv *transport.Server, hubRole bool) *VoiceServer {
 	v := &VoiceServer{
-		server:    srv,
-		calls:     NewCallManager(),
-		trackers:  make(map[PeerID]*TrackManager),
-		hubRole:   hubRole,
-		handlers:  make(map[string]PeerHandler),
+		server:   srv,
+		calls:    NewCallManager(),
+		trackers: make(map[PeerID]*TrackManager),
+		hubRole:  hubRole,
+		handlers: make(map[string]PeerHandler),
 	}
 	srv.RegisterHandler(transport.ServiceVoice, v.handleStream)
 	return v

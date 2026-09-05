@@ -9,9 +9,9 @@ import (
 
 func TestDocumentCreate(t *testing.T) {
 	doc := NewDocument(DocumentConfig{
-		ID:      "doc-1",
-		Title:   "Test Doc",
-		NodeID:  "node-1",
+		ID:     "doc-1",
+		Title:  "Test Doc",
+		NodeID: "node-1",
 	})
 	if doc.ID() != "doc-1" {
 		t.Fatalf("expected doc ID 'doc-1', got %q", doc.ID())
@@ -328,4 +328,3 @@ func TestDocumentMarshalEmptyRoundTrip(t *testing.T) {
 		t.Fatalf("expected 'doc-e', got %q", doc2.ID())
 	}
 }
-

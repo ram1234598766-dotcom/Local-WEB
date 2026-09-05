@@ -15,11 +15,11 @@ import (
 
 // dhtMetaStore is the concrete DHT-backed implementation of DHTDistributor.
 type dhtMetaStore struct {
-	mu       sync.Mutex
-	dht      *dht.DHT
-	nodeID   dht.NodeID
-	pubKey   [32]byte
-	local    map[string]*PackageMeta
+	mu     sync.Mutex
+	dht    *dht.DHT
+	nodeID dht.NodeID
+	pubKey [32]byte
+	local  map[string]*PackageMeta
 }
 
 // NewDHTDistributor creates a DHT-backed metadata distributor.
@@ -118,18 +118,18 @@ func (d *dhtMetaStore) RemoveLocal(id string) {
 // marshalPackageMeta serializes PackageMeta to JSON bytes.
 func marshalPackageMeta(m *PackageMeta) ([]byte, error) {
 	type alias struct {
-		ID          string    `json:"id"`
-		Name        string    `json:"name"`
-		Version     string    `json:"version"`
-		Description string    `json:"description"`
-		Author      string    `json:"author"`
-		Platform    []string  `json:"platform"`
-		Entry       string    `json:"entry"`
-		Published   int64     `json:"published"`
-		Updated     int64     `json:"updated"`
-		Downloads   int64     `json:"downloads"`
-		Verified    bool      `json:"verified"`
-		PublisherID [32]byte  `json:"publisher_id"`
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Version     string   `json:"version"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Platform    []string `json:"platform"`
+		Entry       string   `json:"entry"`
+		Published   int64    `json:"published"`
+		Updated     int64    `json:"updated"`
+		Downloads   int64    `json:"downloads"`
+		Verified    bool     `json:"verified"`
+		PublisherID [32]byte `json:"publisher_id"`
 	}
 	a := alias{
 		ID:          m.ID,
@@ -151,18 +151,18 @@ func marshalPackageMeta(m *PackageMeta) ([]byte, error) {
 // unmarshalPackageMeta deserializes bytes into PackageMeta.
 func unmarshalPackageMeta(data []byte) (*PackageMeta, error) {
 	type alias struct {
-		ID          string    `json:"id"`
-		Name        string    `json:"name"`
-		Version     string    `json:"version"`
-		Description string    `json:"description"`
-		Author      string    `json:"author"`
-		Platform    []string  `json:"platform"`
-		Entry       string    `json:"entry"`
-		Published   int64     `json:"published"`
-		Updated     int64     `json:"updated"`
-		Downloads   int64     `json:"downloads"`
-		Verified    bool      `json:"verified"`
-		PublisherID [32]byte  `json:"publisher_id"`
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Version     string   `json:"version"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Platform    []string `json:"platform"`
+		Entry       string   `json:"entry"`
+		Published   int64    `json:"published"`
+		Updated     int64    `json:"updated"`
+		Downloads   int64    `json:"downloads"`
+		Verified    bool     `json:"verified"`
+		PublisherID [32]byte `json:"publisher_id"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {

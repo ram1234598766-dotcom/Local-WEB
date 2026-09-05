@@ -31,6 +31,7 @@ type Store struct {
 	key    [32]byte
 	closed bool
 }
+
 // Open creates or opens a BadgerDB store at the given path with encryption.
 func Open(path string, key [32]byte) (*Store, error) {
 	if err := os.MkdirAll(path, 0700); err != nil {

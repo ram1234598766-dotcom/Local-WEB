@@ -17,9 +17,9 @@ func TestMailbox_StoreAndLoad(t *testing.T) {
 	require.NoError(t, err)
 
 	msg := &Message{
-		ID:     "test-id",
-		From:   "bob@example.com",
-		To:     []string{"alice@localweb"},
+		ID:      "test-id",
+		From:    "bob@example.com",
+		To:      []string{"alice@localweb"},
 		Subject: "Hello",
 		Body:    "World",
 		Headers: map[string]string{"X-Test": "true"},

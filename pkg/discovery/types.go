@@ -9,25 +9,25 @@ import (
 type EventType int
 
 const (
-	PeerFound    EventType = iota
+	PeerFound EventType = iota
 	PeerLost
 	PeerUpdated
 )
 
 // PeerInfo holds comprehensive peer information.
 type PeerInfo struct {
-	ID           [32]byte
-	PublicKey    [32]byte
-	Name         string
-	Addrs        []string
-	Services     []ServiceInfo
-	Source       string // Which discovery method found this peer
-	RSSI         int32
-	Latency      time.Duration
-	Score        float64
-	LastSeen     time.Time
-	FirstSeen    time.Time
-	Version      string
+	ID        [32]byte
+	PublicKey [32]byte
+	Name      string
+	Addrs     []string
+	Services  []ServiceInfo
+	Source    string // Which discovery method found this peer
+	RSSI      int32
+	Latency   time.Duration
+	Score     float64
+	LastSeen  time.Time
+	FirstSeen time.Time
+	Version   string
 }
 
 // ServiceInfo describes a service offered by a peer.
@@ -39,9 +39,9 @@ type ServiceInfo struct {
 
 // PeerEvent represents a discovery event.
 type PeerEvent struct {
-	Type  EventType
-	Peer  PeerInfo
-	Time  time.Time
+	Type EventType
+	Peer PeerInfo
+	Time time.Time
 }
 
 // PeerDatabase stores discovered peers with deduplication and scoring.

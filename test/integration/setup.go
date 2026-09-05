@@ -128,9 +128,9 @@ func TestPeerDatabaseCRUD(t *testing.T) {
 	}
 
 	p2 := discovery.PeerInfo{
-		ID:       [32]byte{1},
-		Name:     "alice-updated",
-		Score:    0.9,
+		ID:    [32]byte{1},
+		Name:  "alice-updated",
+		Score: 0.9,
 	}
 	db.Add(p2)
 	got2, _ := db.Get([32]byte{1})
@@ -154,9 +154,9 @@ func TestPeerDatabaseDedup(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		p := discovery.PeerInfo{
-			ID:       [32]byte{1},
-			Name:     "dup",
-			Score:    float64(i) / 10.0,
+			ID:    [32]byte{1},
+			Name:  "dup",
+			Score: float64(i) / 10.0,
 		}
 		db.Add(p)
 	}
@@ -406,8 +406,8 @@ func TestDHTRouting(t *testing.T) {
 
 func TestDNSRecordHandling(t *testing.T) {
 	record := discovery.PeerInfo{
-		ID:       [32]byte{0x42},
-		Name:     "test.localweb",
+		ID:   [32]byte{0x42},
+		Name: "test.localweb",
 		Services: []discovery.ServiceInfo{
 			{Name: "http", Port: 80},
 			{Name: "dns", Port: 53},

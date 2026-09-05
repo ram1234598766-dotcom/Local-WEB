@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
-	mh "github.com/multiformats/go-multihash"
 	"github.com/mrityunjay/LocalWEB/pkg/discovery"
 	"github.com/mrityunjay/LocalWEB/pkg/link"
 	"github.com/mrityunjay/LocalWEB/pkg/services/voice"
+	mh "github.com/multiformats/go-multihash"
 )
 
 // ---------------------------------------------------------------------------
@@ -89,9 +89,9 @@ func makePeerID(i int) voice.PeerID {
 
 func makeCallConfig(caller, callee voice.PeerID, channel string) voice.CallConfig {
 	return voice.CallConfig{
-		Caller:    caller,
-		Callee:    callee,
-		ChannelID: channel,
+		Caller:     caller,
+		Callee:     callee,
+		ChannelID:  channel,
 		AudioCodec: voice.CodecOpus,
 		VideoCodec: voice.CodecVP9,
 	}

@@ -1,0 +1,19 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    -staticcheck
+    - unused
+    - misspell
+
+linters_settings:
+  errcheck:
+    check-type-assertions: false
+    check-blank: false
+  misspell:
+    locale: US

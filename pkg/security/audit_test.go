@@ -143,9 +143,9 @@ func TestWithContextEnrichesEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer := &discovery.PeerInfo{
-		ID:    pid,
-		Name:  "alpha",
-		Addrs: []string{"10.0.0.1:9000"},
+		ID:     pid,
+		Name:   "alpha",
+		Addrs:  []string{"10.0.0.1:9000"},
 		Source: "ble",
 	}
 	evt := WithContext(AuditEvent{Type: AuditConnection, PeerID: pid}, peer)

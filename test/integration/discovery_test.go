@@ -118,8 +118,8 @@ func TestOrchestratorPeerFoundUpdatesDB(t *testing.T) {
 
 func TestOrchestratorSkipsSelf(t *testing.T) {
 	orch := discovery.NewOrchestrator(discovery.OrchestratorConfig{
-		NodeID:    [32]byte{42},
-		Name:      "self",
+		NodeID: [32]byte{42},
+		Name:   "self",
 	})
 	orch.OnPeer(func(discovery.PeerEvent) {})
 
@@ -132,8 +132,8 @@ func TestOrchestratorSkipsSelf(t *testing.T) {
 
 func TestOrchestratorPeerLostDecaysScore(t *testing.T) {
 	orch := discovery.NewOrchestrator(discovery.OrchestratorConfig{
-		NodeID:    [32]byte{1},
-		Name:      "host",
+		NodeID: [32]byte{1},
+		Name:   "host",
 	})
 	peerID := [32]byte{2}
 	orch.HandleEvent(discovery.PeerEvent{
@@ -197,15 +197,15 @@ func TestTwoNodeDiscoveryAllLinkTypes(t *testing.T) {
 
 			// Simulate the remote peer advertising
 			remotePeer := discovery.PeerInfo{
-				ID:        [32]byte{byte(mode), 1},
-				Name:      "remote-" + mode.String(),
-				Addrs:     []string{"10.0.0.2:4443"},
-				Services:  []discovery.ServiceInfo{{Name: "dns", Port: 5353}},
+				ID:       [32]byte{byte(mode), 1},
+				Name:     "remote-" + mode.String(),
+				Addrs:    []string{"10.0.0.2:4443"},
+				Services: []discovery.ServiceInfo{{Name: "dns", Port: 5353}},
 			}
 			fakeMode.events <- discovery.PeerEvent{
-				Type:  discovery.PeerFound,
-				Peer:  remotePeer,
-				Time:  time.Now(),
+				Type: discovery.PeerFound,
+				Peer: remotePeer,
+				Time: time.Now(),
 			}
 
 			select {

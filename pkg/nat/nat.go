@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	UPnPSSDPAddr     = "239.255.255.250:1900"
-	UPnPMSearchMsg   = "M-SEARCH * HTTP/1.1\r\nHost: 239.255.255.250:1900\r\nMan: \"ssdp:discover\"\r\nST: upnp:rootdevice\r\nMX: 3\r\n\r\n"
-	UPnPDescPath     = "/description.xml"
-	UPnPAddPortMap   = "AddPortMapping"
+	UPnPSSDPAddr      = "239.255.255.250:1900"
+	UPnPMSearchMsg    = "M-SEARCH * HTTP/1.1\r\nHost: 239.255.255.250:1900\r\nMan: \"ssdp:discover\"\r\nST: upnp:rootdevice\r\nMX: 3\r\n\r\n"
+	UPnPDescPath      = "/description.xml"
+	UPnPAddPortMap    = "AddPortMapping"
 	UPnPDeletePortMap = "DeletePortMapping"
 )
 

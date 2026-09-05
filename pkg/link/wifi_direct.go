@@ -15,24 +15,24 @@ import (
 
 // WiFiDirect implements Link for WiFi Direct (P2P, no router needed).
 type WiFiDirect struct {
-	mu            sync.Mutex
-	iface         string            // Network interface name
-	groupOwner    bool              // Are we the Group Owner?
-	groupSSID     string            // Current group SSID
-	groupPasswd   string            // WPS password
-	peers         map[string]*WDPeer // MAC → peer info
-	wpaCtrlPath   string            // Path to wpa_cli control socket
-	ctx           context.Context
-	cancel        context.CancelFunc
+	mu          sync.Mutex
+	iface       string             // Network interface name
+	groupOwner  bool               // Are we the Group Owner?
+	groupSSID   string             // Current group SSID
+	groupPasswd string             // WPS password
+	peers       map[string]*WDPeer // MAC → peer info
+	wpaCtrlPath string             // Path to wpa_cli control socket
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // WDPeer holds WiFi Direct peer information.
 type WDPeer struct {
-	MAC       net.HardwareAddr
+	MAC        net.HardwareAddr
 	DeviceName string
 	Interfaces []string // P2P interface addresses
-	Connected bool
-	LastSeen  time.Time
+	Connected  bool
+	LastSeen   time.Time
 }
 
 // NewWiFiDirect creates a WiFi Direct link.
@@ -56,12 +56,12 @@ func NewWiFiDirect() (*WiFiDirect, error) {
 	return w, nil
 }
 
-func (w *WiFiDirect) Name() string           { return "wifi-direct" }
-func (w *WiFiDirect) Mode() LinkMode         { return ModeWiFiDirect }
-func (w *WiFiDirect) RequiresWiFi() bool     { return true }
-func (w *WiFiDirect) RequiresRouter() bool   { return false }
-func (w *WiFiDirect) Bandwidth() int         { return 250 } // Up to 250 Mbps
-func (w *WiFiDirect) MaxPeers() int          { return 10 }
+func (w *WiFiDirect) Name() string         { return "wifi-direct" }
+func (w *WiFiDirect) Mode() LinkMode       { return ModeWiFiDirect }
+func (w *WiFiDirect) RequiresWiFi() bool   { return true }
+func (w *WiFiDirect) RequiresRouter() bool { return false }
+func (w *WiFiDirect) Bandwidth() int       { return 250 } // Up to 250 Mbps
+func (w *WiFiDirect) MaxPeers() int        { return 10 }
 
 func (w *WiFiDirect) IsAvailable(ctx context.Context) bool {
 	// Check if WiFi Direct is supported

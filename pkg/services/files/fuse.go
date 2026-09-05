@@ -10,18 +10,18 @@ import (
 // fuseMount is a stub FUSE mount for v1.0. Full implementation will use
 // go-fuse (github.com/hanwen/go-fuse/v2) on Linux/macOS and Dokany on Windows.
 type fuseMount struct {
-	mu       sync.RWMutex
-	path     string
-	mounted  bool
-	store    BlockStore
+	mu        sync.RWMutex
+	path      string
+	mounted   bool
+	store     BlockStore
 	fileStore FileStore
-	started  time.Time
+	started   time.Time
 }
 
 // NewFS creates a new FUSE filesystem interface.
 func NewFS(store BlockStore, fileStore FileStore) FS {
 	return &fuseMount{
-		store:    store,
+		store:     store,
 		fileStore: fileStore,
 	}
 }

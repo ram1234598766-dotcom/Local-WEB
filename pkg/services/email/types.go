@@ -20,20 +20,20 @@ const ServiceID = transport.ServiceID('E')
 
 // Message represents an email message.
 type Message struct {
-	ID          string
-	From        string
-	To          []string
-	CC          []string
-	BCC         []string
-	Subject     string
-	Body        string
-	Headers     map[string]string
-	Received    time.Time
-	Size        int64
-	UID         uint32
-	Flags       MailFlags
-	Maildir     string
-	Filename    string
+	ID       string
+	From     string
+	To       []string
+	CC       []string
+	BCC      []string
+	Subject  string
+	Body     string
+	Headers  map[string]string
+	Received time.Time
+	Size     int64
+	UID      uint32
+	Flags    MailFlags
+	Maildir  string
+	Filename string
 }
 
 // MailFlags represents IMAP message flags.
@@ -72,24 +72,24 @@ const (
 
 // Mailbox represents a user's mailbox.
 type Mailbox struct {
-	Name      string
-	Path      string
+	Name        string
+	Path        string
 	UIDValidity uint32
-	UIDNext   uint32
-	Messages  []*Message
-	mu        sync.RWMutex
+	UIDNext     uint32
+	Messages    []*Message
+	mu          sync.RWMutex
 }
 
 // QueueEntry represents an entry in the offline delivery queue.
 type QueueEntry struct {
-	ID        string
-	Message   *Message
-	PeerID    [32]byte
-	Attempts  int
+	ID          string
+	Message     *Message
+	PeerID      [32]byte
+	Attempts    int
 	MaxAttempts int
-	NextRetry time.Time
-	Created   time.Time
-	LastError error
+	NextRetry   time.Time
+	Created     time.Time
+	LastError   error
 }
 
 // Queue manages offline message delivery.
@@ -199,10 +199,10 @@ func (s *MailboxStore) GetOrCreateMailbox(user string) (*Mailbox, error) {
 	}
 
 	m := &Mailbox{
-		Name:       user,
-		Path:       userPath,
+		Name:        user,
+		Path:        userPath,
 		UIDValidity: uint32(time.Now().Unix()),
-		UIDNext:    1,
+		UIDNext:     1,
 	}
 	s.users[user] = m
 	return m, nil

@@ -10,13 +10,13 @@ import (
 type LinkMode int
 
 const (
-	ModeWiFiStation   LinkMode = iota // Connected to WiFi router
-	ModeWiFiDirect                     // P2P, no router
-	ModeAdHocWiFi                      // IBSS mode
-	ModeUSBTether                      // USB cable
-	ModeBLE                            // Bluetooth Low Energy
-	ModeAcoustic                       // Audio coupling (emergency)
-	ModeNone                           // No connectivity
+	ModeWiFiStation LinkMode = iota // Connected to WiFi router
+	ModeWiFiDirect                  // P2P, no router
+	ModeAdHocWiFi                   // IBSS mode
+	ModeUSBTether                   // USB cable
+	ModeBLE                         // Bluetooth Low Energy
+	ModeAcoustic                    // Audio coupling (emergency)
+	ModeNone                        // No connectivity
 )
 
 func (m LinkMode) String() string {
@@ -76,9 +76,9 @@ type Link interface {
 
 // PeerEvent represents a discovery event.
 type PeerEvent struct {
-	Type  EventType
-	Peer  PeerInfo
-	Time  time.Time
+	Type EventType
+	Peer PeerInfo
+	Time time.Time
 }
 
 // EventType is the kind of peer event.
@@ -92,27 +92,27 @@ const (
 
 // PeerInfo holds information about a discovered peer.
 type PeerInfo struct {
-	ID           [32]byte          // SHA3-256 of public key
-	PublicKey    [32]byte          // Ed25519 public key
-	Name         string            // Human-readable name
-	Addrs        []string          // Network addresses (ip:port)
-	Services     []string          // Capabilities: dns, http, smtp, etc.
-	LinkMode     LinkMode          // How we discovered this peer
-	RSSI         int32             // Signal strength (BLE/WiFi)
-	Latency      time.Duration     // Round-trip time
-	Score        float64           // 0.0 → 1.0 reliability score
-	LastSeen     time.Time
-	Version      string            // Software version
+	ID        [32]byte      // SHA3-256 of public key
+	PublicKey [32]byte      // Ed25519 public key
+	Name      string        // Human-readable name
+	Addrs     []string      // Network addresses (ip:port)
+	Services  []string      // Capabilities: dns, http, smtp, etc.
+	LinkMode  LinkMode      // How we discovered this peer
+	RSSI      int32         // Signal strength (BLE/WiFi)
+	Latency   time.Duration // Round-trip time
+	Score     float64       // 0.0 → 1.0 reliability score
+	LastSeen  time.Time
+	Version   string // Software version
 }
 
 // LinkConfig holds configuration for a specific link type.
 type LinkConfig struct {
-	Mode            LinkMode
-	Enabled         bool
+	Mode              LinkMode
+	Enabled           bool
 	AdvertiseInterval time.Duration
-	ScanInterval    time.Duration
-	MaxRetries      int
-	Timeout         time.Duration
+	ScanInterval      time.Duration
+	MaxRetries        int
+	Timeout           time.Duration
 }
 
 // DefaultLinkConfigs returns sensible defaults for all link types.

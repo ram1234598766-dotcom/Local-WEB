@@ -19,12 +19,12 @@ import (
 type AuditEventType string
 
 const (
-	AuditAuthSuccess    AuditEventType = "auth_success"
-	AuditAuthFailure    AuditEventType = "auth_failure"
-	AuditConnection     AuditEventType = "connection"
-	AuditDisconnection  AuditEventType = "disconnection"
+	AuditAuthSuccess     AuditEventType = "auth_success"
+	AuditAuthFailure     AuditEventType = "auth_failure"
+	AuditConnection      AuditEventType = "connection"
+	AuditDisconnection   AuditEventType = "disconnection"
 	AuditCapabilityGrant AuditEventType = "capability_grant"
-	AuditRelayUse       AuditEventType = "relay_use"
+	AuditRelayUse        AuditEventType = "relay_use"
 )
 
 // AuditEvent records a single security-relevant event.
@@ -52,15 +52,15 @@ func (e AuditEvent) MarshalJSON() ([]byte, error) {
 
 // entry is an append-only log entry with a hash chain for tamper detection.
 type entry struct {
-	event   AuditEvent
+	event    AuditEvent
 	prevHash [32]byte
 	hash     [32]byte
 }
 
 // AuditLog provides an append-only, tamper-evident audit trail.
 type AuditLog struct {
-	mu      sync.RWMutex
-	entries []entry
+	mu       sync.RWMutex
+	entries  []entry
 	lastHash [32]byte
 }
 
@@ -88,7 +88,7 @@ func (l *AuditLog) Log(evt AuditEvent) error {
 	defer l.mu.Unlock()
 
 	e := entry{
-		event:   evt,
+		event:    evt,
 		prevHash: l.lastHash,
 	}
 	h := crypto.SHA3Hash(append(l.lastHash[:], b...))
@@ -145,9 +145,9 @@ func (l *AuditLog) Export(w io.Writer) error {
 
 	for _, e := range l.entries {
 		b, err := json.Marshal(struct {
-			Event    AuditEvent    `json:"event"`
-			PrevHash string        `json:"prev_hash"`
-			Hash     string        `json:"hash"`
+			Event    AuditEvent `json:"event"`
+			PrevHash string     `json:"prev_hash"`
+			Hash     string     `json:"hash"`
 		}{
 			Event:    e.event,
 			PrevHash: hex.EncodeToString(e.prevHash[:]),

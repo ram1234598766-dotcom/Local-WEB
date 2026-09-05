@@ -12,10 +12,10 @@ import (
 
 // NATInfo describes the NAT type of the local node.
 type NATInfo struct {
-	Type        NATType
-	PublicIP    net.IP
-	PublicPort  int
-	InternalIP  net.IP
+	Type         NATType
+	PublicIP     net.IP
+	PublicPort   int
+	InternalIP   net.IP
 	InternalPort int
 }
 
@@ -23,8 +23,8 @@ type NATInfo struct {
 type NATType int
 
 const (
-	NatUnknown  NATType = iota
-	NatNone             // Public IP, no NAT
+	NatUnknown NATType = iota
+	NatNone            // Public IP, no NAT
 	NatFullCone
 	NatRestrictedCone
 	NatPortRestricted
@@ -50,11 +50,11 @@ func (n NATType) String() string {
 
 // NATTraversal handles UDP hole punching and NAT discovery.
 type NATTraversal struct {
-	udpConn   *net.UDPConn
-	localAddr *net.UDPAddr
-	publicIP  net.IP
+	udpConn    *net.UDPConn
+	localAddr  *net.UDPAddr
+	publicIP   net.IP
 	publicPort int
-	srv       *Server
+	srv        *Server
 }
 
 // NewNATTraversal creates a NAT traversal helper bound to the QUIC port.
@@ -67,9 +67,9 @@ func NewNATTraversal(server *Server, localAddr *net.UDPAddr) *NATTraversal {
 
 // DetectNAT determines the local NAT type by querying relay peers.
 // It uses the classic STUN-like three-step:
-//   1. Send packet to relay, observe source of response
-//   2. Determine if public IP changes between connections (symmetric)
-//   3. Determine if port restricted
+//  1. Send packet to relay, observe source of response
+//  2. Determine if public IP changes between connections (symmetric)
+//  3. Determine if port restricted
 func (n *NATTraversal) DetectNAT(ctx context.Context, stunPeers []string) (NATType, error) {
 	if len(stunPeers) == 0 {
 		return NatUnknown, nil

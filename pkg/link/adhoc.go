@@ -13,17 +13,17 @@ import (
 
 const (
 	adhocSSID     = "LocalWEB"
-	adhocChannel  = 6    // 2.437 GHz
+	adhocChannel  = 6 // 2.437 GHz
 	adhocSecurity = "none"
 )
 
 // AdHocWiFi implements Link for 802.11 ad-hoc (IBSS) mode.
 type AdHocWiFi struct {
-	iface    string
-	localIP  net.IP
-	ssid     string
-	channel  int
-	joined   bool
+	iface   string
+	localIP net.IP
+	ssid    string
+	channel int
+	joined  bool
 }
 
 // NewAdHocWiFi creates an ad-hoc WiFi link.
@@ -40,12 +40,12 @@ func NewAdHocWiFi() (*AdHocWiFi, error) {
 	}, nil
 }
 
-func (a *AdHocWiFi) Name() string           { return "ad-hoc-wifi" }
-func (a *AdHocWiFi) Mode() LinkMode         { return ModeAdHocWiFi }
-func (a *AdHocWiFi) RequiresWiFi() bool     { return true }
-func (a *AdHocWiFi) RequiresRouter() bool   { return false }
-func (a *AdHocWiFi) Bandwidth() int         { return 54 }  // 802.11g rates
-func (a *AdHocWiFi) MaxPeers() int          { return 20 }
+func (a *AdHocWiFi) Name() string         { return "ad-hoc-wifi" }
+func (a *AdHocWiFi) Mode() LinkMode       { return ModeAdHocWiFi }
+func (a *AdHocWiFi) RequiresWiFi() bool   { return true }
+func (a *AdHocWiFi) RequiresRouter() bool { return false }
+func (a *AdHocWiFi) Bandwidth() int       { return 54 } // 802.11g rates
+func (a *AdHocWiFi) MaxPeers() int        { return 20 }
 
 func (a *AdHocWiFi) IsAvailable(ctx context.Context) bool {
 	// Check if IBSS mode is supported
@@ -224,7 +224,7 @@ func (a *AdHocWiFi) joinLinux() error {
 
 	// Assign IP address
 	// Use 10.0.0.X where X is random 1-254
-	ip := net.IP{10, 0, 0, byte(time.Now().UnixNano() % 253 + 1)}
+	ip := net.IP{10, 0, 0, byte(time.Now().UnixNano()%253 + 1)}
 	a.localIP = ip
 
 	// Configure IP on interface

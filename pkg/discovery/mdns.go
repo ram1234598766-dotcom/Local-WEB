@@ -12,20 +12,20 @@ import (
 )
 
 const (
-	mdnsAddr     = "224.0.0.251:5353"
-	serviceType  = "_localweb._tcp.local"
-	announceInt  = 30 * time.Second
-	mdnsTTL      = 120 // seconds
+	mdnsAddr    = "224.0.0.251:5353"
+	serviceType = "_localweb._tcp.local"
+	announceInt = 30 * time.Second
+	mdnsTTL     = 120 // seconds
 )
 
 // MDNSDiscovery implements DiscoveryMode via multicast DNS.
 type MDNSDiscovery struct {
-	nodeID    [32]byte
-	name      string
-	conn      *net.UDPConn
-	peers     map[string]*mdnsPeer
-	ctx       context.Context
-	cancel    context.CancelFunc
+	nodeID [32]byte
+	name   string
+	conn   *net.UDPConn
+	peers  map[string]*mdnsPeer
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 type mdnsPeer struct {
@@ -48,8 +48,8 @@ func NewMDNSDiscovery() *MDNSDiscovery {
 	}
 }
 
-func (m *MDNSDiscovery) Name() string          { return "mdns" }
-func (m *MDNSDiscovery) RequiresWiFi() bool    { return true }
+func (m *MDNSDiscovery) Name() string       { return "mdns" }
+func (m *MDNSDiscovery) RequiresWiFi() bool { return true }
 
 func (m *MDNSDiscovery) Start(ctx context.Context, nodeID [32]byte, name string) (<-chan PeerEvent, error) {
 	m.nodeID = nodeID
@@ -158,8 +158,8 @@ func (m *MDNSDiscovery) buildAnnounce(info PeerInfo) []byte {
 	// Answer 1: SRV record
 	srvName := encodeDNSName(serviceType)
 	srvData := make([]byte, 6)
-	binary.BigEndian.PutUint16(srvData[0:2], 0)   // Priority
-	binary.BigEndian.PutUint16(srvData[2:4], 0)   // Weight
+	binary.BigEndian.PutUint16(srvData[0:2], 0)    // Priority
+	binary.BigEndian.PutUint16(srvData[2:4], 0)    // Weight
 	binary.BigEndian.PutUint16(srvData[4:6], 4443) // Port
 	srvData = append(srvData, encodeDNSName(info.Name+".local")...)
 	pkt = appendDNSAnswer(pkt, srvName, 33, mdnsTTL, srvData) // Type SRV

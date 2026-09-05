@@ -88,13 +88,13 @@ func TestVerifyIntegrity(t *testing.T) {
 
 	pkg := &LWPKG{
 		Manifest: &Manifest{
-			Name:        "app",
-			Version:     "1.0.0",
-			Entry:       "file.txt",
-			Author:      "a",
-			Size:        int64(len(content)),
-			Checksums:   map[string]string{"file.txt": checksum},
-			Created:     timeNow(),
+			Name:      "app",
+			Version:   "1.0.0",
+			Entry:     "file.txt",
+			Author:    "a",
+			Size:      int64(len(content)),
+			Checksums: map[string]string{"file.txt": checksum},
+			Created:   timeNow(),
 		},
 		Files: map[string][]byte{"file.txt": content},
 	}
@@ -171,8 +171,8 @@ func TestLWPKGRoundTripMultipleFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	files := map[string][]byte{
-		"main.go":   []byte("package main\n"),
-		"README.md": []byte("# Test App\n"),
+		"main.go":     []byte("package main\n"),
+		"README.md":   []byte("# Test App\n"),
 		"config.yaml": []byte("port: 8080\n"),
 	}
 	checksums := make(map[string]string)
@@ -182,16 +182,16 @@ func TestLWPKGRoundTripMultipleFiles(t *testing.T) {
 
 	pkg := &LWPKG{
 		Manifest: &Manifest{
-			Name:        "multi-file-app",
-			Version:     "2.0.0",
-			Description: "Multi-file test",
-			Author:      "author",
-			Entry:       "main.go",
-			Platform:    []string{"linux", "darwin"},
+			Name:         "multi-file-app",
+			Version:      "2.0.0",
+			Description:  "Multi-file test",
+			Author:       "author",
+			Entry:        "main.go",
+			Platform:     []string{"linux", "darwin"},
 			Dependencies: []string{"libc"},
-			Size:        300,
-			Checksums:   checksums,
-			Created:     timeNow(),
+			Size:         300,
+			Checksums:    checksums,
+			Created:      timeNow(),
 		},
 		Files: files,
 	}

@@ -11,18 +11,18 @@ import (
 
 // Manifest describes a LocalWEB package.
 type Manifest struct {
-	Name        string            `yaml:"name"`
-	Version     string            `yaml:"version"`
-	Description string            `yaml:"description"`
-	Author      string            `yaml:"author"`
-	Homepage    string            `yaml:"homepage,omitempty"`
-	License     string            `yaml:"license,omitempty"`
-	Entry       string            `yaml:"entry"`
-	Platform    []string          `yaml:"platform,omitempty"`
-	Dependencies []string         `yaml:"dependencies,omitempty"`
-	Checksums   map[string]string `yaml:"checksums"`
-	Size        int64             `yaml:"size"`
-	Created     time.Time         `yaml:"created"`
+	Name         string            `yaml:"name"`
+	Version      string            `yaml:"version"`
+	Description  string            `yaml:"description"`
+	Author       string            `yaml:"author"`
+	Homepage     string            `yaml:"homepage,omitempty"`
+	License      string            `yaml:"license,omitempty"`
+	Entry        string            `yaml:"entry"`
+	Platform     []string          `yaml:"platform,omitempty"`
+	Dependencies []string          `yaml:"dependencies,omitempty"`
+	Checksums    map[string]string `yaml:"checksums"`
+	Size         int64             `yaml:"size"`
+	Created      time.Time         `yaml:"created"`
 }
 
 // PackageMeta is the searchable metadata stored in the registry and DHT.
@@ -43,12 +43,12 @@ type PackageMeta struct {
 
 // SearchQuery filters package listings.
 type SearchQuery struct {
-	Query      string
-	Platform   string
-	Author     string
-	Verified   bool
-	Limit      int
-	Offset     int
+	Query    string
+	Platform string
+	Author   string
+	Verified bool
+	Limit    int
+	Offset   int
 }
 
 // SearchResult is the response for a search operation.

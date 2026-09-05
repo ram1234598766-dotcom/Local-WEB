@@ -122,8 +122,8 @@ func TestFuseInterfaceCompliance(t *testing.T) {
 
 func TestSyncProgress(t *testing.T) {
 	p := SyncProgress{
-		PeerID:    crypto.NodeID([32]byte{10}),
-		Complete:  false,
+		PeerID:   crypto.NodeID([32]byte{10}),
+		Complete: false,
 	}
 	if p.Complete {
 		t.Fatal("expected Complete=false")

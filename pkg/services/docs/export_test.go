@@ -224,7 +224,7 @@ func TestMarkdownToPlainText(t *testing.T) {
 This is a paragraph.
 > A quote
 - bullet item
-`+ "`" + `code` + "`" + `
+` + "`" + `code` + "`" + `
 `
 	pt := MarkdownToPlainText(md)
 	if !strings.Contains(pt, "Heading") {
@@ -276,4 +276,3 @@ func TestExportFormatString(t *testing.T) {
 		t.Fatalf("expected 'html', got %q", ExportHTML.String())
 	}
 }
-

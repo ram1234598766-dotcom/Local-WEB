@@ -9,23 +9,23 @@ import (
 
 // Cursor represents a user's cursor position in a document.
 type Cursor struct {
-	PeerID  [32]byte
+	PeerID   [32]byte
 	PeerName string
-	DocID   string
-	Line    int
-	Column  int
-	Color   string
+	DocID    string
+	Line     int
+	Column   int
+	Color    string
 }
 
 // Selection represents a text selection range.
 type Selection struct {
-	PeerID   [32]byte
-	PeerName string
-	DocID    string
-	StartLine  int
-	StartCol   int
-	EndLine    int
-	EndCol     int
+	PeerID    [32]byte
+	PeerName  string
+	DocID     string
+	StartLine int
+	StartCol  int
+	EndLine   int
+	EndCol    int
 }
 
 // PeerPresence tracks a peer's cursor and selection state.
@@ -76,8 +76,8 @@ func (p *PresenceService) UpdateCursor(peerID [32]byte, peerName string, line, c
 	pp, ok := p.presence[peerID]
 	if !ok {
 		pp = &PeerPresence{
-			PeerID:   peerID,
-			PeerName: peerName,
+			PeerID:    peerID,
+			PeerName:  peerName,
 			Connected: true,
 		}
 		p.presence[peerID] = pp
@@ -93,8 +93,8 @@ func (p *PresenceService) UpdateSelection(peerID [32]byte, peerName string, star
 	pp, ok := p.presence[peerID]
 	if !ok {
 		pp = &PeerPresence{
-			PeerID:   peerID,
-			PeerName: peerName,
+			PeerID:    peerID,
+			PeerName:  peerName,
 			Connected: true,
 		}
 		p.presence[peerID] = pp

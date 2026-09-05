@@ -202,9 +202,9 @@ func (s *Service) CreateDocument(docID, title string) *Document {
 		return s.docs[docID]
 	}
 	cfg := DocumentConfig{
-		ID:         docID,
-		Title:      title,
-		NodeID:     s.nodeID,
+		ID:     docID,
+		Title:  title,
+		NodeID: s.nodeID,
 		EventHandler: func(evt DocEvent) {
 			select {
 			case s.eventCh <- evt:

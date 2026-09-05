@@ -140,10 +140,10 @@ func AdaptiveBitrate(rttMs float64, packetLoss float64, currentKbps uint32) uint
 
 // Track represents a single media track (audio, video, screen, data).
 type Track struct {
-	mu       sync.RWMutex
-	info     TrackInfo
-	codec    CodecProfile
-	active   bool
+	mu     sync.RWMutex
+	info   TrackInfo
+	codec  CodecProfile
+	active bool
 }
 
 // NewTrack creates a track from a negotiated track info.

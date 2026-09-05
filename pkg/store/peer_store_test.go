@@ -61,8 +61,8 @@ func TestPeerStoreUpdate(t *testing.T) {
 		PublicKey: pub,
 		Name:      "v1",
 		Score:     1.0,
-		Addrs:    []string{"addr1"},
-		LastSeen: time.Now(),
+		Addrs:     []string{"addr1"},
+		LastSeen:  time.Now(),
 	}
 	err = ps.PutPeer(ctx, peer1)
 	require.NoError(t, err)
@@ -72,8 +72,8 @@ func TestPeerStoreUpdate(t *testing.T) {
 		PublicKey: pub,
 		Name:      "v2",
 		Score:     2.0,
-		Addrs:    []string{"addr2"},
-		LastSeen: time.Now(),
+		Addrs:     []string{"addr2"},
+		LastSeen:  time.Now(),
 	}
 	err = ps.PutPeer(ctx, peer2)
 	require.NoError(t, err)

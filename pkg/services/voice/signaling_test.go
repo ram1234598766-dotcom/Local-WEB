@@ -12,7 +12,7 @@ import (
 
 // mockSignalingChannel implements SignalingChannel for tests.
 type mockSignalingChannel struct {
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	messages []SignalMessage
 	closed   bool
 }

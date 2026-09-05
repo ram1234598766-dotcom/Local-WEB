@@ -92,10 +92,10 @@ func (s *syncEngine) tickLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.mu.RLock()
-		peers := make([]PeerInfo, 0, len(s.peers))
-		for pid := range s.peers {
-			peers = append(peers, PeerInfo{ID: pid, State: "connected"})
-		}
+			peers := make([]PeerInfo, 0, len(s.peers))
+			for pid := range s.peers {
+				peers = append(peers, PeerInfo{ID: pid, State: "connected"})
+			}
 			s.mu.RUnlock()
 
 			for _, peer := range peers {
