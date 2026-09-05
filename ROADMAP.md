@@ -33,11 +33,12 @@
 - **Files:** `pkg/crypto/hybrid.go`, `pkg/transport/`
 - **Status:** Implemented `HybridServer` with `--hybrid` flag, HKDF key combination
 
-### 6.3 Multi-Path Link Aggregation
+### 6.3 Multi-Path Link Aggregation ✅
 - **Goal:** Use BLE + WiFi simultaneously for redundancy
 - **Work:** Modify `link.Manager` to maintain multiple active links, aggregate bandwidth
 - **Tests:** Simulated link failure, bandwidth measurement
-- **Files:** `pkg/link/manager.go`
+- **Files:** `pkg/link/multipath.go`, `pkg/link/manager.go`
+- **Status:** Implemented `MultiPathManager` with 4 aggregation modes (failover, round-robin, bandwidth, latency), concurrent connections, redundancy, dynamic primary selection
 
 ### 6.4 Plugin/Extension Interface
 - **Goal:** Third-party services without forking daemon
