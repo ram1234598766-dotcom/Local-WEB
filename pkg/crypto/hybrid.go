@@ -23,10 +23,10 @@ const hybridProtocolName = "Noise_XX_25519_KYBER1024_XSalsa20Poly1305_SHA3-256"
 
 // Kyber-1024 constants (from circl)
 const (
-	kyberPublicKeySize      = kyber1024.PublicKeySize      // 1568
-	kyberSecretKeySize      = kyber1024.PrivateKeySize     // 3168
-	kyberCiphertextSize     = kyber1024.CiphertextSize     // 1568
-	kyberSharedSecretSize   = kyber1024.SharedKeySize      // 32
+	kyberPublicKeySize         = kyber1024.PublicKeySize         // 1568
+	kyberSecretKeySize         = kyber1024.PrivateKeySize        // 3168
+	kyberCiphertextSize        = kyber1024.CiphertextSize        // 1568
+	kyberSharedSecretSize      = kyber1024.SharedKeySize         // 32
 	kyberEncapsulationSeedSize = kyber1024.EncapsulationSeedSize // 32
 )
 

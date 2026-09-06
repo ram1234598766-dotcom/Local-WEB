@@ -11,20 +11,20 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/argon2"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/argon2"
 )
 
 // PoWChallenge represents a proof-of-work challenge (Argon2id-based, memory-hard).
 type PoWChallenge struct {
-	Algorithm  string    // "argon2id"
-	Difficulty uint8     // log2 of iterations (time cost)
-	Memory     uint32    // memory cost in KiB
-	Parallelism uint8    // parallelism (lanes)
-	Timestamp  time.Time
-	Service    ServiceID
-	Salt       [16]byte  // salt for Argon2id
+	Algorithm   string // "argon2id"
+	Difficulty  uint8  // log2 of iterations (time cost)
+	Memory      uint32 // memory cost in KiB
+	Parallelism uint8  // parallelism (lanes)
+	Timestamp   time.Time
+	Service     ServiceID
+	Salt        [16]byte // salt for Argon2id
 }
 
 // PoWSolution is a valid response to a PoWChallenge.
@@ -156,7 +156,7 @@ type PoWConfig struct {
 	TargetSolveTime     time.Duration
 	AdjustmentInterval  time.Duration
 	MaxAdjustmentFactor float64
-	Memory              uint32    // memory in KiB
+	Memory              uint32 // memory in KiB
 	Parallelism         uint8
 }
 
