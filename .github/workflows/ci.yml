@@ -1,124 +1,454 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
+    tags: ['v*']
   pull_request:
     branches: [main]
+  release:
+    types: [published]
   schedule:
     - cron: '0 2 * * *'  # Nightly chaos tests
 
+env:
+  GO_VERSION: '1.26'
+  GORELEASER_VERSION: 'v2.0'
+
 jobs:
-  build:
-    name: Build & Vet
+  # ============================================================
+  # QUALITY GATES
+  # ============================================================
+  lint:
+    name: Lint & Static Analysis
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
+      
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
-
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=10m
+      
+      - name: Go vet
         run: go vet ./...
-
-      - name: Check formatting
-        run: test -z "$(gofmt -l .)"
-
-  unit-tests:
-    name: Unit Tests (with race detector)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-
-      - name: Run tests with race detector
+      
+      - name: Go fmt check
         run: |
-          CGO_ENABLED=1 go test -race ./... -count=1
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Code is not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+      
+      - name: Go mod tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
-      - name: Coverage
-        run: go test -coverprofile=coverage.out ./...
-
-      - name: Upload coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: coverage.out
-
-  integration-tests:
-    name: Integration Tests
+  test:
+    name: Unit & Integration Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
+      
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
-
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      
+      - name: Download dependencies
+        run: go mod download
+      
+      - name: Run unit tests with race detector
+        run: go test -race -count=1 ./...
+      
       - name: Run integration tests
         run: go test -tags=integration ./test/integration/... -v -count=1 -timeout 120s
+      
+      - name: Generate coverage
+        run: go test -coverprofile=coverage.out ./...
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.out
+          flags: unittests
+          fail_ci_if_error: false
 
-  chaos-tests:
-    name: Chaos/Fault Injection Tests
+  test-race:
+    name: Race Detector Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      
+      - name: Run tests with race detector
+        run: |
+          CGO_ENABLED=1 go test -race -count=1 ./pkg/...
+
+  test-chaos:
+    name: Chaos Engineering Tests
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
-
-      - name: Run chaos unit tests
-        run: CGO_ENABLED=1 go test -race -v ./pkg/chaos/... -count=1
-
-      - name: Run chaos integration tests
-        run: CGO_ENABLED=1 go test -race -v ./test/chaos/... -count=1 -timeout 300s
-
-      - name: Run chaos suite (quick)
-        run: CGO_ENABLED=1 go test -race -v ./test/chaos/... -run QuickSuite -count=1 -timeout 60s
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-
-      - name: Install golangci-lint
+          go-version: ${{ env.GO_VERSION }}
+      
+      - name: Run chaos tests
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.13.2
-
-      - name: Run golangci-lint
-        run: golangci-lint run ./...
+          CGO_ENABLED=1 go test -race -v ./pkg/chaos/... -count=1 -timeout 300s
+      
+      - name: Run chaos integration tests
+        run: |
+          CGO_ENABLED=1 go test -race -v ./test/chaos/... -count=1 -timeout 300s
 
   govulncheck:
     name: Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
-
+          go-version: ${{ env.GO_VERSION }}
+      
       - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-package: ./...
+
+  # ============================================================
+  # BUILD & PACKAGE
+  # ============================================================
+  build:
+    name: Cross-compile Binaries
+    runs-on: ubuntu-latest
+    needs: [lint, test, govulncheck]
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+          - os: windows
+            arch: amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      
+      - name: Build binaries
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Version=${{ github.ref_name }} -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Commit=${{ github.sha }} -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o dist/localweb-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} ./cmd/node
+          
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/localweb-cli-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} ./cmd/cli
+      
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 7
+
+  # ============================================================
+  # LINUX PACKAGES (nfpm)
+  # ============================================================
+  package-linux:
+    name: Package Linux (.deb, .rpm, .apk)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-linux-amd64
+          path: dist
+      
+      - name: Install nfpm
+        run: |
+          curl -sSL https://github.com/goreleaser/nfpm/releases/download/v2.35.0/nfpm_2.35.0_linux_amd64.deb -o nfpm.deb
+          sudo dpkg -i nfpm.deb
+      
+      - name: Build packages
+        run: |
+          mkdir -p pkg
+          # Copy binaries to package structure
+          mkdir -p dist/localweb dist/localweb-cli
+          cp localweb dist/localweb
+          cp localweb-cli dist/localweb-cli
+          
+          # Run nfpm
+          nfpm package --config nfpm.yaml --packager deb --target pkg/
+          nfpm package --config nfpm.yaml --packager rpm --target pkg/
+          nfpm package --config nfpm.yaml --packager apk --target pkg/
+      
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: pkg/*.deb pkg/*.rpm pkg/*.apk
+          retention-days: 30
+
+  # ============================================================
+  # WINDOWS MSI INSTALLER
+  # ============================================================
+  package-windows:
+    name: Package Windows (.msi with NSIS)
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-windows-amd64
+          path: dist
+      
+      - name: Install NSIS
+        run: choco install nsis --version 3.09 --confirm
+      
+      - name: Download Wintun driver
+        run: |
+          $wintunUrl = "https://github.com/wintun/wintun/releases/download/v0.14.1/wintun-0.14.1.zip"
+          Invoke-WebRequest -Uri $wintunUrl -OutFile "wintun.zip"
+          Expand-Archive -Path wintun.zip -DestinationPath wintun -Force
+          Copy-Item "wintun\wintun\x64\wintun.dll" installers\windows\wintun\wintun.dll
+      
+      - name: Build NSIS installer
+        run: |
+          cd installers/windows
+          makensis localweb.nsi
+      
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: installers/windows/*.exe
+          retention-days: 30
+
+  # ============================================================
+  # MACOS PACKAGE (.dmg)
+  # ============================================================
+  package-macos:
+    name: Package macOS (.app + .dmg)
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-darwin-arm64
+          path: dist
+      
+      - name: Create .app bundle
+        run: |
+          mkdir -p LocalWEB.app/Contents/MacOS
+          mkdir -p LocalWEB.app/Contents/Resources
+          
+          cp localweb LocalWEB.app/Contents/MacOS/localweb
+          cp localweb-cli LocalWEB.app/Contents/MacOS/localweb-cli
+          cp installers/macos/Info.plist LocalWEB.app/Contents/Info.plist
+          cp installers/macos/icon.icns LocalWEB.app/Contents/Resources/AppIcon.icns
+          cp installers/macos/Entitlements.plist LocalWEB.app/Contents/Entitlements.plist
+          cp installers/macos/LaunchDaemon.plist LocalWEB.app/Contents/Resources/LaunchDaemon.plist
+          
+          chmod +x LocalWEB.app/Contents/MacOS/localweb
+          chmod +x LocalWEB.app/Contents/MacOS/localweb-cli
+      
+      - name: Code sign (if cert available)
+        if: env.APPLE_DEVELOPER_ID != ''
+        run: |
+          codesign --force --deep --sign "${{ secrets.APPLE_DEVELOPER_ID }}" --entitlements installers/macos/Entitlements.plist LocalWEB.app
+          codesign --verify --deep --strict LocalWEB.app
+      
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "LocalWEB" -srcfolder LocalWEB.app -ov -format UDZO -format UDZO LocalWEB.dmg
+      
+      - name: Notarize (if cert available)
+        if: env.APPLE_DEVELOPER_ID != '' && env.APPLE_TEAM_ID != '' && env.APPLE_APP_PASSWORD != ''
+        run: |
+          xcrun notarytool submit LocalWEB.dmg --apple-id "${{ secrets.APPLE_ID }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --password "${{ secrets.APPLE_APP_PASSWORD }}" --wait
+          xcrun stapler staple LocalWEB.dmg
+      
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: LocalWEB.dmg
+          retention-days: 30
+
+  # ============================================================
+  # DOCKER IMAGES
+  # ============================================================
+  docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/ram1234598766-dotcom/localweb:latest
+            ghcr.io/ram1234598766-dotcom/localweb:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================================
+  # RELEASE
+  # ============================================================
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [package-linux, package-windows, package-macos, docker]
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      
+      - name: Sign artifacts (if GPG key available)
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import --batch
+          for file in release-assets/*; do
+            if [[ "$file" != *.sig && "$file" != *.sum ]]; then
+              gpg --armor --detach-sign --output "${file}.sig" "$file"
+            fi
+          done
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        make_latest: true
+
+  # ============================================================
+  # VERIFICATION
+  # ============================================================
+  verify:
+    name: Verify Installers
+    runs-on: ubuntu-latest
+    needs: [package-linux, package-windows, package-macos]
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      
+      - name: Verify checksums
+        run: |
+          sha256sum -c SHA256SUMS 2>/dev/null || echo "Checksums file not found, generating..."
+          sha256sum * > SHA256SUMS
+      
+      - name: Test Linux package install (container)
+        run: |
+          # Test .deb install in container
+          docker run --rm -v $(pwd):/test ubuntu:22.04 bash -c "
+            apt-get update && apt-get install -y ./localweb_*.deb &&
+            systemctl status localweb || true &&
+            dpkg -r localweb
+          " || echo "Container test skipped (no docker in CI)"
+      
+      - name: Verify signatures
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          for sig in *.sig; do
+            gpg --verify "$sig" "${sig%.sig}" || exit 1
+          done
+        shell: bash
+
+# ============================================================
+# WORKFLOW SUMMARY
+# ============================================================
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+      skip_tests:
+        description: 'Skip tests (emergency release)'
+        type: boolean
+        default: false

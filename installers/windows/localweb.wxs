@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <?define ProductName = "LocalWEB"?>
+  <?define ProductVersion = "1.0.0"?>
+  <?define Manufacturer = "LocalWEB Project"?>
+  <?define UpgradeCode = "{12345678-1234-1234-1234-123456789012}"?>
+  <?define InstallDir = "ProgramFiles64Folder\LocalWEB"?>
+  <?define SourceDir = "..\.." ?>
+  <?define IconFile = "installers\windows\icon.ico"?>
+  <?define WintunDll = "installers\windows\wintun\wintun.dll"?>
+
+  <Product Id="*" Name="$(var.ProductName)" Language="1033" Version="$(var.ProductVersion)" Manufacturer="$(var.Manufacturer)" UpgradeCode="$(var.UpgradeCode)">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="LocalWEB Mesh Network Installer" Comments="Local-first encrypted mesh network" Manufacturer="$(var.Manufacturer)" InstallerVersion="500" Keywords="P2P,mesh,VPN,encrypted" />
+    
+    <MajorUpgrade DowngradeErrorMessage="A newer version of LocalWEB is already installed." Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="Complete" Title="LocalWEB" Level="1" ConfigurableDirectory="INSTALLDIR">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="WintunComponents" />
+      <ComponentRef Id="ServiceComponent" />
+      <ComponentRef Id="ShortcutComponents" />
+    </Feature>
+
+    <UIRef Id="WixUI_Minimal" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+    <PropertyRef Id="WIXUI_INSTALLDIR" />
+
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch LocalWEB after installation" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <Binary Id="WintunDll" SourceFile="$(var.WintunDll)" />
+    <Binary Id="ServiceInstallScript" SourceFile="installers\windows\ServiceInstall.ps1" />
+  </Product>
+
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="LocalWEB">
+          <Directory Id="ScriptsDir" Name="scripts" />
+          <Directory Id="WintunDir" Name="wintun" />
+          <Directory Id="ConfigDir" Name="config" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuDir" Name="LocalWEB" />
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+      <Directory Id="SystemFolder" Name="System32">
+        <Directory Id="DriversDir" Name="drivers" />
+      </Directory>
+    </Directory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLDIR">
+      <Component Id="LocalWebExe" Guid="{11111111-1111-1111-1111-111111111111}">
+        <File Id="localweb.exe" Source="$(var.SourceDir)\dist\localweb.exe" KeyPath="yes" Checksum="yes" />
+      </Component>
+      <Component Id="LocalWebCliExe" Guid="{22222222-2222-2222-2222-222222222222}">
+        <File Id="localweb-cli.exe" Source="$(var.SourceDir)\dist\localweb-cli.exe" KeyPath="yes" Checksum="yes" />
+      </Component>
+      <Component Id="Readme" Guid="{33333333-3333-3333-3333-333333333333}">
+        <File Id="README.md" Source="$(var.SourceDir)\README.md" />
+      </Component>
+      <Component Id="License" Guid="{44444444-4444-4444-4444-444444444444}">
+        <File Id="LICENSE" Source="$(var.SourceDir)\LICENSE" />
+      </Component>
+      <Component Id="Changelog" Guid="{55555555-5555-5555-5555-555555555555}">
+        <File Id="CHANGELOG.md" Source="$(var.SourceDir)\CHANGELOG.md" />
+      </Component>
+      <Component Id="ConfigFile" Guid="{66666666-6666-6666-6666-666666666666}" Directory="ConfigDir">
+        <File Id="config.json" Source="$(var.SourceDir)\config\config.json" />
+        <CreateFolder Directory="ConfigDir" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="WintunComponents" Directory="WintunDir">
+      <Component Id="WintunDll" Guid="{77777777-7777-7777-7777-777777777777}">
+        <File Id="wintun.dll" Source="$(var.WintunDll)" KeyPath="yes" Checksum="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="ServiceComponent" Guid="{88888888-8888-8888-8888-888888888888}" Directory="INSTALLDIR">
+      <ServiceInstall Id="LocalWEBService" Type="ownProcess" Name="LocalWEB" DisplayName="LocalWEB Mesh Network" Description="Local-first encrypted mesh network daemon" Start="auto" Account="LocalSystem" ErrorControl="normal" Interactive="no" Arguments="node --data-dir C:\ProgramData\LocalWEB" Vital="yes" />
+      <ServiceControl Id="LocalWEBServiceControl" Name="LocalWEB" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart" ResetPeriodInDays="1" ServiceName="LocalWEB" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ShortcutComponents">
+      <Component Id="StartMenuShortcut" Guid="{99999999-9999-9999-9999-999999999999}" Directory="ProgramMenuDir">
+        <Shortcut Id="LocalWEBStartMenu" Name="LocalWEB" Description="Start LocalWEB node" Target="[INSTALLDIR]localweb.exe" Arguments="node" WorkingDirectory="INSTALLDIR" />
+        <Shortcut Id="LocalWEBCLIStartMenu" Name="LocalWEB CLI" Description="LocalWEB command line interface" Target="[INSTALLDIR]localweb-cli.exe" WorkingDirectory="INSTALLDIR" />
+        <Shortcut Id="UninstallStartMenu" Name="Uninstall LocalWEB" Description="Uninstall LocalWEB" Target="[System64Folder]msiexec.exe" Arguments="/x [ProductCode]" />
+        <RemoveFolder Id="ProgramMenuDir" On="uninstall" />
+      </Component>
+      <Component Id="DesktopShortcut" Guid="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" Directory="DesktopFolder">
+        <Shortcut Id="DesktopShortcut" Name="LocalWEB" Description="Start LocalWEB node" Target="[INSTALLDIR]localweb.exe" Arguments="node" WorkingDirectory="INSTALLDIR" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch LocalWEB after installation" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+  </Fragment>
+
+  <Fragment>
+    <CustomAction Id="InstallWintun" BinaryKey="WintunDll" ExeCommand="" Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="InstallService" BinaryKey="ServiceInstallScript" ExeCommand="-Install" Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="UninstallService" BinaryKey="ServiceInstallScript" ExeCommand="-Uninstall" Execute="deferred" Impersonate="no" Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="InstallWintun" After="InstallFiles"><![CDATA[NOT Installed]]></Custom>
+      <Custom Action="InstallService" After="InstallWintun"><![CDATA[NOT Installed]]></Custom>
+      <Custom Action="UninstallService" Before="RemoveFiles"><![CDATA[Installed AND REMOVE="ALL"]]></Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+
+  <Fragment>
+    <Property Id="ARPCOMMENTS">Local-first encrypted mesh network</Property>
+    <Property Id="ARPCONTACT">LocalWEB Project</Property>
+    <Property Id="ARPURLINFOABOUT">https://github.com/ram1234598766-dotcom/Local-WEB</Property>
+    <Property Id="ARPHELPLINK">https://github.com/ram1234598766-dotcom/Local-WEB/issues</Property>
+    <Property Id="ARPURLUPDATEINFO">https://github.com/ram1234598766-dotcom/Local-WEB/releases</Property>
+    <Property Id="ARPNOREPAIR">1</Property>
+    <Property Id="ARPNOREMOVE">0</Property>
+  </Fragment>
+</Wix>

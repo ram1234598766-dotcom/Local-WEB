@@ -1,0 +1,326 @@
+# .goreleaser.yml - Release automation for LocalWEB
+# This config handles cross-compilation, packaging, and release creation
+# for Windows, macOS, and Linux.
+
+project_name: LocalWEB
+# Version is determined from git tag (e.g., v1.0.0)
+# If no tag, uses commit hash
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  # Main node binary (daemon)
+  - id: localweb-node
+    main: ./cmd/node/main.go
+    binary: localweb
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Version={{.Version}}
+      - -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Commit={{.Commit}}
+      - -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Date={{.Date}}
+    hooks:
+      post:
+        - cp {{.Env.GORELEASER_CURRENT_BUILD_PATH}}/{{.Binary}} {{.Env.GORELEASER_CURRENT_BUILD_PATH}}/localweb{{if eq .Os "windows"}}.exe{{end}}
+
+  # CLI binary
+  - id: localweb-cli
+    main: ./cmd/cli/main.go
+    binary: localweb-cli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Version={{.Version}}
+      - -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Commit={{.Commit}}
+      - -X github.com/ram1234598766-dotcom/Local-WEB/internal/version.Date={{.Date}}
+
+archives:
+  - id: default
+    name_template: "{{.ProjectName}}-{{.Version}}-{{.Os}}-{{.Arch}}"
+    builds:
+      - localweb-node
+      - localweb-cli
+    format: tar.gz
+    wrap_in_directory: true
+    files:
+      - README.md
+      - LICENSE
+      - docs/guides/QUICKSTART.md
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "{{.ProjectName}}-{{.Version}}_SHA256SUMS"
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      - --batch
+      - --yes
+      - --armor
+      - --detach-sign
+      - --output
+      - ${signature}
+      - ${artifact}
+    # Requires GPG_PRIVATE_KEY in CI secrets
+    # If not available, this step is skipped
+
+# Windows NSIS installer
+nfpms:
+  - package_name: localweb
+    vendor: LocalWEB Project
+    homepage: https://github.com/ram1234598766-dotcom/Local-WEB
+    maintainer: LocalWEB Team <team@localweb.io>
+    description: "Local-first, encrypted mesh network - P2P networking stack with DNS, HTTP, Email, Messaging, Files, Docs, Registry, Voice, VPN"
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    formats_overrides:
+      - id: windows
+        format: msi
+    bindir: /usr/local/bin
+    config_files:
+      - /etc/localweb/config.json
+    config_dirs:
+      - /etc/localweb
+    config_dirs_permissions: "0750"
+    config_files_permissions: "0640"
+    scripts:
+      preinstall: installers/linux/preinstall.sh
+      postinstall: installers/linux/postinstall.sh
+      preremove: installers/linux/preremove.sh
+      postremove: installers/linux/postremove.sh
+    dependencies:
+      - systemd
+      - wintun  # Windows TUN driver (via winget/choco on Windows)
+    recommends:
+      - wireguard-tools
+      - bluez
+    epoch: 1
+    section: net
+    priority: optional
+    arch: "amd64, arm64"
+    overrides:
+      - id: windows
+        formats:
+          - msi
+        config_files:
+          - C:\\ProgramData\\LocalWEB\\config.json
+        config_dirs:
+          - C:\\ProgramData\\LocalWEB
+        config_dirs_permissions: "0755"
+        config_files_permissions: "0644"
+        bindir: C:\\Program Files\\LocalWEB
+        scripts:
+          preinstall: installers/windows/preinstall.ps1
+          postinstall: installers/windows/postinstall.ps1
+          preremove: installers/windows/preremove.ps1
+          postremove: installers/windows/postremove.ps1
+        # MSI-specific options
+        msi:
+          product_name: LocalWEB
+          manufacturer: LocalWEB Project
+          upgrade_code: "{12345678-1234-1234-1234-123456789012}"
+          install_dir: "C:\\Program Files\\LocalWEB"
+          shortcuts:
+            - name: LocalWEB
+              path: "[INSTALLDIR]\\localweb.exe"
+              arguments: "node"
+              working_directory: "[INSTALLDIR]"
+            - name: LocalWEB CLI
+              path: "[INSTALLDIR]\\localweb-cli.exe"
+              arguments: ""
+              working_directory: "[INSTALLDIR]"
+          install_scope: perMachine
+          install_dir: "C:\\Program Files\\LocalWEB"
+        # Wintun driver - bundled
+        dependencies:
+          - wintun
+        files:
+          - src: installers/windows/wintun/*.dll
+            dst: C:\\Program Files\\LocalWEB\\wintun
+            permissions: "0755"
+          - src: installers/windows/ServiceInstall.ps1
+            dst: C:\\Program Files\\LocalWEB\\scripts
+            permissions: "0755"
+      - id: darwin
+        formats:
+          - pkg
+        # macOS .pkg installer
+        configs:
+          - identifier: com.localweb.daemon
+            path: /Library/LaunchDaemons/com.localweb.daemon.plist
+        files:
+          - src: installers/macos/LaunchDaemon.plist
+            dst: /Library/LaunchDaemons/com.localweb.daemon.plist
+            permissions: "0644"
+          - src: installers/macos/Entitlements.plist
+            dst: /tmp/LocalWEB.entitlements
+            permissions: "0644"
+        pkg:
+          identifier: com.localweb
+          name: LocalWEB
+          install_location: "/Applications"
+          scripts:
+            preinstall: installers/macos/preinstall.sh
+            postinstall: installers/macos/postinstall.sh
+          certificate: "Developer ID Installer: <Team ID>"  # Requires Apple Developer ID
+
+# macOS .dmg creation
+dmg:
+  name_template: "{{.ProjectName}}-{{.Version}}-{{.Os}}-{{.Arch}}"
+  use_invalid_chars_as_underscores: false
+  format: UDZO
+  compression_level: 9
+  files:
+    - src: "dist/{{.ProjectName}}-{{.Version}}-darwin-amd64/LocalWEB.app"
+      dst: "LocalWEB.app"
+    - src: "Applications"
+      dst: "/Applications"
+      type: link
+  background: "installers/macos/dmg-background.png"
+  window:
+    position: "center"
+    size: "600x400"
+  icon: "installers/macos/icon.icns"
+  window_position:
+    x: 100
+    y: 100
+
+# Windows NSIS installer
+msi:
+  - id: localweb
+    path: "installers/windows/localweb.wxs"
+    # This references a WiX source file
+
+# Docker images (optional)
+dockers:
+  - image_templates:
+      - "ghcr.io/ram1234598766-dotcom/localweb:{{ .Version }}"
+      - "ghcr.io/ram1234598766-dotcom/localweb:latest"
+    skip_login: true
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64,linux/arm64"
+      - "--build-arg=VERSION={{.Version}}"
+    extra_files:
+      - README.md
+      - LICENSE
+
+# Release notes
+release:
+  github:
+    owner: ram1234598766-dotcom
+    name: Local-WEB
+  name_template: "LocalWEB {{.Version}}"
+  draft: false
+  prerelease: auto
+  header: |
+    # LocalWEB {{.Version}}
+
+    LocalWEB is a local-first, encrypted mesh network - a zero-infrastructure P2P networking stack.
+
+  footer: |
+    ## Installation
+
+    ### Windows
+    Run the `.msi` installer. Requires Windows 10/11. The installer includes Wintun driver for the VPN service.
+
+    ### macOS
+    Open the `.dmg` and drag LocalWEB.app to Applications. For the VPN service, allow Network Extension in System Settings.
+
+    ### Linux
+    ```bash
+    # Debian/Ubuntu
+    sudo dpkg -i localweb_{{.Version}}_linux_amd64.deb
+    sudo apt-get install -f
+
+    # RHEL/Fedora
+    sudo rpm -i localweb-{{.Version}}-1.x86_64.rpm
+
+    # Arch
+    sudo pacman -U localweb-{{.Version}}-1-x86_64.pkg.tar.zst
+    ```
+
+    ## Checksums
+    Verify downloads with `sha256sum -c SHA256SUMS`.
+
+    ## Full Changelog
+    See [CHANGELOG.md](https://github.com/ram1234598766-dotcom/Local-WEB/blob/main/CHANGELOG.md)
+
+changelog:
+  use: github
+  groups:
+    - title: "🚀 Features"
+      regexp: '^feat\('
+    - title: "🐛 Bug Fixes"
+      regexp: '^fix\('
+    - title: "🔧 Improvements"
+      regexp: '^improvement\('
+    - title: "📚 Documentation"
+      regexp: '^docs\('
+    - title: "🧪 Tests"
+      regexp: '^test\('
+    - title: "🔨 Build/CI"
+      regexp: '^(build|ci)\('
+    - title: "♻️ Refactoring"
+      regexp: '^refactor\('
+    - title: "🎨 Style"
+      regexp: '^style\('
+
+# Docker images (optional)
+docker:
+  - image_templates:
+      - "ghcr.io/ram1234598766-dotcom/localweb:{{ .Version }}"
+      - "ghcr.io/ram1234598766-dotcom/localweb:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64,linux/arm64"
+      - "--build-arg=VERSION={{.Version}}"
+
+# Announce release
+announce:
+  github:
+    owner: ram1234598766-dotcom
+    name: Local-WEB
+  message_template: |
+    🚀 LocalWEB {{.Version}} released!
+
+    {{.Changelog}}
+
+    ## Downloads
+    {{#each Artifacts}}
+    - {{.Name}} ({{.Size}}) - {{.URL}}
+    {{/each}}
+
+    ## Checksums
+    {{.Checksums}}

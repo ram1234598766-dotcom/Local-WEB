@@ -1,0 +1,39 @@
+{
+  "name": "LocalWEB",
+  "outputfilename": "localweb",
+  "frontend:install": "cd frontend && npm install",
+  "frontend:build": "cd frontend && npm run build",
+  "frontend:dev:watcher": "cd frontend && npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Mrityunjay K",
+    "email": "mrityunjay@example.com"
+  },
+  "info": {
+    "companyName": "LocalWEB",
+    "productName": "LocalWEB",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2025 Mrityunjay K",
+    "comments": "Local-first, encrypted mesh network"
+  },
+  "windows": {
+    "webviewInstallPath": "",
+    "webviewRuntimePath": ""
+  },
+  "mac": {
+    "bundleIdentifier": "com.localweb.desktop",
+    "appCategory": "public.app-category.utilities",
+    "minimumSystemVersion": "10.15",
+    "signingIdentity": "",
+    "entitlements": {
+      "com.apple.security.network.client": true,
+      "com.apple.security.network.server": true,
+      "com.apple.security.files.user-selected.read-write": true
+    }
+  },
+  "linux": {
+    "appCategory": "Utility",
+    "desktopFile": true,
+    "icon": "icon.png"
+  }
+}

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>LocalWEB</string>
+    <key>CFBundleExecutable</key>
+    <string>localweb</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.localweb.desktop</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>LocalWEB</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>LocalWEB uses Bluetooth to discover and connect to nearby peers for direct device-to-device communication without internet.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>LocalWEB acts as a Bluetooth peripheral to allow other devices to discover and connect to this node.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>LocalWEB uses the local network to discover and connect to peers via mDNS and direct connections.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>LocalWEB needs access to network volumes for file sharing between peers.</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.localweb.identity</string>
+            <key>UTTypeDescription</key>
+            <string>LocalWEB Node Identity</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>localweb-identity</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>localweb</string>
+    </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>localweb</string>
+            </array>
+            <key>CFBundleURLName</key>
+            <string>LocalWEB Pairing</string>
+        </dict>
+    </array>
+</dict>
+</plist>

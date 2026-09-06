@@ -1,0 +1,64 @@
+[Unit]
+Description=LocalWEB Mesh Network Daemon (%i)
+Documentation=https://github.com/ram1234598766-dotcom/Local-WEB
+After=network-online.target localweb.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/localweb node --data-dir /var/lib/localweb/%i
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+RestartPreventExitStatus=255
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+# Security hardening
+User=localweb
+Group=localweb
+DynamicUser=no
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SYS_RESOURCE CAP_SYS_NICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_ADMIN
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+SystemCallFilter=@system-service @network @file-system @basic-io @process-management @cpu-time @memory-management
+SystemCallErrorNumber=EPERM
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectProc=invisible
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Instance-specific resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+LimitMEMLOCK=infinity
+LimitCORE=0
+
+# Environment
+Environment=LOCALWEB_DATA_DIR=/var/lib/localweb/%i
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target

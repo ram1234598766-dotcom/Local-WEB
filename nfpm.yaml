@@ -1,0 +1,174 @@
+# nfpm configuration for LocalWEB Linux packages
+# Generates .deb, .rpm, .apk packages
+
+name: "localweb"
+version: "1.0.0"
+version_schema: "semver"
+epoch: 1
+release: "1"
+vendor: "LocalWEB Project"
+homepage: "https://github.com/ram1234598766-dotcom/Local-WEB"
+maintainer: "LocalWEB Team <team@localweb.io>"
+description: |
+  Local-first, encrypted mesh network - P2P networking stack with
+  DNS, HTTP, Email, Messaging, Files, Docs, Registry, Voice, VPN
+license: "MIT"
+section: "net"
+priority: "optional"
+arch: "amd64, arm64"
+
+# Build constraints
+platforms:
+  - "linux_amd64"
+  - "linux_arm64"
+
+# Install paths
+bindir: "/usr/bin"
+configdir: "/etc/localweb"
+datadir: "/var/lib/localweb"
+logdir: "/var/log/localweb"
+libdir: "/usr/lib/localweb"
+
+# Binary to package
+contents:
+  - src: "dist/localweb"
+    dst: "/usr/bin/localweb"
+    type: "bin"
+    file_info:
+      mode: "0755"
+      owner: "root"
+      group: "root"
+  - src: "dist/localweb-cli"
+    dst: "/usr/bin/localweb-cli"
+    type: "bin"
+    file_info:
+      mode: "0755"
+      owner: "root"
+      group: "root"
+  - src: "README.md"
+    dst: "/usr/share/doc/localweb/README.md"
+    type: "doc"
+  - src: "LICENSE"
+    dst: "/usr/share/doc/localweb/LICENSE"
+    type: "doc"
+  - src: "CHANGELOG.md"
+    dst: "/usr/share/doc/localweb/CHANGELOG.md"
+    type: "doc"
+  - src: "config/config.json"
+    dst: "/etc/localweb/config.json"
+    type: "config"
+    file_info:
+      mode: "0640"
+      owner: "root"
+      group: "localweb"
+  - src: "systemd/localweb.service"
+    dst: "/usr/lib/systemd/system/localweb.service"
+    type: "config"
+    file_info:
+      mode: "0644"
+      owner: "root"
+      group: "root"
+  - src: "systemd/localweb@.service"
+    dst: "/usr/lib/systemd/system/localweb@.service"
+    type: "config"
+    file_info:
+      mode: "0644"
+      owner: "root"
+      group: "root"
+
+# Scripts
+scripts:
+  preinstall: "installers/linux/preinstall.sh"
+  postinstall: "installers/linux/postinstall.sh"
+  preremove: "installers/linux/preremove.sh"
+  postremove: "installers/linux/postremove.sh"
+
+# Dependencies
+depends:
+  - "systemd"
+  - "libc6 (>= 2.31)"
+  - "capabilities"
+
+recommends:
+  - "wireguard-tools"
+  - "bluez"
+  - "avahi-daemon"
+  - "iptables"
+
+conflicts:
+  - "localweb-node"
+
+provides:
+  - "localweb"
+
+# Empty directories to create
+empty_dirs:
+  - "/etc/localweb"
+  - "/var/lib/localweb"
+  - "/var/log/localweb"
+  - "/var/run/localweb"
+
+# User/group
+user: "localweb"
+group: "localweb"
+
+# SELinux
+selinux_policy: "localweb"
+
+# AppArmor
+apparmor_profile: "localweb"
+
+# Overrides for specific formats
+overrides:
+  deb:
+    depends:
+      - "systemd (>= 247)"
+      - "libc6 (>= 2.31)"
+      - "adduser"
+      - "iptables"
+      - "iproute2"
+    section: "net"
+    priority: "optional"
+    maintainer_scripts:
+      preinst: "installers/linux/preinstall_deb.sh"
+      postinst: "installers/linux/postinst_deb.sh"
+      prerm: "installers/linux/preremove_deb.sh"
+      postrm: "installers/linux/postrm_deb.sh"
+    triggers:
+      - "/etc/localweb"
+      - "/var/lib/localweb"
+  
+  rpm:
+    depends:
+      - "systemd >= 247"
+      - "glibc >= 2.31"
+      - "shadow-utils"
+      - "iptables"
+      - "iproute"
+    section: "System Environment/Daemons"
+    maintainer_scripts:
+      pre: "installers/linux/preinstall_rpm.sh"
+      post: "installers/linux/postinst_rpm.sh"
+      preun: "installers/linux/preremove_rpm.sh"
+      postun: "installers/linux/postrm_rpm.sh"
+    file_attrs:
+      - "/usr/bin/localweb: - - 0755 root root"
+      - "/usr/bin/localweb-cli: - - 0755 root root"
+      - "/etc/localweb/*: - - 0640 root localweb"
+      - "/var/lib/localweb: - - 0750 localweb localweb"
+      - "/var/log/localweb: - - 0755 localweb localweb"
+  
+  apk:
+    depends:
+      - "systemd"
+      - "libc6-compat"
+    maintainer_scripts:
+      pre-install: "installers/linux/preinstall_apk.sh"
+      post-install: "installers/linux/postinst_apk.sh"
+      pre-deinstall: "installers/linux/preremove_apk.sh"
+      post-deinstall: "installers/linux/postrm_apk.sh"
+
+# Signature (requires GPG key)
+sign:
+  key_id: "YOUR_GPG_KEY_ID"
+  passphrase_env: "GPG_PASSPHRASE"

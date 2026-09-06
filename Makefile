@@ -1,9 +1,10 @@
-.PHONY: build test lint cross-compile generate clean run-node run-cli quickstart
+.PHONY: build test lint cross-compile generate clean run-node run-cli quickstart desktop-build desktop-dev desktop-install
 
 GO := go
 BINDIR := bin
 NODEBIN := $(BINDIR)/localweb-node
 CLIBIN := $(BINDIR)/localweb
+DESKTOPBIN := $(BINDIR)/localweb-desktop
 
 build: $(NODEBIN) $(CLIBIN)
 
@@ -15,6 +16,25 @@ $(NODEBIN): $(BINDIR)
 
 $(CLIBIN): $(BINDIR)
 	$(GO) build -o $(CLIBIN) ./cmd/cli
+
+# Desktop app targets
+desktop-build: $(DESKTOPBIN)
+
+$(DESKTOPBIN): $(BINDIR)
+	cd cmd/desktop && $(GO) build -o ../../$(DESKTOPBIN) .
+
+desktop-dev:
+	cd frontend && npm run dev
+
+desktop-install:
+	cd frontend && npm install
+
+desktop-build-all:
+	GOOS=linux   GOARCH=amd64   $(GO) build -o $(BINDIR)/localweb-desktop-linux-amd64   ./cmd/desktop
+	GOOS=linux   GOARCH=arm64   $(GO) build -o $(BINDIR)/localweb-desktop-linux-arm64   ./cmd/desktop
+	GOOS=darwin  GOARCH=arm64   $(GO) build -o $(BINDIR)/localweb-desktop-macos-arm64  ./cmd/desktop
+	GOOS=darwin  GOARCH=amd64   $(GO) build -o $(BINDIR)/localweb-desktop-macos-amd64  ./cmd/desktop
+	GOOS=windows GOARCH=amd64   $(GO) build -o $(BINDIR)/localweb-desktop-windows-amd64.exe ./cmd/desktop
 
 test:
 	$(GO) test ./... -v -count=1
@@ -42,6 +62,9 @@ run-node:
 run-cli:
 	$(GO) run ./cmd/cli
 
+run-desktop:
+	$(GO) run ./cmd/desktop
+
 cross-compile:
 	GOOS=linux   GOARCH=amd64   $(GO) build -o $(BINDIR)/localweb-linux-amd64   ./cmd/node
 	GOOS=linux   GOARCH=arm64   $(GO) build -o $(BINDIR)/localweb-linux-arm64   ./cmd/node
@@ -53,7 +76,7 @@ generate:
 	protoc --go_out=. --go_opt=paths=source_relative api/proto/messages.proto
 
 clean:
-	rm -rf $(BINDIR)/ coverage.out data/
+	rm -rf $(BINDIR)/ coverage.out data/ frontend/node_modules cmd/desktop/frontend/dist
 
 deps:
 	$(GO) mod tidy

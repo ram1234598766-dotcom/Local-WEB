@@ -1,0 +1,16 @@
+{
+  "name": "localweb-desktop",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "wails": "^3.0.0-beta.16"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
