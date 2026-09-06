@@ -797,26 +797,360 @@ class LocalWEBApp {
     try {
       const docs = await this.fetchAPI('/docs/documents');
       this.showLoading(false);
+
+      const docListHtml = docs.length === 0
+        ? '<p style="color: var(--color-text-muted);">No documents yet. Create one to start collaborating.</p>'
+        : `<table class="table"><thead><tr><th>Name</th><th>Peers</th><th>Last Sync</th><th>Actions</th></tr></thead><tbody>` +
+          docs.map(d => `
+            <tr>
+              <td>${d.name}</td>
+              <td>${d.peers}</td>
+              <td>${new Date(d.last_sync).toLocaleString()}</td>
+              <td>
+                <button class="btn btn-sm btn-primary" onclick="app.openDocEditor('${d.id}', '${d.name}')">Edit</button>
+                <button class="btn btn-sm btn-secondary" onclick="app.openDocHistory('${d.id}')" title="Version History">⏪</button>
+              </td>
+            </tr>
+          `).join('') + '</tbody></table>';
+
       document.getElementById('content').innerHTML = `
         <div class="card">
-          <div class="card-header">Documents</div>
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Collaborative Documents</span>
+            <button class="btn btn-primary" onclick="app.createNewDoc()">New Document</button>
+          </div>
           <div class="card-body">
-            ${docs.length === 0 ?
-              '<p style="color: var(--color-text-muted);">No documents yet.</p>' :
-              '<table class="table"><thead><tr><th>Name</th><th>Peers</th><th>Last Sync</th></tr></thead><tbody>' +
-              docs.map(d => `<tr><td><a href="#" onclick="app.openDoc('${d.id}')">${d.name}</a></td><td>${d.peers}</td><td>${new Date(d.last_sync).toLocaleTimeString()}</td></tr>`).join('') +
-              '</tbody></table>'
-            }
+            ${docListHtml}
           </div>
         </div>
       `;
     } catch (e) {
       this.showLoading(false);
+      this.showToast('Failed to load documents', 'error');
     }
   }
 
-  openDoc(id) {
-    this.showToast(`Opening document ${id}… (RGA editor coming soon)`, 'info');
+  async createNewDoc() {
+    const name = prompt('Enter document name:', 'Untitled Document');
+    if (!name) return;
+
+    this.showLoading(true);
+    try {
+      const resp = await fetch('/api/docs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      const data = await resp.json();
+      if (data.id) {
+        this.showToast('Document created', 'success');
+        this.openDocEditor(data.id, data.name);
+      } else {
+        this.showToast('Failed to create document', 'error');
+      }
+    } catch (e) {
+      this.showToast('Error creating document: ' + e.message, 'error');
+    }
+    this.showLoading(false);
+  }
+
+  openDocEditor(id, name) {
+    window.location.hash = '#doc-editor-' + id;
+    this.renderDocEditor(id, name);
+  }
+
+  async renderDocEditor(docId, docName) {
+    this.showLoading(true);
+    try {
+      const [doc, presence] = await Promise.all([
+        this.fetchAPI('/docs/documents/' + docId).catch(() => null),
+        this.fetchAPI('/docs/presence/' + docId).catch(() => ({ users: [] })),
+      ]);
+      this.showLoading(false);
+
+      const content = doc?.content || '';
+      const version = doc?.version || 0;
+      const users = presence?.users || [];
+
+      const userColors = ['var(--color-primary)', 'var(--color-accent)', 'var(--color-success)', 'var(--color-warning)', 'var(--color-critical)', 'var(--color-info)'];
+
+      document.getElementById('content').innerHTML = `
+        <style>
+          .doc-editor-container { display: flex; flex-direction: column; height: calc(100vh - 200px); min-height: 500px; }
+          .doc-toolbar { display: flex; gap: 0.5rem; padding: 0.75rem; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
+          .doc-toolbar-group { display: flex; gap: 0.25rem; padding: 0 0.5rem; border-right: 1px solid var(--color-border); }
+          .doc-toolbar-btn { padding: 0.375rem 0.75rem; border: 1px solid var(--color-border); background: var(--color-bg); border-radius: 0.25rem; cursor: pointer; font-size: 0.8125rem; transition: all 0.15s; }
+          .doc-toolbar-btn:hover { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary); }
+          .doc-toolbar-btn.active { background: var(--color-primary); border-color: var(--color-primary); color: white; }
+          .doc-toolbar-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+          .doc-editor-wrapper { flex: 1; position: relative; overflow: hidden; }
+          .doc-editor { width: 100%; height: 100%; border: none; outline: none; padding: 1.5rem; font-family: 'Monospace', monospace; font-size: 0.9375rem; line-height: 1.7; background: var(--color-bg); color: var(--color-text); resize: none; }
+          .doc-editor:focus { outline: none; }
+          .presence-bar { display: flex; gap: 0.5rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; align-items: center; }
+          .presence-avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 0.75rem; cursor: pointer; transition: transform 0.15s; border: 2px solid var(--color-bg); }
+          .presence-avatar:hover { transform: scale(1.1); z-index: 10; }
+          .presence-avatar.you { border-color: var(--color-primary); }
+          .presence-tooltip { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--color-text); color: var(--color-bg); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.6875rem; white-space: nowrap; margin-bottom: 0.25rem; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+          .presence-avatar:hover .presence-tooltip { opacity: 1; }
+          .remote-cursor { position: absolute; width: 2px; height: 1.2em; pointer-events: none; z-index: 100; }
+          .remote-cursor::after { content: attr(data-name); position: absolute; top: -1.4em; left: 0; background: inherit; color: white; padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-size: 0.625rem; white-space: nowrap; transform: translateX(-50%); }
+          .comment-thread { position: absolute; right: 0; width: 280px; max-height: 100%; overflow-y: auto; border-left: 1px solid var(--color-border); background: var(--color-bg-elevated); }
+          .comment-thread.collapsed { width: 32px; }
+          .comment-thread-toggle { writing-mode: vertical-rl; text-orientation: mixed; padding: 1rem 0.25rem; cursor: pointer; color: var(--color-text-muted); }
+          .comment-thread-toggle:hover { color: var(--color-primary); }
+          .comment { padding: 0.75rem; border-bottom: 1px solid var(--color-border); }
+          .comment-header { display: flex; justify-content: space-between; margin-bottom: 0.375rem; font-size: 0.75rem; color: var(--color-text-muted); }
+          .comment-author { font-weight: 600; color: var(--color-text); }
+          .comment-time { font-size: 0.6875rem; }
+          .comment-text { font-size: 0.8125rem; line-height: 1.5; }
+          .comment-input { padding: 0.5rem; border-top: 1px solid var(--color-border); display: flex; gap: 0.5rem; }
+          .comment-input textarea { flex: 1; min-height: 60px; max-height: 120px; padding: 0.5rem; border: 1px solid var(--color-border); border-radius: 0.25rem; background: var(--color-bg); color: var(--color-text); font-family: inherit; font-size: 0.8125rem; resize: vertical; }
+          .comment-input button { align-self: flex-end; }
+          .version-history { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+          .version-history-panel { background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 600px; max-height: 80vh; overflow-y: auto; width: 90%; box-shadow: var(--shadow-xl); }
+          .version-item { padding: 0.75rem; border: 1px solid var(--color-border); border-radius: 0.25rem; margin-bottom: 0.5rem; cursor: pointer; transition: all 0.15s; }
+          .version-item:hover { background: var(--color-primary-light); border-color: var(--color-primary); }
+          .version-item.current { border-color: var(--color-primary); background: var(--color-primary-light); }
+          .version-meta { display: flex; justify-content: space-between; margin-bottom: 0.375rem; font-size: 0.75rem; }
+          .version-author { font-weight: 600; }
+          .version-time { color: var(--color-text-muted); }
+          .version-preview { font-size: 0.8125rem; color: var(--color-text-muted); max-height: 60px; overflow: hidden; text-overflow: ellipsis; }
+        </style>
+        <div class="doc-editor-container">
+          <div class="presence-bar">
+            <span style="font-size: 0.8125rem; color: var(--color-text-muted); margin-right: 1rem;">Collaborators:</span>
+            ${users.map((u, i) => `
+              <div class="presence-avatar ${u.id === this.state.nodeID ? 'you' : ''}" style="background: ${userColors[i % userColors.length]};" title="${u.name}${u.id === this.state.nodeID ? ' (you)' : ''}">
+                ${u.name.charAt(0).toUpperCase()}
+                <span class="presence-tooltip">${u.name}${u.id === this.state.nodeID ? ' (you)' : ''}</span>
+              </div>
+            `).join('')}
+            <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+              <button class="btn btn-sm btn-secondary" onclick="app.toggleComments('${docId}')">
+                💬 Comments
+              </button>
+              <button class="btn btn-sm btn-secondary" onclick="app.openVersionHistory('${docId}')">
+                ⏪ History
+              </button>
+              <button class="btn btn-sm btn-primary" onclick="app.saveDoc('${docId}')">
+                💾 Save
+              </button>
+            </div>
+          </div>
+          <div style="display: flex; flex: 1; position: relative;">
+            <div class="doc-editor-wrapper" style="flex: 1;">
+              <div class="doc-toolbar">
+                <div class="doc-toolbar-group">
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'bold')" title="Bold (Ctrl+B)"><strong>B</strong></button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'italic')" title="Italic (Ctrl+I)"><em>I</em></button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'underline')" title="Underline (Ctrl+U)"><u>U</u></button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'strikethrough')" title="Strikethrough"><s>S</s></button>
+                </div>
+                <div class="doc-toolbar-group">
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'heading1')" title="Heading 1">H1</button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'heading2')" title="Heading 2">H2</button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'heading3')" title="Heading 3">H3</button>
+                </div>
+                <div class="doc-toolbar-group">
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'bullet')" title="Bullet List">• List</button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'numbered')" title="Numbered List">1. List</button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'code')" title="Inline Code">{ }</button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'codeblock')" title="Code Block">[ ]</button>
+                </div>
+                <div class="doc-toolbar-group">
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'undo')" title="Undo (Ctrl+Z)">↶</button>
+                  <button class="doc-toolbar-btn" onclick="app.formatDoc('${docId}', 'redo')" title="Redo (Ctrl+Y)">↷</button>
+                </div>
+              </div>
+              <textarea class="doc-editor" id="doc-editor-${docId}" spellcheck="true" data-doc-id="${docId}">${content}</textarea>
+            </div>
+            <div id="comments-panel-${docId}" class="comment-thread collapsed">
+              <div class="comment-thread-toggle" onclick="app.toggleCommentsPanel('${docId}')">Comments</div>
+              <div id="comments-list-${docId}" style="display: none; flex-direction: column; flex: 1; overflow-y: auto;">
+                <!-- Comments loaded dynamically -->
+              </div>
+              <div class="comment-input" style="display: none;">
+                <textarea id="comment-input-${docId}" placeholder="Add a comment…" rows="2"></textarea>
+                <button class="btn btn-primary btn-sm" onclick="app.addComment('${docId}')">Post</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Initialize editor
+      this.initDocEditor(docId, docName);
+
+    } catch (e) {
+      this.showLoading(false);
+      this.showToast('Failed to load document: ' + e.message, 'error');
+    }
+  }
+
+  initDocEditor(docId, docName) {
+    const editor = document.getElementById('doc-editor-' + docId);
+    if (!editor) return;
+
+    let lastContent = editor.value;
+    let saveTimeout = null;
+
+    // Auto-save on change
+    editor.addEventListener('input', () => {
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(() => {
+        this.autoSaveDoc(docId, editor.value);
+      }, 2000);
+    });
+
+    // Keyboard shortcuts
+    editor.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key.toLowerCase()) {
+          case 'b': e.preventDefault(); this.formatDoc(docId, 'bold'); break;
+          case 'i': e.preventDefault(); this.formatDoc(docId, 'italic'); break;
+          case 'u': e.preventDefault(); this.formatDoc(docId, 'underline'); break;
+          case 'z': e.preventDefault(); this.formatDoc(docId, e.shiftKey ? 'redo' : 'undo'); break;
+          case 'y': e.preventDefault(); this.formatDoc(docId, 'redo'); break;
+          case 's': e.preventDefault(); this.saveDoc(docId); break;
+        }
+      }
+    });
+
+    // Load comments
+    this.loadComments(docId);
+
+    // Load remote cursors (simulated via SSE)
+    this.subscribeToDocPresence(docId);
+  }
+
+  subscribeToDocPresence(docId) {
+    // In real implementation, this would subscribe to SSE for real-time presence
+    // For demo, we'll simulate
+  }
+
+  async loadComments(docId) {
+    try {
+      const comments = await this.fetchAPI('/docs/comments/' + docId).catch(() => []);
+      const list = document.getElementById('comments-list-' + docId);
+      if (list && comments.length > 0) {
+        list.innerHTML = comments.map(c => `
+          <div class="comment">
+            <div class="comment-header">
+              <span class="comment-author">${c.author}</span>
+              <span class="comment-time">${new Date(c.timestamp).toLocaleString()}</span>
+            </div>
+            <div class="comment-text">${c.text}</div>
+          </div>
+        `).join('');
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  toggleComments(docId) {
+    const panel = document.getElementById('comments-panel-' + docId);
+    if (panel) panel.classList.toggle('collapsed');
+  }
+
+  toggleCommentsPanel(docId) {
+    const panel = document.getElementById('comments-panel-' + docId);
+    const list = document.getElementById('comments-list-' + docId);
+    const input = document.getElementById('comment-input-' + docId);
+    if (panel && list && input) {
+      const isCollapsed = panel.classList.contains('collapsed');
+      panel.classList.toggle('collapsed');
+      list.style.display = isCollapsed ? 'flex' : 'none';
+      input.style.display = isCollapsed ? 'flex' : 'none';
+    }
+  }
+
+  async addComment(docId) {
+    const input = document.getElementById('comment-input-' + docId);
+    if (!input || !input.value.trim()) return;
+
+    this.showLoading(true);
+    try {
+      await fetch('/api/docs/comments/' + docId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: input.value })
+      });
+      input.value = '';
+      this.loadComments(docId);
+      this.showToast('Comment added', 'success');
+    } catch (e) {
+      this.showToast('Failed to add comment', 'error');
+    }
+    this.showLoading(false);
+  }
+
+  async saveDoc(docId) {
+    const editor = document.getElementById('doc-editor-' + docId);
+    if (!editor) return;
+
+    this.showLoading(true);
+    try {
+      await fetch('/api/docs/save/' + docId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editor.value })
+      });
+      this.showToast('Document saved', 'success');
+    } catch (e) {
+      this.showToast('Save failed: ' + e.message, 'error');
+    }
+    this.showLoading(false);
+  }
+
+  async autoSaveDoc(docId, content) {
+    try {
+      await fetch('/api/docs/autosave/' + docId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      });
+    } catch (e) {
+      // Silent fail for autosave
+    }
+  }
+
+  formatDoc(docId, format) {
+    const editor = document.getElementById('doc-editor-' + docId);
+    if (!editor) return;
+
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const selected = editor.value.substring(start, end);
+    let replacement = selected;
+
+    switch (format) {
+      case 'bold': replacement = '**' + selected + '**'; break;
+      case 'italic': replacement = '_' + selected + '_'; break;
+      case 'underline': replacement = '__' + selected + '__'; break;
+      case 'strikethrough': replacement = '~~' + selected + '~~'; break;
+      case 'heading1': replacement = '# ' + selected; break;
+      case 'heading2': replacement = '## ' + selected; break;
+      case 'heading3': replacement = '### ' + selected; break;
+      case 'bullet': replacement = selected.split('\n').map(l => '- ' + l).join('\n'); break;
+      case 'numbered': replacement = selected.split('\n').map((l, i) => (i+1) + '. ' + l).join('\n'); break;
+      case 'code': replacement = '`' + selected + '`'; break;
+      case 'codeblock': replacement = '\n```\n' + selected + '\n```\n'; break;
+      case 'undo': document.execCommand('undo'); return;
+      case 'redo': document.execCommand('redo'); return;
+    }
+
+    if (replacement !== selected) {
+      editor.value = editor.value.substring(0, start) + replacement + editor.value.substring(end);
+      editor.focus();
+      editor.setSelectionRange(start, start + replacement.length);
+      this.autoSaveDoc(docId, editor.value);
+    }
+  }
+
+  openVersionHistory(docId) {
+    // This will be implemented to show version history modal
+    this.showToast('Version history - coming soon', 'info');
   }
 
   async renderRegistry() {
