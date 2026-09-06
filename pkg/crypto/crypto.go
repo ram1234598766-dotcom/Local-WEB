@@ -4,14 +4,24 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha512"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/cloudflare/circl/sign/ed448"
 	"github.com/cloudflare/circl/sign/eddilithium3"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/skip2/go-qrcode"
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/scrypt"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -295,4 +305,195 @@ func Ed25519PrivateToX25519(priv [32]byte) [32]byte {
 	var xpriv [32]byte
 	copy(xpriv[:], scalar)
 	return xpriv
+}
+
+// IdentityBackup represents an encrypted backup of a node identity.
+type IdentityBackup struct {
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+	NodeID    string    `json:"node_id"`
+	Name      string    `json:"name"`
+	KeyType   KeyType   `json:"key_type"`
+	Encrypted []byte    `json:"encrypted"` // encrypted private key
+	Nonce     [24]byte  `json:"nonce"`
+	Salt      [32]byte  `json:"salt"`
+}
+
+// IdentityBackupPayload is the unencrypted payload.
+type IdentityBackupPayload struct {
+	PrivateKey []byte `json:"private_key"`
+	PublicKey  []byte `json:"public_key"`
+}
+
+// GenerateQRCode generates a QR code PNG for the given data.
+func GenerateQRCode(data string, size int) ([]byte, error) {
+	return qrcode.Encode(data, qrcode.Medium, size)
+}
+
+// GenerateIdentityQR generates a QR code for peer pairing.
+// The QR contains: localweb://pair?node_id=<hex>&pub_key=<base64>&name=<url_encoded>
+func GenerateIdentityQR(nodeID [32]byte, pubKey [32]byte, name string) ([]byte, error) {
+	data := fmt.Sprintf("localweb://pair?node_id=%x&pub_key=%s&name=%s",
+		nodeID[:],
+		base64.StdEncoding.EncodeToString(pubKey[:]),
+		name)
+	return GenerateQRCode(data, 256)
+}
+
+// ParseIdentityQR parses a LocalWEB pairing QR code.
+func ParseIdentityQR(data string) (nodeID [32]byte, pubKey [32]byte, name string, err error) {
+	// Expected format: localweb://pair?node_id=<hex>&pub_key=<base64>&name=<url_encoded>
+	const prefix = "localweb://pair?"
+	if len(data) < len(prefix) || data[:len(prefix)] != prefix {
+		return nodeID, pubKey, "", fmt.Errorf("invalid QR format: missing prefix")
+	}
+
+	params := data[len(prefix):]
+	// Parse query params
+	parts := splitQuery(params)
+	nodeIDStr := parts["node_id"]
+	pubKeyStr := parts["pub_key"]
+	name = parts["name"]
+
+	if nodeIDStr == "" || pubKeyStr == "" {
+		return nodeID, pubKey, "", fmt.Errorf("missing required params")
+	}
+
+	// Parse node_id (hex)
+	nodeIDBytes, err := hex.DecodeString(nodeIDStr)
+	if err != nil || len(nodeIDBytes) != 32 {
+		return nodeID, pubKey, "", fmt.Errorf("invalid node_id")
+	}
+	copy(nodeID[:], nodeIDBytes)
+
+	// Parse pub_key (base64)
+	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubKeyStr)
+	if err != nil || len(pubKeyBytes) != 32 {
+		return nodeID, pubKey, "", fmt.Errorf("invalid pub_key")
+	}
+	copy(pubKey[:], pubKeyBytes)
+
+	return nodeID, pubKey, name, nil
+}
+
+func splitQuery(query string) map[string]string {
+	result := make(map[string]string)
+	pairs := strings.Split(query, "&")
+	for _, pair := range pairs {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 {
+			val, _ := url.QueryUnescape(kv[1])
+			result[kv[0]] = val
+		}
+	}
+	return result
+}
+
+// BackupIdentity creates an encrypted backup of the node identity.
+// Uses scrypt for key derivation from passphrase and secretbox for encryption.
+func BackupIdentity(pubKey, privKey [32]byte, name, passphrase string) (*IdentityBackup, error) {
+	// Generate salt
+	var salt [32]byte
+	if _, err := rand.Read(salt[:]); err != nil {
+		return nil, err
+	}
+
+	// Derive key from passphrase using scrypt
+	key, err := scrypt.Key([]byte(passphrase), salt[:], 32768, 8, 1, 32)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare payload
+	payload := IdentityBackupPayload{
+		PrivateKey: privKey[:],
+		PublicKey:  pubKey[:],
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// Encrypt with secretbox
+	var nonce [24]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, err
+	}
+
+	var keyArr [32]byte
+	copy(keyArr[:], key)
+	encrypted := secretbox.Seal(nil, payloadBytes, &nonce, &keyArr)
+
+	nodeID := NodeID(pubKey)
+
+	return &IdentityBackup{
+		Version:   1,
+		CreatedAt: time.Now(),
+		NodeID:    fmt.Sprintf("%x", nodeID[:8]),
+		Name:      name,
+		KeyType:   KeyTypeEd25519,
+		Encrypted: encrypted,
+		Nonce:     nonce,
+		Salt:      salt,
+	}, nil
+}
+
+// RestoreIdentity decrypts an identity backup using the passphrase.
+func RestoreIdentity(backup *IdentityBackup, passphrase string) (pubKey, privKey [32]byte, err error) {
+	if backup.Version != 1 {
+		return pubKey, privKey, fmt.Errorf("unsupported backup version: %d", backup.Version)
+	}
+
+	// Derive key from passphrase
+	key, err := scrypt.Key([]byte(passphrase), backup.Salt[:], 32768, 8, 1, 32)
+	if err != nil {
+		return pubKey, privKey, err
+	}
+
+	var keyArr [32]byte
+	copy(keyArr[:], key)
+
+	// Decrypt
+	payloadBytes, ok := secretbox.Open(nil, backup.Encrypted, &backup.Nonce, &keyArr)
+	if !ok {
+		return pubKey, privKey, fmt.Errorf("decryption failed: wrong passphrase or corrupted backup")
+	}
+
+	var payload IdentityBackupPayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return pubKey, privKey, err
+	}
+
+	if len(payload.PrivateKey) != 32 || len(payload.PublicKey) != 32 {
+		return pubKey, privKey, fmt.Errorf("invalid key lengths in backup")
+	}
+
+	copy(privKey[:], payload.PrivateKey)
+	copy(pubKey[:], payload.PublicKey)
+
+	// Verify the public key matches
+	expectedNodeID := NodeID(pubKey)
+	actualNodeIDBytes, _ := hex.DecodeString(backup.NodeID)
+	if len(actualNodeIDBytes) == 8 {
+		// Just verify first 8 bytes match
+		if subtle.ConstantTimeCompare(expectedNodeID[:8], actualNodeIDBytes) != 1 {
+			return pubKey, privKey, fmt.Errorf("node ID mismatch in backup")
+		}
+	}
+
+	return pubKey, privKey, nil
+}
+
+// ExportIdentityBackupJSON serializes an identity backup to JSON.
+func ExportIdentityBackupJSON(backup *IdentityBackup) ([]byte, error) {
+	return json.MarshalIndent(backup, "", "  ")
+}
+
+// ImportIdentityBackupJSON deserializes an identity backup from JSON.
+func ImportIdentityBackupJSON(data []byte) (*IdentityBackup, error) {
+	var backup IdentityBackup
+	if err := json.Unmarshal(data, &backup); err != nil {
+		return nil, err
+	}
+	return &backup, nil
 }

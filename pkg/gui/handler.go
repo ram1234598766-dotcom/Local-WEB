@@ -46,6 +46,13 @@ func NewHandler(api *NodeAPI) *Handler {
 	mux.HandleFunc("/api/messaging/messages", h.handleMessages)
 	mux.HandleFunc("/api/docs/documents", h.handleDocuments)
 	mux.HandleFunc("/api/registry/packages", h.handlePackages)
+
+	// Onboarding wizard endpoints
+	mux.HandleFunc("/api/onboarding/status", h.handleOnboardingStatus)
+	mux.HandleFunc("/api/onboarding/qr", h.handleOnboardingQR)
+	mux.HandleFunc("/api/onboarding/backup", h.handleOnboardingBackup)
+	mux.HandleFunc("/api/onboarding/restore", h.handleOnboardingRestore)
+
 	mux.HandleFunc("/api/events", h.handleEvents)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	mux.HandleFunc("/readyz", h.handleReadyz)
@@ -238,6 +245,59 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+}
+
+func (h *Handler) handleOnboardingStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(h.api.OnboardingStatus())
+}
+
+func (h *Handler) handleOnboardingQR(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	qr, err := h.api.GenerateQRCode()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(qr)
+}
+
+func (h *Handler) handleOnboardingBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req IdentityBackupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	resp, err := h.api.BackupIdentity(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) handleOnboardingRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req IdentityRestoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	resp, err := h.api.RestoreIdentity(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {

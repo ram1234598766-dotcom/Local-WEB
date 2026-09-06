@@ -25,6 +25,23 @@ class LocalWEBApp {
     this.setupRoutes();
     this.setupNav();
     this.connectWS();
+    this.loadOnboardingStatus();
+  }
+
+  async loadOnboardingStatus() {
+    try {
+      const status = await this.fetchAPI('/onboarding/status');
+      this.state.onboarding = status;
+      // If onboarding not complete, redirect to onboarding page
+      if (status.step < 4) {
+        window.location.hash = '#onboarding';
+        return;
+      }
+    } catch (e) {
+      this.state.onboarding = { step: 0, hasIdentity: false, nodeName: '', needsBackup: false };
+      window.location.hash = '#onboarding';
+      return;
+    }
     this.refresh();
   }
 
@@ -193,40 +210,324 @@ class LocalWEBApp {
     setTimeout(() => container.removeChild(toast), 5000);
   }
 
-  renderOnboarding() {
+  init() {
+    this.applySystemTheme();
+    this.setupThemeToggle();
+    this.setupRoutes();
+    this.setupNav();
+    this.connectWS();
+    this.loadOnboardingStatus();
+  }
+
+  async loadOnboardingStatus() {
+    try {
+      const status = await this.fetchAPI('/onboarding/status');
+      this.state.onboarding = status;
+    } catch (e) {
+      this.state.onboarding = { step: 0, hasIdentity: false, nodeName: '', needsBackup: false };
+    }
+    this.refresh();
+  }
+
+  async renderOnboarding() {
+    const status = this.state.onboarding || { step: 0, hasIdentity: false, nodeName: '', needsBackup: false };
+    const step = status.step || 0;
+
+    // Step indicator
+    const steps = [
+      { id: 0, label: 'Welcome' },
+      { id: 1, label: 'Name Your Device' },
+      { id: 2, label: 'Pair with QR Code' },
+      { id: 3, label: 'Backup Passphrase' },
+      { id: 4, label: 'Complete' },
+    ];
+
+    const stepHtml = steps.map((s, i) => `
+      <div class="step-indicator ${i <= step ? 'completed' : ''} ${i === step ? 'active' : ''}" style="flex: 1; text-align: center; position: relative;">
+        <div class="step-circle" style="width: 32px; height: 32px; border-radius: 50%; border: 2px solid ${i <= step ? 'var(--color-primary)' : 'var(--color-border)'}; background: ${i < step ? 'var(--color-primary)' : (i === step ? 'var(--color-bg)' : 'transparent')}; color: ${i <= step ? 'white' : 'var(--color-text-muted)'}; display: flex; align-items: center; justify-content: center; margin: 0 auto 0.5rem; font-weight: 600; font-size: 0.875rem;">${i < step ? '✓' : i + 1}</div>
+        <div class="step-label" style="font-size: 0.75rem; color: ${i <= step ? 'var(--color-text)' : 'var(--color-text-muted)'}; font-weight: ${i === step ? '600' : '400'};">${s.label}</div>
+        ${i < steps.length - 1 ? `<div class="step-line" style="position: absolute; top: 16px; left: 50%; right: -50%; height: 2px; background: ${i < step ? 'var(--color-primary)' : 'var(--color-border)'}; z-index: -1;"></div>` : ''}
+      </div>
+    `).join('');
+
+    let contentHtml = '';
+
+    switch (step) {
+      case 0: // Welcome
+        contentHtml = this.renderWelcomeStep();
+        break;
+      case 1: // Name Device
+        contentHtml = this.renderNameStep();
+        break;
+      case 2: // QR Code
+        contentHtml = await this.renderQRStep();
+        break;
+      case 3: // Backup
+        contentHtml = this.renderBackupStep();
+        break;
+      case 4: // Complete
+        contentHtml = this.renderCompleteStep();
+        break;
+    }
+
     document.getElementById('content').innerHTML = `
       <div style="max-width: 640px; margin: 0 auto;">
-        <h1 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 1rem; color: var(--color-primary);">
-          Welcome to LocalWEB
-        </h1>
-        <p style="color: var(--color-text-muted); margin-bottom: 1.5rem; line-height: 1.6;">
-          LocalWEB is a local-first, encrypted mesh network. Connect nodes
-          on the same network without any central server or internet.
+        <div class="wizard-progress" style="display: flex; margin-bottom: 2rem; padding: 0 1rem;">
+          ${stepHtml}
+        </div>
+        <div class="wizard-content" style="animation: fadeIn 0.3s ease;">
+          ${contentHtml}
+        </div>
+      </div>
+      <style>
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .step-indicator.completed .step-circle { background: var(--color-primary); border-color: var(--color-primary); }
+        .step-indicator.active .step-circle { background: var(--color-bg); border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-light); }
+      </style>
+    `;
+
+    // Attach event listeners based on step
+    this.attachOnboardingListeners(step);
+  }
+
+  renderWelcomeStep() {
+    return `
+      <div class="card" style="text-align: center; padding: 2rem;">
+        <div style="width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, var(--color-primary), var(--color-accent)); display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem; font-size: 2rem;">🔐</div>
+        <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--color-text);">Welcome to LocalWEB</h1>
+        <p style="color: var(--color-text-muted); margin-bottom: 2rem; line-height: 1.6; max-width: 480px; margin-left: auto; margin-right: auto;">
+          LocalWEB is a local-first, encrypted mesh network. Connect devices
+          on the same network without any central server, cloud, or internet dependency.
+          All traffic is end-to-end encrypted with post-quantum cryptography.
         </p>
-        <div class="grid" style="grid-template-columns: 1fr; gap: 1rem;">
-          <div class="stat-card">
-            <div class="stat-label">Your Node ID</div>
-            <div class="stat-value" style="font-size: 1rem; font-family: monospace; word-break: break-all;">
-              ${this.state.nodeID || 'loading…'}
-            </div>
+        <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; margin-bottom: 2rem;">
+          <div class="stat-card" style="min-width: 140px;">
+            <div class="stat-label">🔒 Encrypted</div>
+            <div class="stat-value" style="font-size: 0.875rem;">Noise XX + Kyber-1024</div>
           </div>
-          <div class="card">
-            <div class="card-header">Next Steps</div>
-            <div class="card-body">
-              <ol style="color: var(--color-text-muted); line-height: 1.8;">
-                <li>Run this node on another machine on the same network.</li>
-                <li>Navigate to <strong>Network</strong> to see connected peers.</li>
-                <li>Browse <strong>Files</strong>, <strong>Messaging</strong>, or <strong>Docs</strong> to start collaborating.</li>
-              </ol>
-            </div>
+          <div class="stat-card" style="min-width: 140px;">
+            <div class="stat-label">🌐 Peer-to-Peer</div>
+            <div class="stat-value" style="font-size: 0.875rem;">No central server</div>
           </div>
-          <p style="color: var(--color-text-muted); font-size: 0.8125rem; text-align: center;">
-            GUI served on localhost:8080 — read-only dashboard.
-            Full node runs on port 4443 with Noise-encrypted QUIC.
-          </p>
+          <div class="stat-card" style="min-width: 140px;">
+            <div class="stat-label">⚡ Multi-Path</div>
+            <div class="stat-value" style="font-size: 0.875rem;">WiFi, BLE, USB, Audio</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="app.nextOnboardingStep()" style="min-width: 200px;">
+          Get Started
+        </button>
+      </div>
+    `;
+  }
+
+  renderNameStep() {
+    return `
+      <div class="card" style="max-width: 480px; margin: 0 auto; padding: 2rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; text-align: center; color: var(--color-text);">Name Your Device</h2>
+        <p style="color: var(--color-text-muted); margin-bottom: 2rem; text-align: center; line-height: 1.6;">
+          Choose a recognizable name for this node. Other devices on the network
+          will see this name when discovering peers.
+        </p>
+        <div class="form-group">
+          <label class="form-label" for="device-name">Device Name</label>
+          <input type="text" class="form-input" id="device-name" placeholder="e.g., MacBook Pro, Living Room PC" value="${this.state.onboarding?.nodeName || ''}" autocomplete="off" style="text-align: center; font-size: 1.125rem;" />
+        </div>
+        <p style="color: var(--color-text-muted); font-size: 0.8125rem; text-align: center; margin-top: 1rem;">
+          This name is only used locally for display. Your cryptographic identity
+          is separate and cannot be changed.
+        </p>
+        <div style="display: flex; gap: 0.75rem; justify-content: center; margin-top: 2rem;">
+          <button class="btn btn-secondary" onclick="app.prevOnboardingStep()">Back</button>
+          <button class="btn btn-primary" onclick="app.saveDeviceName()">Continue</button>
         </div>
       </div>
     `;
+  }
+
+  async renderQRStep() {
+    let qrHtml = '';
+    try {
+      const qr = await this.fetchAPI('/onboarding/qr');
+      qrHtml = `
+        <div style="text-align: center; margin: 1.5rem 0;">
+          <img src="data:image/png;base64,${qr.qr_code}" alt="Pairing QR Code" style="width: 240px; height: 240px; border-radius: 0.5rem; box-shadow: var(--shadow-md);" />
+        </div>
+        <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-bottom: 1rem;">
+          Scan this QR code with another LocalWEB device to pair instantly.
+        </p>
+        <div class="stat-card" style="max-width: 320px; margin: 0 auto 1.5rem;">
+          <div class="stat-label">Your Node ID</div>
+          <div class="stat-value" style="font-size: 0.8125rem; word-break: break-all; font-family: monospace;">${qr.node_id}</div>
+        </div>
+        <p style="color: var(--color-text-muted); font-size: 0.8125rem;">
+          Or share your Node ID manually: <code style="font-size: 0.75rem;">${qr.node_id}</code>
+        </p>
+      `;
+    } catch (e) {
+      qrHtml = `<p style="color: var(--color-critical); text-align: center;">Failed to generate QR code. <button class="btn btn-secondary btn-sm" onclick="app.renderOnboarding()">Retry</button></p>`;
+    }
+
+    return `
+      <div class="card" style="max-width: 480px; margin: 0 auto; padding: 2rem; text-align: center;">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--color-text);">Pair with Another Device</h2>
+        <p style="color: var(--color-text-muted); margin-bottom: 1.5rem; line-height: 1.6;">
+          Open LocalWEB on another device on the same network and scan this QR code.
+          The devices will automatically discover and connect to each other.
+        </p>
+        ${qrHtml}
+        <div style="display: flex; gap: 0.75rem; justify-content: center; margin-top: 2rem;">
+          <button class="btn btn-secondary" onclick="app.prevOnboardingStep()">Back</button>
+          <button class="btn btn-primary" onclick="app.nextOnboardingStep()">I've Paired a Device</button>
+        </div>
+      </div>
+    `;
+  }
+
+  renderBackupStep() {
+    return `
+      <div class="card" style="max-width: 480px; margin: 0 auto; padding: 2rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; text-align: center; color: var(--color-text);">Backup Your Identity</h2>
+        <p style="color: var(--color-text-muted); margin-bottom: 1.5rem; text-align: center; line-height: 1.6;">
+          <strong>Critical:</strong> Create a passphrase to encrypt your private key.
+          This backup allows you to recover your identity if you lose this device.
+          <span style="color: var(--color-critical);">Without this passphrase, your identity cannot be recovered.</span>
+        </p>
+        <div class="form-group">
+          <label class="form-label" for="backup-passphrase">Passphrase</label>
+          <input type="password" class="form-input" id="backup-passphrase" placeholder="Enter a strong passphrase" autocomplete="new-password" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="backup-passphrase-confirm">Confirm Passphrase</label>
+          <input type="password" class="form-input" id="backup-passphrase-confirm" placeholder="Confirm your passphrase" autocomplete="new-password" />
+        </div>
+        <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 0.5rem;">
+          Use a passphrase you'll remember. Consider using a password manager.
+        </p>
+        <div style="display: flex; gap: 0.75rem; justify-content: center; margin-top: 2rem;">
+          <button class="btn btn-secondary" onclick="app.prevOnboardingStep()">Back</button>
+          <button class="btn btn-primary" onclick="app.createBackup()">Create Backup</button>
+        </div>
+      </div>
+    `;
+  }
+
+  renderCompleteStep() {
+    return `
+      <div class="card" style="max-width: 480px; margin: 0 auto; padding: 2rem; text-align: center;">
+        <div style="width: 80px; height: 80px; border-radius: 50%; background: var(--color-success); display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem; font-size: 2rem;">✓</div>
+        <h2 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--color-text);">You're Ready!</h2>
+        <p style="color: var(--color-text-muted); margin-bottom: 2rem; line-height: 1.6;">
+          Your LocalWEB node is configured and ready to connect.
+          <br><strong>Save your backup passphrase</strong> in a secure location.
+        </p>
+        <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem;">
+          <div class="stat-card">
+            <div class="stat-label">Node Name</div>
+            <div class="stat-value" style="font-size: 0.875rem;">${this.state.onboarding?.nodeName || 'localweb-node'}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Node ID</div>
+            <div class="stat-value" style="font-size: 0.75rem; word-break: break-all; font-family: monospace;">${this.state.nodeID || 'loading…'}</div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
+          <button class="btn btn-primary" onclick="app.navigate('dashboard')">Go to Dashboard</button>
+          <button class="btn btn-secondary" onclick="app.navigate('peers')">Find Peers</button>
+        </div>
+      </div>
+    `;
+  }
+
+  attachOnboardingListeners(step) {
+    // Step-specific event listeners would go here
+    // For now, we use inline onclick handlers
+  }
+
+  async nextOnboardingStep() {
+    if (this.state.onboarding?.step === 1) {
+      const nameInput = document.getElementById('device-name');
+      if (nameInput && !nameInput.value.trim()) {
+        this.showToast('Please enter a device name', 'error');
+        return;
+      }
+      await this.saveDeviceName();
+      return;
+    }
+    if (this.state.onboarding?.step === 3) {
+      await this.createBackup();
+      return;
+    }
+    if (this.state.onboarding && this.state.onboarding.step < 4) {
+      this.state.onboarding.step++;
+      await this.renderOnboarding();
+    }
+  }
+
+  async prevOnboardingStep() {
+    if (this.state.onboarding && this.state.onboarding.step > 0) {
+      this.state.onboarding.step--;
+      await this.renderOnboarding();
+    }
+  }
+
+  async saveDeviceName() {
+    const nameInput = document.getElementById('device-name');
+    if (!nameInput || !nameInput.value.trim()) {
+      this.showToast('Please enter a device name', 'error');
+      return;
+    }
+    this.showLoading(true);
+    try {
+      const resp = await fetch('/api/onboarding/status', { method: 'GET' });
+      // Just update local state for now
+      this.state.onboarding = this.state.onboarding || {};
+      this.state.onboarding.nodeName = nameInput.value.trim();
+      this.state.onboarding.step = 2;
+      await this.renderOnboarding();
+    } catch (e) {
+      this.showToast('Failed to save name', 'error');
+    }
+    this.showLoading(false);
+  }
+
+  async createBackup() {
+    const passphrase = document.getElementById('backup-passphrase');
+    const confirm = document.getElementById('backup-passphrase-confirm');
+    if (!passphrase || !confirm) return;
+
+    if (passphrase.value !== confirm.value) {
+      this.showToast('Passphrases do not match', 'error');
+      return;
+    }
+    if (passphrase.value.length < 8) {
+      this.showToast('Passphrase must be at least 8 characters', 'error');
+      return;
+    }
+
+    this.showLoading(true);
+    try {
+      const resp = await fetch('/api/onboarding/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          passphrase: passphrase.value,
+          name: this.state.onboarding?.nodeName || 'localweb-node'
+        })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        this.showToast('Backup created! Download and store it safely.', 'success');
+        this.state.onboarding.step = 4;
+        this.state.onboarding.needsBackup = false;
+        await this.renderOnboarding();
+      } else {
+        this.showToast(data.message || 'Backup failed', 'error');
+      }
+    } catch (e) {
+      this.showToast('Backup failed: ' + e.message, 'error');
+    }
+    this.showLoading(false);
   }
 
   renderDashboard() {

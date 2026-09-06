@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -89,6 +90,42 @@ type EmailMessageResponse struct {
 	Subject string `json:"subject"`
 	Date    string `json:"date"`
 	Read    bool   `json:"read"`
+}
+
+type QRCodeResponse struct {
+	QRCode string `json:"qr_code"` // base64 encoded PNG
+	NodeID string `json:"node_id"`
+	Name   string `json:"name"`
+}
+
+type IdentityBackupRequest struct {
+	Passphrase string `json:"passphrase"`
+	Name       string `json:"name"`
+}
+
+type IdentityBackupResponse struct {
+	Backup  string `json:"backup"` // base64 encoded JSON
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type IdentityRestoreRequest struct {
+	Backup     string `json:"backup"` // base64 encoded JSON
+	Passphrase string `json:"passphrase"`
+}
+
+type IdentityRestoreResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	NodeID  string `json:"node_id"`
+	Name    string `json:"name"`
+}
+
+type OnboardingStatusResponse struct {
+	Step        int    `json:"step"` // 0=welcome, 1=name, 2=qr, 3=backup, 4=complete
+	HasIdentity bool   `json:"has_identity"`
+	NodeName    string `json:"node_name"`
+	NeedsBackup bool   `json:"needs_backup"`
 }
 
 type MessageResponse struct {
@@ -357,6 +394,100 @@ func (a *NodeAPI) BroadcastEvent(evt SSEEvent) {
 		default:
 		}
 	}
+}
+
+func (a *NodeAPI) OnboardingStatus() OnboardingStatusResponse {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	hasIdentity := a.store != nil
+	needsBackup := false
+	if a.store != nil {
+		// Check if backup exists (simplified - always true for demo)
+		needsBackup = true
+	}
+
+	return OnboardingStatusResponse{
+		Step:        0,
+		HasIdentity: hasIdentity,
+		NodeName:    "localweb-node",
+		NeedsBackup: needsBackup,
+	}
+}
+
+func (a *NodeAPI) GenerateQRCode() (QRCodeResponse, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	qrBytes, err := crypto.GenerateIdentityQR(a.nodeID, a.pubKey, "localweb-node")
+	if err != nil {
+		return QRCodeResponse{}, err
+	}
+
+	return QRCodeResponse{
+		QRCode: base64.StdEncoding.EncodeToString(qrBytes),
+		NodeID: fmt.Sprintf("%x", a.nodeID[:8]),
+		Name:   "localweb-node",
+	}, nil
+}
+
+func (a *NodeAPI) BackupIdentity(req IdentityBackupRequest) (IdentityBackupResponse, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if req.Passphrase == "" {
+		return IdentityBackupResponse{Success: false, Message: "passphrase required"}, nil
+	}
+	if req.Name == "" {
+		req.Name = "localweb-node"
+	}
+
+	backup, err := crypto.BackupIdentity(a.pubKey, a.pubKey, req.Name, req.Passphrase)
+	if err != nil {
+		return IdentityBackupResponse{Success: false, Message: err.Error()}, nil
+	}
+
+	backupJSON, err := crypto.ExportIdentityBackupJSON(backup)
+	if err != nil {
+		return IdentityBackupResponse{Success: false, Message: err.Error()}, nil
+	}
+
+	return IdentityBackupResponse{
+		Backup:  base64.StdEncoding.EncodeToString(backupJSON),
+		Success: true,
+		Message: "identity backed up successfully",
+	}, nil
+}
+
+func (a *NodeAPI) RestoreIdentity(req IdentityRestoreRequest) (IdentityRestoreResponse, error) {
+	if req.Backup == "" {
+		return IdentityRestoreResponse{Success: false, Message: "backup data required"}, nil
+	}
+	if req.Passphrase == "" {
+		return IdentityRestoreResponse{Success: false, Message: "passphrase required"}, nil
+	}
+
+	backupJSON, err := base64.StdEncoding.DecodeString(req.Backup)
+	if err != nil {
+		return IdentityRestoreResponse{Success: false, Message: "invalid backup encoding"}, nil
+	}
+
+	backup, err := crypto.ImportIdentityBackupJSON(backupJSON)
+	if err != nil {
+		return IdentityRestoreResponse{Success: false, Message: err.Error()}, nil
+	}
+
+	_, _, err = crypto.RestoreIdentity(backup, req.Passphrase)
+	if err != nil {
+		return IdentityRestoreResponse{Success: false, Message: err.Error()}, nil
+	}
+
+	return IdentityRestoreResponse{
+		Success: true,
+		Message: "identity restored successfully",
+		NodeID:  backup.NodeID,
+		Name:    backup.Name,
+	}, nil
 }
 
 func (a *NodeAPI) MarshalJSON() ([]byte, error) {
