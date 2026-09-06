@@ -4,6 +4,8 @@
 
 All endpoints return JSON. WebSocket/SSE endpoints documented separately.
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Node Status

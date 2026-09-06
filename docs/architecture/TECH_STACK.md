@@ -2,6 +2,8 @@
 
 **Version: 3.0.0 | Go 1.26+ | Module: `github.com/ram1234598766-dotcom/Local-WEB`**
 
+**Author: Mrityunjay K**
+
 ---
 
 ## 📦 Module & Build System

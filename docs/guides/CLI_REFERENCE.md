@@ -2,6 +2,8 @@
 
 **Binary: `localweb-cli` (built from `cmd/cli/`)**
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Commands

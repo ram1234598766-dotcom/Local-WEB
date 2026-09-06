@@ -2,6 +2,8 @@
 
 The optional read-only web dashboard provides a visual overview of your node.
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Enable the GUI

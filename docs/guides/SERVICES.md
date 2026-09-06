@@ -2,6 +2,8 @@
 
 All 9 services are fully implemented and integrated. Each runs as a handler on a QUIC stream (identified by 1-byte ServiceID).
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Service Overview

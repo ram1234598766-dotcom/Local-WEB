@@ -2,6 +2,8 @@
 
 **Version: 3.0.0 | Formal Specification | Module: `github.com/ram1234598766-dotcom/Local-WEB`**
 
+**Author: Mrityunjay K**
+
 ---
 
 ## 📐 Formal Architecture Model

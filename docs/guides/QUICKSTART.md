@@ -2,6 +2,8 @@
 
 Get two devices talking in 60 seconds.
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Prerequisites

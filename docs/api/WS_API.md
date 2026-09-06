@@ -2,6 +2,8 @@
 
 The LocalWEB GUI uses **Server-Sent Events (SSE)** for real-time updates.
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Endpoint

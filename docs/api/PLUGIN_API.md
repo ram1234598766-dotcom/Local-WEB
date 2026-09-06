@@ -2,6 +2,8 @@
 
 LocalWEB supports **Go plugins** (`.so` files) and **Built-in plugins** (compiled into binary).
 
+**Author: Mrityunjay K**
+
 ---
 
 ## Plugin Interface

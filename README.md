@@ -254,4 +254,10 @@ MIT. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ---
 
+## 👤 Author
+
+**Mrityunjay K**
+
+---
+
 *LocalWEB v1.0.0 | Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26+*
