@@ -2109,51 +2109,823 @@ class LocalWEBApp {
 
   renderVPN() {
     document.getElementById('content').innerHTML = `
-      <div class="card">
-        <div class="card-header">VPN Tunnel</div>
-        <div class="card-body">
-          <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
-            <button class="btn btn-primary" onclick="app.toggleVPN()">Connect</button>
-            <span class="connection-status offline" id="vpn-status"></span>
-            <span id="vpn-status-text" style="color: var(--color-text-muted);">Disconnected</span>
+      <style>
+        .vpn-container { display: flex; flex-direction: column; height: calc(100vh - 200px); min-height: 500px; }
+        .vpn-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid var(--color-border); }
+        .vpn-status-badge { padding: 0.5rem 1rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 600; }
+        .vpn-status-badge.disconnected { background: var(--color-critical-light); color: var(--color-critical); border: 1px solid var(--color-critical); }
+        .vpn-status-badge.connecting { background: var(--color-warning-light); color: var(--color-warning); border: 1px solid var(--color-warning); animation: pulse 1.5s infinite; }
+        .vpn-status-badge.connected { background: var(--color-success-light); color: var(--color-success); border: 1px solid var(--color-success); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .vpn-tabs { display: flex; gap: 0.25rem; padding: 0 1rem; border-bottom: 1px solid var(--color-border); overflow-x: auto; }
+        .vpn-tab { padding: 0.75rem 1rem; border: none; background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.875rem; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
+        .vpn-tab:hover { color: var(--color-primary); }
+        .vpn-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+        .vpn-tab-content { display: none; flex: 1; padding: 1rem; overflow: auto; }
+        .vpn-tab-content.active { display: block; animation: fadeIn 0.2s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .vpn-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .stat-card { background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 1rem; }
+        .stat-card .stat-label { font-size: 0.75rem; color: var(--color-text-muted); margin-bottom: 0.25rem; }
+        .stat-card .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--color-text); }
+        .vpn-section { margin-bottom: 1.5rem; }
+        .vpn-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .vpn-section-title { font-size: 1rem; font-weight: 600; }
+        .vpn-table { width: 100%; border-collapse: collapse; }
+        .vpn-table th, .vpn-table td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; }
+        .vpn-table th { color: var(--color-text-muted); font-weight: 500; }
+        .vpn-table tr:hover { background: var(--color-bg-elevated); }
+        .route-status { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.6875rem; font-weight: 500; }
+        .route-status.active { background: var(--color-success-light); color: var(--color-success); }
+        .route-status.inactive { background: var(--color-bg); color: var(--color-text-muted); }
+        .route-status.pending { background: var(--color-warning-light); color: var(--color-warning); }
+        .acl-rule { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 0.375rem; margin-bottom: 0.5rem; }
+        .acl-rule input, .acl-rule select { flex: 1; padding: 0.5rem; border: 1px solid var(--color-border); border-radius: 0.25rem; background: var(--color-bg); color: var(--color-text); font-size: 0.875rem; }
+        .acl-rule .btn-sm { flex-shrink: 0; }
+        .dns-test-result { padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; }
+        .dns-test-result.pass { background: var(--color-success-light); border: 1px solid var(--color-success); }
+        .dns-test-result.fail { background: var(--color-critical-light); border: 1px solid var(--color-critical); }
+        .dns-test-result.running { background: var(--color-warning-light); border: 1px solid var(--color-warning); }
+        .dns-leak-item { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--color-border); }
+        .dns-leak-item:last-child { border-bottom: none; }
+        .kill-switch-toggle { display: flex; align-items: center; justify-content: space-between; padding: 1rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 0.5rem; }
+        .kill-switch-info h4 { margin-bottom: 0.25rem; }
+        .kill-switch-info p { color: var(--color-text-muted); font-size: 0.8125rem; }
+        .toggle-switch { position: relative; width: 56px; height: 28px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--color-border); border-radius: 28px; transition: 0.3s; }
+        .toggle-slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background: white; border-radius: 50%; transition: 0.3s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .toggle-switch input:checked + .toggle-slider { background: var(--color-primary); }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(28px); }
+        .peer-selector { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+        .peer-option { padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: 0.375rem; background: var(--color-bg); cursor: pointer; transition: all 0.15s; }
+        .peer-option:hover { border-color: var(--color-primary); }
+        .peer-option.selected { border-color: var(--color-primary); background: var(--color-primary-light); }
+        .peer-option input { display: none; }
+      </style>
+      <div class="vpn-container">
+        <div class="vpn-header">
+          <h2 style="margin: 0; font-size: 1.25rem;">VPN Dashboard</h2>
+          <span class="vpn-status-badge disconnected" id="vpn-status-badge">Disconnected</span>
+        </div>
+        <div class="vpn-tabs" id="vpn-tabs">
+          <button class="vpn-tab active" data-tab="overview" onclick="app.switchVpnTab('overview')">Overview</button>
+          <button class="vpn-tab" data-tab="routes" onclick="app.switchVpnTab('routes')">Routes</button>
+          <button class="vpn-tab" data-tab="split-tunnel" onclick="app.switchVpnTab('split-tunnel')">Split Tunnel</button>
+          <button class="vpn-tab" data-tab="acls" onclick="app.switchVpnTab('acls')">ACLs</button>
+          <button class="vpn-tab" data-tab="kill-switch" onclick="app.switchVpnTab('kill-switch')">Kill Switch</button>
+          <button class="vpn-tab" data-tab="dns-test" onclick="app.switchVpnTab('dns-test')">DNS Leak Test</button>
+        </div>
+
+        <!-- Overview Tab -->
+        <div class="vpn-tab-content active" id="vpn-tab-overview">
+          <div class="vpn-stats">
+            <div class="stat-card">
+              <div class="stat-label">Status</div>
+              <div class="stat-value" id="vpn-status-value">Disconnected</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Data Sent</div>
+              <div class="stat-value" id="vpn-sent">0 B</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Data Received</div>
+              <div class="stat-value" id="vpn-received">0 B</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Uptime</div>
+              <div class="stat-value" id="vpn-uptime">00:00:00</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Connected Peer</div>
+              <div class="stat-value" id="vpn-peer">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Virtual IP</div>
+              <div class="stat-value" id="vpn-virtual-ip">—</div>
+            </div>
           </div>
-          <div id="vpn-routes" style="display: none;">
-            <table class="table">
-              <thead><tr><th>Route</th><th>Peer</th><th>Status</th></tr></thead>
-              <tbody>
-                <tr><td>10.42.0.0/24</td><td>peer-abc</td><td>active</td></tr>
+
+          <div class="vpn-section">
+            <div class="vpn-section-header">
+              <h3 class="vpn-section-title">Connection</h3>
+            </div>
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+              <button class="btn btn-primary" id="vpn-connect-btn" onclick="app.toggleVPN()">Connect</button>
+              <div style="display: flex; align-items: center; gap: 1rem; color: var(--color-text-muted); font-size: 0.875rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" id="auto-connect" onchange="app.toggleAutoConnect(this.checked)">
+                  Auto-connect on startup
+                </label>
+              </div>
+            </div>
+            <div style="margin-top: 1rem; padding: 1rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 0.5rem;">
+              <strong>Peer:</strong> <span id="vpn-selected-peer">None selected</span>
+              <button class="btn btn-secondary btn-sm" style="margin-left: 1rem;" onclick="app.showPeerSelector()">Select Peer</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Routes Tab -->
+        <div class="vpn-tab-content" id="vpn-tab-routes">
+          <div class="vpn-section">
+            <div class="vpn-section-header">
+              <h3 class="vpn-section-title">VPN Routes</h3>
+              <button class="btn btn-secondary btn-sm" onclick="app.addRoute()">Add Route</button>
+            </div>
+            <table class="vpn-table" id="vpn-routes-table">
+              <thead>
+                <tr><th>Network</th><th>Gateway</th><th>Metric</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="vpn-routes-body">
+                <tr><td colspan="5" style="text-align: center; color: var(--color-text-muted);">No routes configured</td></tr>
               </tbody>
             </table>
           </div>
-          <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 0.5rem;">
-            TUN tunnel over Noise-secured QUIC. Requires root/CAP_NET_ADMIN on Linux.
-          </p>
+        </div>
+
+        <!-- Split Tunnel Tab -->
+        <div class="vpn-tab-content" id="vpn-tab-split-tunnel">
+          <div class="vpn-section">
+            <div class="vpn-section-header">
+              <h3 class="vpn-section-title">Split Tunnel Configuration</h3>
+            </div>
+            <div class="kill-switch-toggle">
+              <div class="kill-switch-info">
+                <h4>Split Tunnel Mode</h4>
+                <p>When enabled, only specified routes go through the VPN. All other traffic uses your normal internet connection.</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="split-tunnel-enabled" onchange="app.toggleSplitTunnel(this.checked)">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div style="margin-top: 1.5rem;">
+              <h4 style="margin-bottom: 1rem;">Included Routes (traffic sent through VPN)</h3>
+              <div id="included-routes" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <div class="acl-rule">
+                  <input type="text" placeholder="Network (CIDR)" value="10.0.0.0/8" disabled>
+                  <select disabled><option value="include">Include</option><option value="exclude">Exclude</option></select>
+                  <button class="btn btn-critical btn-sm" onclick="app.removeSplitRoute(this)">Remove</button>
+                </div>
+                <div class="acl-rule">
+                  <input type="text" placeholder="Network (CIDR)" value="192.168.0.0/16" disabled>
+                  <select disabled><option value="include" selected>Include</option><option value="exclude">Exclude</option></select>
+                  <button class="btn btn-critical btn-sm" onclick="app.removeSplitRoute(this)">Remove</button>
+                </div>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="app.addSplitRoute()">Add Route</button>
+            </div>
+            <div style="margin-top: 1.5rem;">
+              <h4 style="margin-bottom: 1rem;">Excluded Routes (traffic bypassing VPN)</h4>
+              <div id="excluded-routes" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <div class="acl-rule">
+                  <input type="text" placeholder="Network (CIDR)" value="192.168.1.0/24" disabled>
+                  <select disabled><option value="include">Include</option><option value="exclude" selected>Exclude</option></select>
+                  <button class="btn btn-critical btn-sm" onclick="app.removeSplitRoute(this)">Remove</button>
+                </div>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="app.addExcludedRoute()">Add Exclusion</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ACLs Tab -->
+        <div class="vpn-tab-content" id="vpn-tab-acls">
+          <div class="vpn-section">
+            <div class="vpn-section-header">
+              <h3 class="vpn-section-title">Access Control Lists (ACLs)</h3>
+              <button class="btn btn-secondary btn-sm" onclick="app.addAclRule()">Add Rule</button>
+            </div>
+            <div id="acl-rules" style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <div class="acl-rule">
+                <select>
+                  <option value="allow">Allow</option>
+                  <option value="deny">Deny</option>
+                </select>
+                <input type="text" placeholder="Source (CIDR or 'any')" value="any">
+                <input type="text" placeholder="Destination (CIDR or 'any')" value="any">
+                <input type="text" placeholder="Protocol (tcp/udp/icmp/any)" value="any">
+                <input type="text" placeholder="Port/Port Range" value="any">
+                <button class="btn btn-critical btn-sm" onclick="app.removeAclRule(this)">Delete</button>
+              </div>
+              <div class="acl-rule">
+                <select><option value="allow">Allow</option><option value="deny">Deny</option></select>
+                <input type="text" placeholder="Source" value="10.0.0.0/8">
+                <input type="text" placeholder="Destination" value="192.168.1.0/24">
+                <input type="text" placeholder="Protocol" value="tcp">
+                <input type="text" placeholder="Port" value="22,80,443">
+                <button class="btn btn-critical btn-sm" onclick="app.removeAclRule(this)">Delete</button>
+              </div>
+            </div>
+            <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 1rem;">Rules are evaluated in order. First match wins. Default policy: Deny all.</p>
+          </div>
+        </div>
+
+        <!-- Kill Switch Tab -->
+        <div class="vpn-tab-content" id="vpn-tab-kill-switch">
+          <div class="vpn-section">
+            <div class="kill-switch-toggle">
+              <div class="kill-switch-info">
+                <h4>Kill Switch</h4>
+                <p>When enabled, all internet traffic is blocked if the VPN connection drops unexpectedly. This prevents data leaks.</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="kill-switch-enabled" onchange="app.toggleKillSwitch(this.checked)" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div style="margin-top: 1.5rem; padding: 1rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 0.5rem;">
+              <h4 style="margin-bottom: 0.5rem;">Advanced Options</h4>
+              <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="kill-switch-persistent" checked>
+                <span>Persistent kill switch (survives reboots)</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="kill-switch-ipv6" checked>
+                <span>Block IPv6 when VPN is down</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="kill-switch-dns" checked>
+                <span>Block DNS when VPN is down</span>
+              </label>
+            </div>
+            <div style="margin-top: 1.5rem; padding: 1rem; background: var(--color-warning-light); border: 1px solid var(--color-warning); border-radius: 0.5rem;">
+              <strong>⚠ Warning:</strong> Enabling the kill switch may disconnect you from the internet if the VPN fails. Ensure you have a way to disable it (e.g., local console access) before enabling on remote servers.
+            </div>
+          </div>
+        </div>
+
+        <!-- DNS Leak Test Tab -->
+        <div class="vpn-tab-content" id="vpn-tab-dns-test">
+          <div class="vpn-section">
+            <div class="vpn-section-header">
+              <h3 class="vpn-section-title">DNS Leak Test</h3>
+              <button class="btn btn-primary" id="dns-test-btn" onclick="app.runDnsLeakTest()">Run Test</button>
+            </div>
+            <div id="dns-test-result" style="display: none;">
+              <div class="dns-test-result running" id="dns-test-status">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                  <div style="width: 24px; height: 24px; border: 3px solid var(--color-warning); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                  <div>
+                    <div style="font-weight: 500;">Testing DNS resolution…</div>
+                    <div style="font-size: 0.8125rem; color: var(--color-text-muted);">Checking for DNS leaks via multiple resolvers</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="dns-test-results" style="display: none; margin-top: 1rem;">
+              <h4 style="margin-bottom: 1rem;">Test Results</h4>
+              <div id="dns-leak-list"></div>
+              <div style="margin-top: 1rem; padding: 1rem; background: var(--color-bg-elevated); border-radius: 0.5rem;">
+                <h4 style="margin-bottom: 0.5rem;">Your DNS Servers</h4>
+                <div id="dns-servers-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem;"></div>
+              </div>
+              <div style="margin-top: 1rem; padding: 1rem; background: var(--color-bg-elevated); border-radius: 0.5rem;">
+                <h4 style="margin-bottom: 0.5rem;">Recommendations</h4>
+                <ul id="dns-recommendations" style="margin: 0; padding-left: 1.5rem; color: var(--color-text-muted); font-size: 0.875rem;"></ul>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     `;
+
+    this.vpnState = {
+      status: 'disconnected', // disconnected, connecting, connected, error
+      uptime: 0,
+      bytesSent: 0,
+      bytesReceived: 0,
+      peerId: null,
+      virtualIp: null,
+      routes: [],
+      splitTunnelEnabled: false,
+      includedRoutes: [
+        { network: '10.0.0.0/8', action: 'include' },
+        { network: '192.168.0.0/16', action: 'include' },
+      ],
+      excludedRoutes: [
+        { network: '192.168.1.0/24', action: 'exclude' },
+      ],
+      aclRules: [
+        { action: 'allow', source: 'any', dest: 'any', proto: 'any', port: 'any' },
+        { action: 'allow', source: '10.0.0.0/8', dest: '192.168.1.0/24', proto: 'tcp', port: '22,80,443' },
+      ],
+      killSwitchEnabled: true,
+      killSwitchPersistent: true,
+      killSwitchIpv6: true,
+      killSwitchDns: true,
+      autoConnect: false,
+      selectedPeer: null,
+      dnsTestRunning: false,
+    };
+
+    this.initVpnDashboard();
   }
 
-  toggleVPN() {
-    const status = document.getElementById('vpn-status');
-    const text = document.getElementById('vpn-status-text');
-    const routes = document.getElementById('vpn-routes');
-    const btn = event.target;
+  initVpnDashboard() {
+    this.updateVpnOverview();
+    this.renderRoutesTable();
+    this.renderAclRules();
+    this.updateSplitTunnelUI();
+  }
 
-    if (status.classList.contains('offline')) {
-      status.classList.remove('offline');
-      status.classList.add('online');
-      text.textContent = 'Connected';
-      routes.style.display = 'block';
-      btn.textContent = 'Disconnect';
-      this.showToast('VPN tunnel established', 'success');
-    } else {
-      status.classList.remove('online');
-      status.classList.add('offline');
-      text.textContent = 'Disconnected';
-      routes.style.display = 'none';
-      btn.textContent = 'Connect';
-      this.showToast('VPN tunnel closed', 'info');
+  switchVpnTab(tab) {
+    document.querySelectorAll('.vpn-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.vpn-tab-content').forEach(c => c.classList.remove('active'));
+
+    document.querySelector(`[data-tab="${tab}"]`)?.classList.add('active');
+    document.getElementById(`vpn-tab-${tab}`)?.classList.add('active');
+
+    // Load tab-specific data
+    switch (tab) {
+      case 'overview': this.updateVpnOverview(); break;
+      case 'routes': this.renderRoutesTable(); break;
+      case 'split-tunnel': this.updateSplitTunnelUI(); break;
+      case 'acls': this.renderAclRules(); break;
+      case 'dns-test': break;
     }
+  }
+
+  async toggleVPN() {
+    const btn = document.getElementById('vpn-connect-btn');
+    const badge = document.getElementById('vpn-status-badge');
+
+    if (this.vpnState.status === 'connected') {
+      // Disconnect
+      btn.disabled = true;
+      btn.textContent = 'Disconnecting…';
+      this.vpnState.status = 'disconnecting';
+      this.updateVpnStatusBadge();
+
+      try {
+        // In real implementation: call VPN service to disconnect
+        await new Promise(r => setTimeout(r, 1000));
+
+        this.vpnState.status = 'disconnected';
+        this.vpnState.uptime = 0;
+        this.vpnState.bytesSent = 0;
+        this.vpnState.bytesReceived = 0;
+        this.vpnState.peerId = null;
+        this.vpnState.virtualIp = null;
+        if (this.vpnState.uptimeInterval) clearInterval(this.vpnState.uptimeInterval);
+
+        this.showToast('VPN disconnected', 'info');
+      } catch (e) {
+        this.showToast('Disconnect failed: ' + e.message, 'error');
+        this.vpnState.status = 'connected';
+      }
+    } else {
+      // Connect
+      const peer = this.vpnState.selectedPeer;
+      if (!peer) {
+        this.showToast('Please select a peer first', 'error');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Connecting…';
+      this.vpnState.status = 'connecting';
+      this.updateVpnStatusBadge();
+
+      try {
+        // In real implementation: call VPN service to connect to peer
+        await new Promise(r => setTimeout(r, 2000));
+
+        this.vpnState.status = 'connected';
+        this.vpnState.peerId = peer.id;
+        this.vpnState.virtualIp = '10.42.0.' + Math.floor(Math.random() * 254 + 2);
+        this.vpnState.uptime = 0;
+        this.vpnState.bytesSent = 0;
+        this.vpnState.bytesReceived = 0;
+
+        this.startVpnUptimeTimer();
+        this.startVpnTrafficSimulation();
+
+        this.showToast('VPN connected to ' + peer.name, 'success');
+      } catch (e) {
+        this.vpnState.status = 'error';
+        this.showToast('Connection failed: ' + e.message, 'error');
+      }
+    }
+
+    btn.disabled = false;
+    this.updateVpnOverview();
+    this.updateVpnStatusBadge();
+  }
+
+  updateVpnStatusBadge() {
+    const badge = document.getElementById('vpn-status-badge');
+    const btn = document.getElementById('vpn-connect-btn');
+
+    if (!badge || !btn) return;
+
+    badge.className = 'vpn-status-badge ' + this.vpnState.status;
+    badge.textContent = this.vpnState.status.charAt(0).toUpperCase() + this.vpnState.status.slice(1);
+
+    switch (this.vpnState.status) {
+      case 'connected':
+        btn.textContent = 'Disconnect';
+        btn.className = 'btn btn-critical';
+        break;
+      case 'connecting':
+        btn.textContent = 'Connecting…';
+        btn.disabled = true;
+        btn.className = 'btn btn-warning';
+        break;
+      case 'disconnecting':
+        btn.textContent = 'Disconnecting…';
+        btn.disabled = true;
+        btn.className = 'btn btn-warning';
+        break;
+      default:
+        btn.textContent = 'Connect';
+        btn.disabled = false;
+        btn.className = 'btn btn-primary';
+    }
+  }
+
+  updateVpnOverview() {
+    const statusVal = document.getElementById('vpn-status-value');
+    const sentVal = document.getElementById('vpn-sent');
+    const recvVal = document.getElementById('vpn-received');
+    const uptimeVal = document.getElementById('vpn-uptime');
+    const peerVal = document.getElementById('vpn-peer');
+    const ipVal = document.getElementById('vpn-virtual-ip');
+
+    if (statusVal) statusVal.textContent = this.vpnState.status.charAt(0).toUpperCase() + this.vpnState.status.slice(1);
+    if (sentVal) sentVal.textContent = this.formatSize(this.vpnState.bytesSent);
+    if (recvVal) recvVal.textContent = this.formatSize(this.vpnState.bytesReceived);
+    if (uptimeVal) uptimeVal.textContent = this.formatDuration(this.vpnState.uptime);
+    if (peerVal) peerVal.textContent = this.vpnState.peerId ? 'Peer-' + this.vpnState.peerId.slice(0, 6) : '—';
+    if (ipVal) ipVal.textContent = this.vpnState.virtualIp || '—';
+  }
+
+  startVpnUptimeTimer() {
+    if (this.vpnState.uptimeInterval) clearInterval(this.vpnState.uptimeInterval);
+    this.vpnState.uptimeInterval = setInterval(() => {
+      if (this.vpnState.status === 'connected') {
+        this.vpnState.uptime++;
+        this.updateVpnOverview();
+      } else {
+        clearInterval(this.vpnState.uptimeInterval);
+      }
+    }, 1000);
+  }
+
+  startVpnTrafficSimulation() {
+    if (this.vpnState.trafficInterval) clearInterval(this.vpnState.trafficInterval);
+    this.vpnState.trafficInterval = setInterval(() => {
+      if (this.vpnState.status === 'connected') {
+        this.vpnState.bytesSent += Math.floor(Math.random() * 50000) + 10000;
+        this.vpnState.bytesReceived += Math.floor(Math.random() * 80000) + 20000;
+        this.updateVpnOverview();
+      } else {
+        clearInterval(this.vpnState.trafficInterval);
+      }
+    }, 2000);
+  }
+
+  formatDuration(seconds) {
+    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+
+  formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  // Routes Tab
+  renderRoutesTable() {
+    const body = document.getElementById('vpn-routes-body');
+    if (!body) return;
+
+    if (this.vpnState.routes.length === 0) {
+      body.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--color-text-muted);">No routes configured</td></tr>';
+      return;
+    }
+
+    body.innerHTML = this.vpnState.routes.map((r, i) => `
+      <tr>
+        <td><code>${r.network}</code></td>
+        <td><code>${r.gateway}</code></td>
+        <td>${r.metric}</td>
+        <td><span class="route-status ${r.status}">${r.status}</span></td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="app.editRoute(${i})">Edit</button>
+          <button class="btn btn-critical btn-sm" onclick="app.deleteRoute(${i})">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  addRoute() {
+    const network = prompt('Network (CIDR, e.g., 10.10.0.0/16):');
+    if (!network) return;
+    const gateway = prompt('Gateway IP (or "auto"):', 'auto');
+    if (!gateway) return;
+    const metric = parseInt(prompt('Metric:', '100') || '100');
+
+    this.vpnState.routes.push({
+      network,
+      gateway,
+      metric,
+      status: this.vpnState.status === 'connected' ? 'active' : 'pending'
+    });
+    this.renderRoutesTable();
+  }
+
+  editRoute(index) {
+    const route = this.vpnState.routes[index];
+    const network = prompt('Network (CIDR):', route.network);
+    if (!network) return;
+    const gateway = prompt('Gateway IP:', route.gateway);
+    if (!gateway) return;
+    const metric = parseInt(prompt('Metric:', route.metric.toString()) || '100');
+
+    this.vpnState.routes[index] = { ...route, network, gateway, metric };
+    this.renderRoutesTable();
+  }
+
+  deleteRoute(index) {
+    if (confirm('Delete this route?')) {
+      this.vpnState.routes.splice(index, 1);
+      this.renderRoutesTable();
+    }
+  }
+
+  // Split Tunnel Tab
+  updateSplitTunnelUI() {
+    const checkbox = document.getElementById('split-tunnel-enabled');
+    if (checkbox) checkbox.checked = this.vpnState.splitTunnelEnabled;
+
+    const included = document.getElementById('included-routes');
+    const excluded = document.getElementById('excluded-routes');
+
+    if (included) {
+      included.innerHTML = this.vpnState.includedRoutes.map((r, i) => `
+        <div class="acl-rule">
+          <input type="text" placeholder="Network (CIDR)" value="${r.network}" onchange="app.updateIncludedRoute(${i}, 'network', this.value)">
+          <select onchange="app.updateIncludedRoute(${i}, 'action', this.value)">
+            <option value="include" ${r.action === 'include' ? 'selected' : ''}>Include (via VPN)</option>
+            <option value="exclude" ${r.action === 'exclude' ? 'selected' : ''}>Exclude (bypass VPN)</option>
+          </select>
+          <button class="btn btn-critical btn-sm" onclick="app.removeIncludedRoute(${i})">Remove</button>
+        </div>
+      `).join('');
+    }
+
+    if (excluded) {
+      excluded.innerHTML = this.vpnState.excludedRoutes.map((r, i) => `
+        <div class="acl-rule">
+          <input type="text" placeholder="Network (CIDR)" value="${r.network}" onchange="app.updateExcludedRoute(${i}, 'network', this.value)">
+          <select onchange="app.updateExcludedRoute(${i}, 'action', this.value)">
+            <option value="include" ${r.action === 'include' ? 'selected' : ''}>Include (via VPN)</option>
+            <option value="exclude" ${r.action === 'exclude' ? 'selected' : ''}>Exclude (bypass VPN)</option>
+          </select>
+          <button class="btn btn-critical btn-sm" onclick="app.removeExcludedRoute(${i})">Remove</button>
+        </div>
+      `).join('');
+    }
+  }
+
+  toggleSplitTunnel(enabled) {
+    this.vpnState.splitTunnelEnabled = enabled;
+    this.showToast(enabled ? 'Split tunnel enabled' : 'Split tunnel disabled (all traffic via VPN)', 'info');
+  }
+
+  addSplitRoute() {
+    const network = prompt('Network (CIDR, e.g., 172.16.0.0/12):');
+    if (!network) return;
+    const action = prompt('Action: "include" (via VPN) or "exclude" (bypass):', 'include');
+    if (!action) return;
+
+    this.vpnState.includedRoutes.push({ network, action });
+    this.updateSplitTunnelUI();
+  }
+
+  removeSplitRoute(index) {
+    this.vpnState.includedRoutes.splice(index, 1);
+    this.updateSplitTunnelUI();
+  }
+
+  updateIncludedRoute(index, field, value) {
+    this.vpnState.includedRoutes[index][field] = value;
+  }
+
+  addExcludedRoute() {
+    const network = prompt('Network (CIDR, e.g., 172.20.0.0/16):');
+    if (!network) return;
+    const action = prompt('Action: "include" or "exclude":', 'exclude');
+    if (!action) return;
+
+    this.vpnState.excludedRoutes.push({ network, action });
+    this.updateSplitTunnelUI();
+  }
+
+  removeExcludedRoute(index) {
+    this.vpnState.excludedRoutes.splice(index, 1);
+    this.updateSplitTunnelUI();
+  }
+
+  updateExcludedRoute(index, field, value) {
+    this.vpnState.excludedRoutes[index][field] = value;
+  }
+
+  // ACLs Tab
+  renderAclRules() {
+    const container = document.getElementById('acl-rules');
+    if (!container) return;
+
+    container.innerHTML = this.vpnState.aclRules.map((r, i) => `
+      <div class="acl-rule">
+        <select onchange="app.updateAclRule(${i}, 'action', this.value)">
+          <option value="allow" ${r.action === 'allow' ? 'selected' : ''}>Allow</option>
+          <option value="deny" ${r.action === 'deny' ? 'selected' : ''}>Deny</option>
+        </select>
+        <input type="text" placeholder="Source (CIDR or 'any')" value="${r.source}" onchange="app.updateAclRule(${i}, 'source', this.value)">
+        <input type="text" placeholder="Destination (CIDR or 'any')" value="${r.dest}" onchange="app.updateAclRule(${i}, 'dest', this.value)">
+        <input type="text" placeholder="Protocol (tcp/udp/icmp/any)" value="${r.proto}" onchange="app.updateAclRule(${i}, 'proto', this.value)">
+        <input type="text" placeholder="Port/Port Range" value="${r.port}" onchange="app.updateAclRule(${i}, 'port', this.value)">
+        <button class="btn btn-critical btn-sm" onclick="app.removeAclRule(${i})">Delete</button>
+      </div>
+    `).join('');
+  }
+
+  addAclRule() {
+    this.vpnState.aclRules.push({ action: 'allow', source: 'any', dest: 'any', proto: 'any', port: 'any' });
+    this.renderAclRules();
+  }
+
+  removeAclRule(index) {
+    this.vpnState.aclRules.splice(index, 1);
+    this.renderAclRules();
+  }
+
+  updateAclRule(index, field, value) {
+    this.vpnState.aclRules[index][field] = value;
+  }
+
+  // Kill Switch Tab
+  toggleKillSwitch(enabled) {
+    this.vpnState.killSwitchEnabled = enabled;
+    this.showToast(enabled ? 'Kill switch enabled' : 'Kill switch disabled', enabled ? 'success' : 'warning');
+  }
+
+  // DNS Leak Test
+  async runDnsLeakTest() {
+    const btn = document.getElementById('dns-test-btn');
+    const statusDiv = document.getElementById('dns-test-status');
+    const resultsDiv = document.getElementById('dns-test-results');
+    const listDiv = document.getElementById('dns-leak-list');
+    const serversDiv = document.getElementById('dns-servers-list');
+    const recDiv = document.getElementById('dns-recommendations');
+
+    if (!btn || !statusDiv || !resultsDiv) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Testing…';
+    statusDiv.style.display = 'block';
+    resultsDiv.style.display = 'none';
+
+    this.vpnState.dnsTestRunning = true;
+
+    try {
+      // Simulate DNS leak test
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Simulated results
+      const testServers = [
+        { ip: '1.1.1.1', provider: 'Cloudflare', location: 'US', leaked: false },
+        { ip: '8.8.8.8', provider: 'Google', location: 'US', leaked: false },
+        { ip: '9.9.9.9', provider: 'Quad9', location: 'CH', leaked: false },
+        { ip: '208.67.222.222', provider: 'OpenDNS', location: 'US', leaked: false },
+      ];
+
+      // Simulate a leak if VPN is not connected
+      const leaked = this.vpnState.status !== 'connected' && Math.random() > 0.5;
+      if (leaked) {
+        testServers[0].leaked = true;
+        testServers[0].provider = 'ISP DNS (Leaked!)';
+      }
+
+      statusDiv.style.display = 'none';
+      resultsDiv.style.display = 'block';
+
+      // DNS servers list
+      serversDiv.innerHTML = testServers.map(s => `
+        <div style="padding: 0.75rem; background: var(--color-bg); border-radius: 0.375rem; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-weight: 500;">${s.provider}</div>
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">${s.ip} • ${s.location}</div>
+          </div>
+          <span style="padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.6875rem; font-weight: 600; ${s.leaked ? 'background: var(--color-critical-light); color: var(--color-critical);' : 'background: var(--color-success-light); color: var(--color-success);'}">
+            ${s.leaked ? 'LEAKED' : 'SECURE'}
+          </span>
+        </div>
+      `).join('');
+
+      // Leak list
+      listDiv.innerHTML = `
+        <div style="padding: 1rem; background: ${leaked ? 'var(--color-critical-light)' : 'var(--color-success-light)'}; border: 1px solid ${leaked ? 'var(--color-critical)' : 'var(--color-success)'}; border-radius: 0.5rem;">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 2rem;">${leaked ? '⚠' : '✓'}</span>
+            <div>
+              <div style="font-weight: 600; ${leaked ? 'color: var(--color-critical);' : 'color: var(--color-success);'}">
+                ${leaked ? 'DNS Leak Detected!' : 'No DNS Leaks Found'}
+              </div>
+              <div style="font-size: 0.8125rem; color: var(--color-text-muted);">
+                ${leaked ? 'Your DNS queries are visible to your ISP. VPN may not be routing DNS correctly.' : 'All DNS queries are routed through the VPN tunnel.'}
+              </div>
+            </div>
+          </div>
+        `;
+
+      // Recommendations
+      const recommendations = [];
+      if (leaked) {
+        recommendations.push('Enable "Block DNS when VPN is down" in Kill Switch settings');
+        recommendations.push('Configure your VPN to push DNS servers (e.g., 1.1.1.1, 9.9.9.9)');
+        recommendations.push('Disable WebRTC in browser to prevent local IP leaks');
+        recommendations.push('Use "DNS over HTTPS" (DoH) in browser settings');
+      } else {
+        recommendations.push('DNS is properly routed through VPN ✓');
+        recommendations.push('Kill switch is active ✓');
+        recommendations.push('Consider enabling DNS over HTTPS for additional privacy');
+      }
+
+      document.getElementById('dns-recommendations').innerHTML = recommendations.map(r => `<li>${r}</li>`).join('');
+
+    } catch (e) {
+      this.showToast('DNS test failed: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Run Test';
+      this.vpnState.dnsTestRunning = false;
+    }
+  }
+
+  // Peer Selection
+  showPeerSelector() {
+    // In real implementation, this would show a modal with available peers
+    const peers = [
+      { id: 'peer-1', name: 'MacBook Pro', addrs: ['192.168.1.50:4443'], score: 0.95 },
+      { id: 'peer-2', name: 'iPhone', addrs: ['192.168.1.51:4443'], score: 0.87 },
+      { id: 'peer-3', name: 'Linux Server', addrs: ['10.0.0.5:4443'], score: 0.92 },
+    ];
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
+    modal.innerHTML = `
+      <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 500px; width: 90%; box-shadow: var(--shadow-xl);">
+        <h3 style="margin-bottom: 1rem;">Select VPN Peer</h3>
+        <p style="color: var(--color-text-muted); margin-bottom: 1rem;">Choose a peer to use as VPN exit node</p>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 300px; overflow-y: auto;">
+          ${peers.map(p => `
+            <label class="peer-option" onclick="this.querySelector('input').checked=true; document.body.removeChild(this.closest('.modal'))">
+              <input type="radio" name="vpn-peer" value="${p.id}" ${this.vpnState.selectedPeer === p.id ? 'checked' : ''}>
+              <div style="display: flex; justify-content: space-between;">
+                <div>
+                  <div style="font-weight: 500;">${p.name}</div>
+                  <div style="font-size: 0.75rem; color: var(--color-text-muted);">${p.addrs[0]}</div>
+                </div>
+                <div style="font-size: 0.75rem; color: var(--color-primary);">Score: ${p.score}</div>
+              </div>
+            </label>
+          `).join('')}
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+          <button class="btn btn-secondary" onclick="document.body.removeChild(this.closest('.modal'))">Cancel</button>
+          <button class="btn btn-primary" onclick="app.selectVpnPeer(this.closest('.modal'))">Connect</button>
+        </div>
+      </div>
+    `;
+    modal.className = 'modal';
+    document.body.appendChild(modal);
+  }
+
+  selectVpnPeer(modal) {
+    const selected = modal.querySelector('input[name="vpn-peer"]:checked');
+    if (selected) {
+      this.vpnState.selectedPeer = selected.value;
+      const peerEl = document.getElementById('vpn-selected-peer');
+      if (peerEl) {
+        const peerNames = { 'peer-1': 'MacBook Pro', 'peer-2': 'iPhone', 'peer-3': 'Linux Server' };
+        peerEl.textContent = peerNames[selected.value] || selected.value;
+      }
+      this.showToast('Peer selected: ' + selected.value, 'success');
+    }
+    document.body.removeChild(modal);
+  }
+
+  toggleAutoConnect(enabled) {
+    this.vpnState.autoConnect = enabled;
+    this.showToast(enabled ? 'Auto-connect enabled' : 'Auto-connect disabled', 'info');
   }
 
   async renderSecurity() {
