@@ -851,6 +851,285 @@ class LocalWEBApp {
     this.showToast(`Installing ${name}…`, 'info');
   }
 
+  async renderFiles() {
+    this.showLoading(true);
+    try {
+      const [files, transfers] = await Promise.all([
+        this.fetchAPI('/files/list').catch(() => []),
+        this.fetchAPI('/files/transfers').catch(() => []),
+      ]);
+      this.showLoading(false);
+
+      const formatSize = (bytes) => {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+        return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+      };
+
+      const formatTime = (ms) => {
+        if (ms < 1000) return ms + 'ms';
+        if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+        return (ms / 60000).toFixed(1) + 'm';
+      };
+
+      const fileListHtml = files.length === 0
+        ? '<p style="color: var(--color-text-muted);">No files shared yet.</p>'
+        : `<table class="table"><thead><tr><th>Name</th><th>Size</th><th>Type</th><th>Modified</th><th>Actions</th></tr></thead><tbody>` +
+          files.map(f => `
+            <tr>
+              <td>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <span class="file-icon">${this.getFileIcon(f.name)}</span>
+                  <span>${f.name}</span>
+                </div>
+              </td>
+              <td>${formatSize(f.size)}</td>
+              <td>${f.mime_type || 'unknown'}</td>
+              <td>${new Date(f.modified).toLocaleString()}</td>
+              <td>
+                <div style="display: flex; gap: 0.25rem;">
+                  <button class="btn btn-sm btn-secondary" onclick="app.previewFile('${f.id}', '${f.name}')" title="Preview">👁</button>
+                  <button class="btn btn-sm btn-primary" onclick="app.downloadFile('${f.id}')" title="Download">⬇</button>
+                  <button class="btn btn-sm btn-secondary" onclick="app.shareFile('${f.id}')" title="Share">🔗</button>
+                </div>
+              </td>
+            </tr>
+          `).join('') + '</tbody></table>';
+
+      const activeTransfers = transfers.filter(t => t.status === 'active' || t.status === 'pending');
+      const completedTransfers = transfers.filter(t => t.status === 'completed' || t.status === 'failed');
+
+      const transferListHtml = (activeTransfers.length + completedTransfers.length) === 0
+        ? '<p style="color: var(--color-text-muted);">No active or recent transfers.</p>'
+        : `
+          ${activeTransfers.length > 0 ? `
+            <h4 style="margin: 1rem 0 0.5rem; font-size: 0.875rem; color: var(--color-text-muted);">Active Transfers</h4>
+            <div class="transfer-list">
+              ${activeTransfers.map(t => `
+                <div class="transfer-item" id="transfer-${t.id}">
+                  <div class="transfer-header">
+                    <span class="transfer-name">${t.name}</span>
+                    <span class="transfer-size">${formatSize(t.bytes_transferred)}/${formatSize(t.total_size)}</span>
+                  </div>
+                  <div class="progress-bar" style="height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; margin: 0.5rem 0;">
+                    <div class="progress-fill" style="width: ${t.total_size > 0 ? (t.bytes_transferred / t.total_size * 100).toFixed(1) : 0}%; height: 100%; background: var(--color-primary); border-radius: 3px; transition: width 0.3s;"></div>
+                  </div>
+                  <div class="transfer-meta" style="font-size: 0.75rem; color: var(--color-text-muted); display: flex; justify-content: space-between;">
+                    <span>${t.status} • ${formatTime(t.elapsed_ms)} • ${formatSize(t.speed_bps)}/s</span>
+                    <span>${t.peer_name}</span>
+                  </div>
+                  ${t.can_resume ? `<button class="btn btn-sm btn-secondary" style="margin-top: 0.5rem;" onclick="app.resumeTransfer('${t.id}')">Resume</button>` : ''}
+                  ${t.can_pause ? `<button class="btn btn-sm btn-secondary" style="margin-top: 0.5rem;" onclick="app.pauseTransfer('${t.id}')">Pause</button>` : ''}
+                  ${t.can_cancel ? `<button class="btn btn-sm btn-critical" style="margin-top: 0.5rem;" onclick="app.cancelTransfer('${t.id}')">Cancel</button>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${completedTransfers.length > 0 ? `
+            <h4 style="margin: 1.5rem 0 0.5rem; font-size: 0.875rem; color: var(--color-text-muted);">Recent Transfers</h4>
+            <div class="transfer-list">
+              ${completedTransfers.slice(0, 10).map(t => `
+                <div class="transfer-item ${t.status === 'failed' ? 'failed' : ''}" style="opacity: 0.7;">
+                  <div class="transfer-header">
+                    <span class="transfer-name">${t.name}</span>
+                    <span class="transfer-size">${t.status === 'completed' ? '✓' : '✗'} ${formatSize(t.total_size)}</span>
+                  </div>
+                  <div class="transfer-meta" style="font-size: 0.75rem; color: var(--color-text-muted);">
+                    ${new Date(t.completed_at).toLocaleString()} • ${t.peer_name} • ${t.status === 'completed' ? 'Completed' : 'Failed: ' + (t.error || 'Unknown error')}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        `;
+
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Files</span>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn btn-primary" id="upload-btn">Upload Files</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="drop-zone" class="drop-zone" style="border: 2px dashed var(--color-border); border-radius: 0.5rem; padding: 3rem; text-align: center; margin-bottom: 1.5rem; cursor: pointer; transition: all 0.2s;">
+              <div style="font-size: 3rem; margin-bottom: 1rem;">📁</div>
+              <p style="color: var(--color-text-muted); margin-bottom: 0.5rem;">Drag & drop files here, or click to select</p>
+              <p style="font-size: 0.8125rem; color: var(--color-text-muted);">Supports multiple files, folders, and resume</p>
+              <input type="file" id="file-input" multiple style="display: none;" />
+            </div>
+            ${fileListHtml}
+            ${transferListHtml}
+          </div>
+        </div>
+      `;
+
+      // Setup drag-drop and file input
+      this.setupFileDropZone();
+
+    } catch (e) {
+      this.showLoading(false);
+      this.showToast('Failed to load files', 'error');
+    }
+  }
+
+  getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const icons = {
+      pdf: '📄', doc: '📝', docx: '📝', txt: '📝', md: '📝',
+      jpg: '🖼', jpeg: '🖼', png: '🖼', gif: '🖼', webp: '🖼', svg: '🖼',
+      mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬', webm: '🎬',
+      mp3: '🎵', wav: '🎵', flac: '🎵', ogg: '🎵',
+      zip: '📦', tar: '📦', gz: '📦', rar: '📦', '7z': '📦',
+      js: '📜', ts: '📜', py: '🐍', go: '🐹', rs: '🦀', html: '🌐', css: '🎨',
+      json: '📋', xml: '📋', yaml: '📋', yml: '📋',
+    };
+    return icons[ext] || '📄';
+  }
+
+  setupFileDropZone() {
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const uploadBtn = document.getElementById('upload-btn');
+
+    if (!dropZone || !fileInput) return;
+
+    // Click to open file dialog
+    dropZone.addEventListener('click', (e) => {
+      if (e.target === dropZone || e.target.closest('.drop-zone') === dropZone) {
+        fileInput.click();
+      }
+    });
+
+    // Upload button
+    if (uploadBtn) {
+      uploadBtn.addEventListener('click', () => fileInput.click());
+    }
+
+    // File input change
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        this.uploadFiles(Array.from(e.target.files));
+      }
+    });
+
+    // Drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = 'var(--color-primary)';
+      dropZone.style.background = 'var(--color-primary-light)';
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = 'var(--color-border)';
+      dropZone.style.background = '';
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = 'var(--color-border)';
+      dropZone.style.background = '';
+      if (e.dataTransfer.files.length > 0) {
+        this.uploadFiles(Array.from(e.dataTransfer.files));
+      }
+    });
+  }
+
+  async uploadFiles(files) {
+    if (files.length === 0) return;
+
+    this.showToast(`Starting upload of ${files.length} file(s)…`, 'info');
+
+    for (const file of files) {
+      try {
+        // For demo, we'll show the upload in the transfer list
+        // In real implementation, this would use the Files service BitSwap protocol
+        const transferId = 'transfer-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+        // Add to active transfers UI immediately
+        this.addTransferToUI({
+          id: transferId,
+          name: file.name,
+          total_size: file.size,
+          bytes_transferred: 0,
+          status: 'active',
+          speed_bps: 0,
+          elapsed_ms: 0,
+          peer_name: 'auto',
+          can_pause: true,
+          can_cancel: true,
+        });
+
+        // Simulate upload progress
+        await this.simulateUpload(transferId, file);
+      } catch (e) {
+        this.showToast(`Failed to upload ${file.name}: ${e.message}`, 'error');
+      }
+    }
+  }
+
+  addTransferToUI(transfer) {
+    // This will be called to add a transfer to the active transfers list
+    // For now, just refresh the files page
+    this.renderFiles();
+  }
+
+  async simulateUpload(transferId, file) {
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    let uploaded = 0;
+    const startTime = Date.now();
+
+    while (uploaded < file.size) {
+      await new Promise(r => setTimeout(r, 100)); // Simulate network delay
+
+      const chunk = Math.min(chunkSize, file.size - uploaded);
+      uploaded += chunk;
+
+      // In real implementation, this would update via SSE
+      // For demo, we'll just update the UI periodically
+      if (uploaded % (chunkSize * 5) === 0 || uploaded >= file.size) {
+        // Trigger UI update
+        this.renderFiles();
+      }
+    }
+
+    // Mark as completed
+    this.showToast(`${file.name} uploaded successfully`, 'success');
+    this.renderFiles();
+  }
+
+  previewFile(fileId, fileName) {
+    this.showToast(`Preview for ${fileName} - opening…`, 'info');
+    // In real implementation, this would open a preview modal
+  }
+
+  downloadFile(fileId) {
+    this.showToast('Starting download…', 'info');
+    // In real implementation, this would trigger BitSwap download
+  }
+
+  shareFile(fileId) {
+    this.showToast('Generating share link…', 'info');
+    // In real implementation, this would create a shareable link
+  }
+
+  resumeTransfer(transferId) {
+    this.showToast(`Resuming transfer ${transferId}…`, 'info');
+    // In real implementation, this would resume interrupted BitSwap transfer
+  }
+
+  pauseTransfer(transferId) {
+    this.showToast(`Pausing transfer ${transferId}…`, 'info');
+    // In real implementation, this would pause BitSwap transfer
+  }
+
+  cancelTransfer(transferId) {
+    this.showToast(`Cancelled transfer ${transferId}`, 'info');
+    // In real implementation, this would cancel BitSwap transfer
+  }
+
   renderVoice() {
     document.getElementById('content').innerHTML = `
       <div class="card">
