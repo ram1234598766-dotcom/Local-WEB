@@ -1466,35 +1466,645 @@ class LocalWEBApp {
 
   renderVoice() {
     document.getElementById('content').innerHTML = `
-      <div class="card">
-        <div class="card-header">Voice</div>
-        <div class="card-body">
-          <div style="display: flex; align-items: center; gap: 1rem;">
-            <button class="btn btn-primary" onclick="app.startCall()">Start Call</button>
-            <button class="btn btn-secondary" onclick="app.endCall()" style="display: none;" id="end-call-btn">End Call</button>
-            <span class="connection-status offline" id="call-status"></span>
-            <span id="call-status-text" style="color: var(--color-text-muted);">Idle</span>
+      <style>
+        .call-container { display: flex; flex-direction: column; height: calc(100vh - 200px); min-height: 500px; }
+        .call-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid var(--color-border); }
+        .call-title { display: flex; align-items: center; gap: 0.75rem; }
+        .call-status-badge { padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; }
+        .call-status-badge.idle { background: var(--color-bg); color: var(--color-text-muted); border: 1px solid var(--color-border); }
+        .call-status-badge.connecting { background: var(--color-warning-light); color: var(--color-warning); border: 1px solid var(--color-warning); animation: pulse 1.5s infinite; }
+        .call-status-badge.active { background: var(--color-success-light); color: var(--color-success); border: 1px solid var(--color-success); }
+        .call-status-badge.ended { background: var(--color-critical-light); color: var(--color-critical); border: 1px solid var(--color-critical); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .call-timer { font-family: monospace; font-size: 1.125rem; font-weight: 600; color: var(--color-text); }
+        .call-controls { display: flex; gap: 0.5rem; }
+        .call-control-btn { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; font-size: 1.25rem; transition: all 0.15s; }
+        .call-control-btn.primary { background: var(--color-primary); color: white; }
+        .call-control-btn.primary:hover { background: var(--color-primary-dark); transform: scale(1.05); }
+        .call-control-btn.secondary { background: var(--color-bg); color: var(--color-text); border: 1px solid var(--color-border); }
+        .call-control-btn.secondary:hover { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary); }
+        .call-control-btn.danger { background: var(--color-critical); color: white; }
+        .call-control-btn.danger:hover { background: var(--color-critical-dark); transform: scale(1.05); }
+        .call-control-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .call-control-btn.active { background: var(--color-primary); color: white; box-shadow: 0 0 0 2px var(--color-primary-light); }
+        .video-grid { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; padding: 1rem; overflow: auto; }
+        .video-tile { position: relative; background: var(--color-bg-elevated); border-radius: 0.5rem; overflow: hidden; border: 1px solid var(--color-border); aspect-ratio: 16/9; min-height: 180px; }
+        .video-tile.local { border-color: var(--color-primary); }
+        .video-tile video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+        .video-tile.muted video { filter: grayscale(0.3); }
+        .video-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: 0.75rem; background: linear-gradient(transparent, rgba(0,0,0,0.7)); color: white; }
+        .video-name { font-weight: 500; font-size: 0.875rem; }
+        .video-status { display: flex; gap: 0.5rem; margin-top: 0.25rem; font-size: 0.6875rem; }
+        .status-indicator { display: flex; align-items: center; gap: 0.25rem; }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-success); }
+        .status-dot.muted { background: var(--color-warning); }
+        .status-dot.camera-off { background: var(--color-critical); }
+        .status-dot.screen-sharing { background: var(--color-info); animation: pulse 1s infinite; }
+        .call-footer { padding: 1rem; border-top: 1px solid var(--color-border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        .call-settings { display: flex; gap: 0.5rem; }
+        .setting-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 0.375rem; cursor: pointer; font-size: 0.8125rem; transition: all 0.15s; }
+        .setting-item:hover { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary); }
+        .setting-item.active { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+        .setting-icon { font-size: 1rem; }
+        .call-ended { text-align: center; padding: 3rem; color: var(--color-text-muted); }
+        .call-ended h3 { margin-bottom: 0.5rem; color: var(--color-text); }
+        .call-summary { background: var(--color-bg-elevated); border-radius: 0.5rem; padding: 1rem; margin: 1rem auto; max-width: 400px; text-align: left; }
+        .call-summary-row { display: flex; justify-content: space-between; padding: 0.25rem 0; font-size: 0.8125rem; }
+        .call-summary-label { color: var(--color-text-muted); }
+        .call-summary-value { font-weight: 500; }
+      </style>
+      <div class="call-container" id="voice-call-container">
+        <div class="call-header">
+          <div class="call-title">
+            <h3 style="margin: 0; font-size: 1rem;">Voice/Video Call</h3>
+            <span class="call-status-badge idle" id="call-status-badge">Idle</span>
           </div>
-          <p style="color: var(--color-text-muted); font-size: 0.8125rem; margin-top: 0.5rem;">
-            ICE + Opus codec. Audio requires microphone access.
-          </p>
+          <div class="call-timer" id="call-timer" style="display: none;">00:00</div>
+          <div class="call-controls">
+            <button class="call-control-btn secondary" id="screen-share-btn" onclick="app.toggleScreenShare()" title="Share Screen" disabled>🖥</button>
+            <button class="call-control-btn secondary" id="record-btn" onclick="app.toggleRecording()" title="Record" disabled>⏺</button>
+            <button class="call-control-btn secondary" id="virtual-bg-btn" onclick="app.toggleVirtualBackground()" title="Virtual Background" disabled>🎭</button>
+            <button class="call-control-btn secondary" id="settings-btn" onclick="app.toggleCallSettings()" title="Settings">⚙</button>
+          </div>
         </div>
-      </div>
+        <div class="video-grid" id="video-grid">
+          <div class="video-tile local" id="local-video-tile">
+            <video id="local-video" autoplay muted playsinline></video>
+            <div class="video-overlay">
+              <div class="video-name">You (Local)</div>
+              <div class="video-status">
+                <span class="status-indicator"><span class="status-dot" id="local-audio-status"></span> Audio</span>
+                <span class="status-indicator"><span class="status-dot" id="local-video-status"></span> Video</span>
+                <span class="status-indicator"><span class="status-dot screen-sharing" id="local-screen-status" style="display: none;"></span> Screen</span>
+              </div>
+            </div>
+            <div class="video-tile" id="remote-video-placeholder" style="display: none;">
+              <video id="remote-video" autoplay playsinline></video>
+              <div class="video-overlay">
+                <div class="video-name" id="remote-video-name">Connecting…</div>
+                <div class="video-status">
+                  <span class="status-indicator"><span class="status-dot" id="remote-audio-status"></span> Audio</span>
+                  <span class="status-indicator"><span class="status-dot" id="remote-video-status"></span> Video</span>
+                  <span class="status-indicator"><span class="status-dot screen-sharing" id="remote-screen-status" style="display: none;"></span> Screen</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="call-footer">
+            <div class="call-settings" id="call-settings" style="display: none;">
+              <div class="setting-item" onclick="app.toggleMute()"><span class="setting-icon" id="mic-icon">🎤</span><span id="mic-label">Mute</span></div>
+              <div class="setting-item" onclick="app.toggleCamera()"><span class="setting-icon" id="cam-icon">📷</span><span id="cam-label">Camera</span></div>
+              <div class="setting-item" onclick="app.toggleSpeaker()"><span class="setting-icon" id="speaker-icon">🔊</span><span id="speaker-label">Speaker</span></div>
+              <div class="setting-item" onclick="app.selectVirtualBackground()"><span class="setting-icon">🎨</span><span>Backgrounds</span></div>
+              <div class="setting-item" onclick="app.openDevicesModal()"><span class="setting-icon">🎧</span><span>Devices</span></div>
+            </div>
+            <div class="call-controls">
+              <button class="call-control-btn secondary" id="mute-btn" onclick="app.toggleMute()" title="Mute/Unmute (M)">🎤</button>
+              <button class="call-control-btn secondary" id="camera-btn" onclick="app.toggleCamera()" title="Camera On/Off (C)">📷</button>
+              <button class="call-control-btn danger" id="hangup-btn" onclick="app.endCall()" title="End Call">📞</button>
+            </div>
+          </div>
+        </div>
+      `;
     `;
+
+    this.callState = {
+      status: 'idle', // idle, connecting, active, ended
+      localStream: null,
+      remoteStream: null,
+      peerConnection: null,
+      isMuted: false,
+      isCameraOff: false,
+      isScreenSharing: false,
+      isRecording: false,
+      virtualBackground: null,
+      callStartTime: null,
+      timerInterval: null,
+      remotePeerId: null,
+    };
+
+    this.initVoiceCall();
   }
 
-  startCall() {
-    document.getElementById('call-status').className = 'connection-status online';
-    document.getElementById('call-status-text').textContent = 'Connected';
-    document.getElementById('end-call-btn').style.display = 'inline-flex';
-    this.showToast('Call started', 'success');
+  async initVoiceCall() {
+    try {
+      this.callState.localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
+      });
+
+      const localVideo = document.getElementById('local-video');
+      if (localVideo) {
+        localVideo.srcObject = this.callState.localStream;
+        this.updateLocalStatus();
+      }
+
+      // Load available devices
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      this.callState.devices = {
+        audioInput: devices.filter(d => d.kind === 'audioinput'),
+        videoInput: devices.filter(d => d.kind === 'videoinput'),
+        audioOutput: devices.filter(d => d.kind === 'audiooutput'),
+      };
+
+      // Populate virtual backgrounds
+      this.callState.virtualBackgrounds = [
+        { id: 'none', name: 'None', image: null },
+        { id: 'blur', name: 'Blur', image: 'blur' },
+        { id: 'office', name: 'Office', image: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080"><rect fill="%23e8e8e8" width="1920" height="1080"/><rect fill="%23fff" x="100" y="100" width="400" height="300" rx="8"/><rect fill="%23333" x="120" y="130" width="360" height="20" rx="4"/><rect fill="%23666" x="120" y="160" width="280" height="12" rx="4"/></svg>' },
+        { id: 'nature', name: 'Nature', image: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080"><rect fill="%2387ceeb" width="1920" height="1080"/><ellipse fill="%23228b22" cx="1600" cy="900" rx="300" ry="200"/><ellipse fill="%23ffd700" cx="300" cy="200" rx="80" ry="80"/></svg>' },
+      ];
+
+      this.showToast('Camera and microphone ready. Click "Start Call" to begin.', 'info');
+    } catch (e) {
+      this.showToast('Failed to access camera/microphone: ' + e.message, 'error');
+      document.getElementById('mute-btn')?.classList.add('disabled');
+      document.getElementById('camera-btn')?.classList.add('disabled');
+    }
   }
+
+  updateLocalStatus() {
+    const audioTrack = this.callState.localStream?.getAudioTracks()[0];
+    const videoTrack = this.callState.localStream?.getVideoTracks()[0];
+
+    const audioStatus = document.getElementById('local-audio-status');
+    const videoStatus = document.getElementById('local-video-status');
+
+    if (audioStatus) {
+      audioStatus.className = 'status-dot' + (audioTrack?.enabled === false ? ' muted' : '');
+    }
+    if (videoStatus) {
+      videoStatus.className = 'status-dot' + (videoTrack?.enabled === false ? ' camera-off' : '');
+    }
+  }
+
+  async startCall(peerId = null) {
+    if (this.callState.status === 'active') return;
+
+    this.callState.status = 'connecting';
+    this.callState.remotePeerId = peerId;
+    this.updateCallUI();
+
+    try {
+      // In real implementation, this would use the Voice service to establish WebRTC connection
+      // via the signaling server (QUIC stream)
+      this.showToast('Establishing connection…', 'info');
+
+      // Simulate connection
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Simulate remote peer joining
+      this.simulateRemotePeer();
+
+      this.callState.status = 'active';
+      this.callState.callStartTime = Date.now();
+      this.startCallTimer();
+      this.updateCallUI();
+
+      this.showToast('Call connected', 'success');
+    } catch (e) {
+      this.callState.status = 'idle';
+      this.updateCallUI();
+      this.showToast('Call failed: ' + e.message, 'error');
+    }
+  }
+
+  simulateRemotePeer() {
+    // Simulate remote video
+    const placeholder = document.getElementById('remote-video-placeholder');
+    const remoteVideo = document.getElementById('remote-video');
+    const remoteName = document.getElementById('remote-video-name');
+
+    if (placeholder && remoteVideo) {
+      placeholder.style.display = 'block';
+
+      // Create a mock stream (in real implementation, this comes from WebRTC)
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 360;
+      const ctx = canvas.getContext('2d');
+
+      const drawFrame = () => {
+        if (this.callState.status !== 'active') return;
+
+        // Draw a simulated remote video frame
+        const time = Date.now();
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Animated gradient background
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+        gradient.addColorStop(0, `hsl(${(time / 50) % 360}, 70%, 20%)`);
+        gradient.addColorStop(1, `hsl(${(time / 50 + 180) % 360}, 70%, 15%)`);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Moving elements
+        for (let i = 0; i < 5; i++) {
+          const x = (time / 30 + i * 400) % (canvas.width + 100) - 50;
+          const y = 100 + Math.sin(time / 1000 + i) * 50;
+          ctx.beginPath();
+          ctx.arc(x, y, 20 + Math.sin(time / 500 + i) * 10, 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(${(time / 20 + i * 72) % 360}, 80%, 60%, 0.6)`;
+          ctx.fill();
+        }
+
+        // "Remote" label
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.font = '24px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Remote Peer', canvas.width / 2, canvas.height / 2);
+
+        remoteVideo.srcObject = canvas.captureStream(30);
+        requestAnimationFrame(drawFrame);
+      };
+
+      drawFrame();
+
+      if (remoteName) remoteName.textContent = 'Peer-' + Math.random().toString(36).substr(2, 6);
+
+      // Simulate remote status
+      const remoteAudio = document.getElementById('remote-audio-status');
+      const remoteVideo = document.getElementById('remote-video-status');
+      if (remoteAudio) remoteAudio.className = 'status-dot';
+      if (remoteVideo) remoteVideo.className = 'status-dot';
+    }
 
   endCall() {
-    document.getElementById('call-status').className = 'connection-status offline';
-    document.getElementById('call-status-text').textContent = 'Idle';
-    document.getElementById('end-call-btn').style.display = 'none';
+    if (this.callState.timerInterval) {
+      clearInterval(this.callState.timerInterval);
+      this.callState.timerInterval = null;
+    }
+
+    if (this.callState.localStream) {
+      this.callState.localStream.getTracks().forEach(t => t.stop());
+      this.callState.localStream = null;
+    }
+
+    if (this.callState.screenStream) {
+      this.callState.screenStream.getTracks().forEach(t => t.stop());
+      this.callState.screenStream = null;
+    }
+
+    this.callState.status = 'ended';
+    this.updateCallUI();
+
     this.showToast('Call ended', 'info');
+  }
+
+  updateCallUI() {
+    const container = document.getElementById('voice-call-container');
+    if (!container) return;
+
+    const statusBadge = document.getElementById('call-status-badge');
+    const timer = document.getElementById('call-timer');
+    const hangupBtn = document.getElementById('hangup-btn');
+    const muteBtn = document.getElementById('mute-btn');
+    const cameraBtn = document.getElementById('camera-btn');
+    const screenBtn = document.getElementById('screen-share-btn');
+    const recordBtn = document.getElementById('record-btn');
+    const settingsBtn = document.getElementById('settings-btn');
+    const callControls = document.querySelector('.call-controls');
+    const callSettings = document.getElementById('call-settings');
+    const videoGrid = document.getElementById('video-grid');
+    const remotePlaceholder = document.getElementById('remote-video-placeholder');
+
+    if (!statusBadge) return;
+
+    switch (this.callState.status) {
+      case 'idle':
+        statusBadge.textContent = 'Idle';
+        statusBadge.className = 'call-status-badge idle';
+        timer.style.display = 'none';
+        hangupBtn.style.display = 'none';
+        muteBtn.disabled = true;
+        cameraBtn.disabled = true;
+        screenBtn.disabled = true;
+        recordBtn.disabled = true;
+        settingsBtn.disabled = true;
+        callControls.style.display = 'flex';
+        callSettings.style.display = 'none';
+        if (remotePlaceholder) remotePlaceholder.style.display = 'none';
+        break;
+
+      case 'connecting':
+        statusBadge.textContent = 'Connecting';
+        statusBadge.className = 'call-status-badge connecting';
+        hangupBtn.style.display = 'inline-flex';
+        hangupBtn.textContent = 'Cancel';
+        muteBtn.disabled = true;
+        cameraBtn.disabled = true;
+        screenBtn.disabled = true;
+        recordBtn.disabled = true;
+        settingsBtn.disabled = true;
+        break;
+
+      case 'active':
+        statusBadge.textContent = 'Connected';
+        statusBadge.className = 'call-status-badge active';
+        timer.style.display = 'block';
+        hangupBtn.style.display = 'inline-flex';
+        hangupBtn.textContent = 'End Call';
+        muteBtn.disabled = false;
+        cameraBtn.disabled = false;
+        screenBtn.disabled = false;
+        recordBtn.disabled = false;
+        settingsBtn.disabled = false;
+        callSettings.style.display = 'flex';
+        if (remotePlaceholder) remotePlaceholder.style.display = 'block';
+        break;
+
+      case 'ended':
+        statusBadge.textContent = 'Ended';
+        statusBadge.className = 'call-status-badge ended';
+        timer.style.display = 'none';
+        hangupBtn.style.display = 'none';
+        muteBtn.disabled = true;
+        cameraBtn.disabled = true;
+        screenBtn.disabled = true;
+        recordBtn.disabled = true;
+        settingsBtn.disabled = true;
+        callControls.style.display = 'flex';
+        callSettings.style.display = 'none';
+        if (remotePlaceholder) remotePlaceholder.style.display = 'none';
+        this.showCallSummary();
+        break;
+    }
+
+    // Update button states
+    this.updateControlButtons();
+  }
+
+  updateControlButtons() {
+    const muteBtn = document.getElementById('mute-btn');
+    const cameraBtn = document.getElementById('camera-btn');
+
+    if (muteBtn) {
+      muteBtn.textContent = this.callState.isMuted ? '🔇' : '🎤';
+      muteBtn.classList.toggle('active', this.callState.isMuted);
+      muteBtn.title = this.callState.isMuted ? 'Unmute (M)' : 'Mute (M)';
+    }
+
+    if (cameraBtn) {
+      cameraBtn.textContent = this.callState.isCameraOff ? '📷' : '📷';
+      cameraBtn.classList.toggle('active', this.callState.isCameraOff);
+      cameraBtn.title = this.callState.isCameraOff ? 'Camera Off (C)' : 'Camera On (C)';
+    }
+
+    const screenBtn = document.getElementById('screen-share-btn');
+    if (screenBtn) {
+      screenBtn.classList.toggle('active', this.callState.isScreenSharing);
+    }
+
+    const recordBtn = document.getElementById('record-btn');
+    if (recordBtn) {
+      recordBtn.classList.toggle('active', this.callState.isRecording);
+    }
+  }
+
+  startCallTimer() {
+    const timer = document.getElementById('call-timer');
+    if (!timer) return;
+
+    this.callState.timerInterval = setInterval(() => {
+      if (this.callState.status !== 'active' || !this.callState.callStartTime) {
+        clearInterval(this.callState.timerInterval);
+        return;
+      }
+
+      const elapsed = Date.now() - this.callState.callStartTime;
+      const mins = Math.floor(elapsed / 60000);
+      const secs = Math.floor((elapsed % 60000) / 1000);
+      timer.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }, 1000);
+  }
+
+  toggleMute() {
+    if (!this.callState.localStream) return;
+
+    const audioTrack = this.callState.localStream.getAudioTracks()[0];
+    if (audioTrack) {
+      this.callState.isMuted = !audioTrack.enabled;
+      audioTrack.enabled = !this.callState.isMuted;
+      this.updateControlButtons();
+      this.updateLocalStatus();
+
+      // Send mute status to remote peer via signaling
+      this.sendCallControl({ type: 'mute', muted: this.callState.isMuted });
+    }
+  }
+
+  toggleCamera() {
+    if (!this.callState.localStream) return;
+
+    const videoTrack = this.callState.localStream.getVideoTracks()[0];
+    if (videoTrack) {
+      this.callState.isCameraOff = !videoTrack.enabled;
+      videoTrack.enabled = !this.callState.isCameraOff;
+      this.updateControlButtons();
+      this.updateLocalStatus();
+
+      // Send camera status to remote peer
+      this.sendCallControl({ type: 'camera', enabled: !this.callState.isCameraOff });
+    }
+  }
+
+  toggleSpeaker() {
+    // In real implementation, this would switch audio output device
+    this.showToast('Speaker output selection - coming soon', 'info');
+  }
+
+  async toggleScreenShare() {
+    if (this.callState.isScreenSharing) {
+      // Stop screen sharing
+      if (this.callState.screenStream) {
+        this.callState.screenStream.getTracks().forEach(t => t.stop());
+        this.callState.screenStream = null;
+      }
+
+      // Restore camera video
+      const localVideo = document.getElementById('local-video');
+      if (localVideo && this.callState.localStream) {
+        localVideo.srcObject = this.callState.localStream;
+      }
+
+      this.callState.isScreenSharing = false;
+      this.updateControlButtons();
+
+      const screenStatus = document.getElementById('local-screen-status');
+      if (screenStatus) screenStatus.style.display = 'none';
+
+      this.sendCallControl({ type: 'screen_share', sharing: false });
+      this.showToast('Screen sharing stopped', 'info');
+    } else {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { cursor: 'always' },
+          audio: true
+        });
+
+        this.callState.screenStream = screenStream;
+
+        const localVideo = document.getElementById('local-video');
+        if (localVideo) {
+          localVideo.srcObject = screenStream;
+        }
+
+        // Handle when user stops sharing via browser UI
+        screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+          this.toggleScreenShare();
+        });
+
+        this.callState.isScreenSharing = true;
+        this.updateControlButtons();
+
+        const screenStatus = document.getElementById('local-screen-status');
+        if (screenStatus) screenStatus.style.display = 'inline-flex';
+
+        this.sendCallControl({ type: 'screen_share', sharing: true });
+        this.showToast('Screen sharing started', 'success');
+      } catch (e) {
+        this.showToast('Screen share failed: ' + e.message, 'error');
+      }
+    }
+  }
+
+  async toggleRecording() {
+    if (this.callState.isRecording) {
+      // Stop recording
+      if (this.callState.mediaRecorder) {
+        this.callState.mediaRecorder.stop();
+        this.callState.isRecording = false;
+        this.updateControlButtons();
+        this.showToast('Recording stopped', 'info');
+      }
+    } else {
+      try {
+        const streams = [this.callState.localStream];
+        if (this.callState.remoteStream) streams.push(this.callState.remoteStream);
+        if (this.callState.screenStream) streams.push(this.callState.screenStream);
+
+        // Combine streams for recording
+        const combinedStream = new MediaStream([
+          ...this.callState.localStream.getAudioTracks(),
+          ...this.callState.localStream.getVideoTracks(),
+        ]);
+
+        this.callState.mediaRecorder = new MediaRecorder(combinedStream, {
+          mimeType: 'video/webm;codecs=vp9,opus'
+        });
+
+        this.callState.recordedChunks = [];
+
+        this.callState.mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) this.callState.recordedChunks.push(e.data);
+        };
+
+        this.callState.mediaRecorder.onstop = () => {
+          const blob = new Blob(this.callState.recordedChunks, { type: 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `localweb-call-${Date.now()}.webm`;
+          a.click();
+          URL.revokeObjectURL(url);
+          this.showToast('Recording saved', 'success');
+        };
+
+        this.callState.mediaRecorder.start(1000); // Collect data every second
+        this.callState.isRecording = true;
+        this.updateControlButtons();
+        this.showToast('Recording started', 'success');
+      } catch (e) {
+        this.showToast('Recording failed: ' + e.message, 'error');
+      }
+    }
+  }
+
+  toggleVirtualBackground() {
+    // Cycle through virtual backgrounds
+    const backgrounds = this.callState.virtualBackgrounds;
+    const currentIndex = backgrounds.findIndex(b => b.id === this.callState.virtualBackground);
+    const nextIndex = (currentIndex + 1) % backgrounds.length;
+    this.callState.virtualBackground = backgrounds[nextIndex].id;
+
+    this.applyVirtualBackground(backgrounds[nextIndex]);
+    this.updateControlButtons();
+    this.showToast(`Background: ${backgrounds[nextIndex].name}`, 'info');
+  }
+
+  applyVirtualBackground(background) {
+    // In real implementation, this would use WebGL/ML to replace background
+    // For demo, we just show the selection
+    const localVideo = document.getElementById('local-video');
+    if (!localVideo) return;
+
+    if (background.id === 'blur') {
+      localVideo.style.filter = 'blur(8px)';
+    } else if (background.id === 'none') {
+      localVideo.style.filter = 'none';
+    } else if (background.image) {
+      // For image backgrounds, we'd use a canvas with segmentation
+      // This is a simplified demo
+      localVideo.style.filter = 'none';
+    }
+  }
+
+  toggleCallSettings() {
+    const settings = document.getElementById('call-settings');
+    if (settings) {
+      settings.style.display = settings.style.display === 'none' ? 'flex' : 'none';
+    }
+  }
+
+  selectVirtualBackground() {
+    this.toggleVirtualBackground();
+  }
+
+  openDevicesModal() {
+    // In real implementation, this would show a modal with device selection
+    this.showToast('Device selection modal - coming soon', 'info');
+  }
+
+  sendCallControl(control) {
+    // In real implementation, this would send control messages via the Voice service signaling
+    console.log('Call control:', control);
+  }
+
+  showCallSummary() {
+    if (!this.callState.callStartTime) return;
+
+    const duration = Date.now() - this.callState.callStartTime;
+    const mins = Math.floor(duration / 60000);
+    const secs = Math.floor((duration % 60000) / 1000);
+
+    const container = document.getElementById('voice-call-container');
+    if (!container) return;
+
+    container.innerHTML = `
+      <style>
+        .call-ended { text-align: center; padding: 3rem; color: var(--color-text-muted); }
+        .call-ended h3 { margin-bottom: 0.5rem; color: var(--color-text); }
+        .call-summary { background: var(--color-bg-elevated); border-radius: 0.5rem; padding: 1rem; margin: 1rem auto; max-width: 400px; text-align: left; }
+        .call-summary-row { display: flex; justify-content: space-between; padding: 0.25rem 0; font-size: 0.8125rem; }
+        .call-summary-label { color: var(--color-text-muted); }
+        .call-summary-value { font-weight: 500; }
+      </style>
+      <div class="call-ended">
+        <div style="width: 80px; height: 80px; border-radius: 50%; background: var(--color-critical); display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem; font-size: 2rem;">📞</div>
+        <h3 style="margin-bottom: 0.5rem; color: var(--color-text);">Call Ended</h3>
+        <div class="call-summary">
+          <div class="call-summary-row"><span class="call-summary-label">Duration</span><span class="call-summary-value">${mins}m ${secs}s</span></div>
+          <div class="call-summary-row"><span class="call-summary-label">Peer</span><span class="call-summary-value">${this.callState.remotePeerId || 'Unknown'}</span></div>
+          <div class="call-summary-row"><span class="call-summary-label">Recording</span><span class="call-summary-value">${this.callState.isRecording ? 'Yes' : 'No'}</span></div>
+          <div class="call-summary-row"><span class="call-summary-label">Screen Share</span><span class="call-summary-value">${this.callState.isScreenSharing ? 'Yes' : 'No'}</span></div>
+        </div>
+        <div style="display: flex; gap: 0.75rem; justify-content: center; margin-top: 1.5rem;">
+          <button class="btn btn-primary" onclick="app.renderVoice()">New Call</button>
+          <button class="btn btn-secondary" onclick="app.navigate('dashboard')">Dashboard</button>
+        </div>
+      `;
+    `;
   }
 
   renderVPN() {
