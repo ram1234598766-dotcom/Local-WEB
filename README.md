@@ -64,6 +64,7 @@ other automatically.
 
 ## 🚀 Quick Start (2 Commands)
 
+### From Source (Development)
 ```bash
 # Machine A
 git clone https://github.com/ram1234598766-dotcom/Local-WEB.git
@@ -74,6 +75,134 @@ make quickstart
 make quickstart
 # Then:
 bin/localweb-cli peers
+```
+
+### Pre-built Installers (Recommended)
+
+| OS | Download | Install |
+|----|----------|---------|
+| **Windows** | [Latest `.msi`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) | Run as Administrator |
+| **macOS** | [Latest `.dmg`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) | Drag to Applications |
+| **Linux** | [`.deb`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) / [`.rpm`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) / [`.apk`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) | `sudo dpkg -i` / `sudo rpm -i` / `apk add` |
+
+---
+
+## 📦 Installation by Platform
+
+### 🪟 Windows
+
+**Requirements:** Windows 10/11 (64-bit), Administrator, Internet (for Wintun driver)
+
+1. Download `LocalWEB-Setup.exe` from [Releases](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest)
+2. Right-click → **Run as Administrator**
+3. Follow the wizard:
+   - Choose components (Core, Windows Service, Shortcuts, Wintun Driver)
+   - Select install directory
+4. After install: LocalWEB service starts automatically
+
+**Post-install:**
+- LocalWEB service runs at boot (if selected)
+- Wintun driver installed to `C:\Windows\System32\drivers\wintun.dll`
+- Firewall rules created for ports 4443 (QUIC), 5353 (mDNS), 8080 (GUI)
+- Start Menu + Desktop shortcuts created
+
+**CLI:** `localweb-cli peers` (available in PATH after install)
+
+**Uninstall:** Settings → Apps → LocalWEB → Uninstall
+
+---
+
+### 🍎 macOS
+
+**Requirements:** macOS 13.0+ (Ventura), Apple Silicon (arm64) or Intel (x86_64)
+
+**Install:**
+1. Download `LocalWEB.dmg` from [Releases](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest)
+2. Open `.dmg` and drag **LocalWEB.app** to **Applications**
+3. First launch: right-click → **Open** (bypasses Gatekeeper if unsigned)
+
+**Post-install:**
+- LaunchDaemon loads at boot: `sudo launchctl load /Library/LaunchDaemons/com.localweb.daemon.plist`
+- First launch prompts for: **Local Network**, **Bluetooth**, **Network Extension (VPN)**
+- VPN requires **Network Extension** approval in **System Settings → General → VPN & Network**
+
+**CLI:** `localweb-cli peers` (symlinked to `/usr/local/bin/localweb-cli`)
+
+**VPN Note:** Requires **Network Extension** entitlement (Apple Developer Program). Without it, VPN service is unavailable; other features work normally.
+
+---
+
+### 🐧 Linux
+
+**Requirements:** systemd (247+), Kernel 5.10+, CAP_NET_ADMIN (via setcap, not root)
+
+#### Debian/Ubuntu
+```bash
+sudo dpkg -i localweb_1.0.0_linux_amd64.deb
+sudo apt-get install -f
+```
+
+#### RHEL/Fedora
+```bash
+sudo rpm -i localweb-1.0.0-1.x86_64.rpm
+```
+
+#### Alpine
+```bash
+apk add localweb-1.0.0-r1.apk
+```
+
+#### Arch
+```bash
+sudo pacman -U localweb-1.0.0-1-x86_64.pkg.tar.zst
+```
+
+**Post-install:**
+```bash
+# Start & enable service
+sudo systemctl start localweb
+sudo systemctl enable localweb
+
+# Check status
+systemctl status localweb
+journalctl -u localweb -f
+
+# Config
+cat /etc/localweb/config.json
+```
+
+**No root required:** Binaries use `setcap` for capabilities:
+```bash
+setcap 'cap_net_admin,cap_net_bind_service,cap_net_raw,cap_sys_admin,cap_dac_override,cap_dac_read_search,cap_sys_resource,cap_sys_nice+ep' /usr/bin/localweb
+```
+
+**Firewall auto-configured:** ufw / firewalld / iptables
+
+**Uninstall:** `sudo dpkg -r localweb` / `sudo rpm -e localweb` / `apk del localweb`
+
+---
+
+## 🔐 Security Notes
+
+| Platform | Warning | Workaround |
+|----------|---------|------------|
+| **Windows** | SmartScreen "Windows protected your PC" | More info → Run anyway |
+| **macOS** | "Unidentified Developer" | Right-click → Open, or `xattr -d com.apple.quarantine` |
+| **Linux** | Capabilities instead of root | Uses `setcap` (no root daemon) |
+
+**Signing Status:** Current builds are **unsigned**. See [SECURITY.md](SECURITY.md) for details.
+
+---
+
+## 🔧 Build from Source
+
+```bash
+git clone https://github.com/ram1234598766-dotcom/Local-WEB.git
+cd Local-WEB
+make build          # Build all binaries
+make test           # Run tests (with race detector)
+make lint           # Lint & format check
+make cross-compile  # Build for all platforms
 ```
 
 Your node ID prints on startup and is stored in `~/.localweb/identity.json`.
