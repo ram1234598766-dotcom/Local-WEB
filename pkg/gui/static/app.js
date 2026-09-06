@@ -1156,33 +1156,365 @@ class LocalWEBApp {
   async renderRegistry() {
     this.showLoading(true);
     try {
-      const pkgs = await this.fetchAPI('/registry/packages');
+      const [pkgs, installed] = await Promise.all([
+        this.fetchAPI('/registry/packages').catch(() => []),
+        this.fetchAPI('/registry/installed').catch(() => []),
+      ]);
       this.showLoading(false);
-      document.getElementById('content').innerHTML = `
-        <div class="card">
-          <div class="card-header">Registry</div>
-          <div class="card-body">
-            <table class="table">
-              <thead><tr><th>Name</th><th>Version</th><th>Author</th><th>Status</th></tr></thead>
-              <tbody>
-                  ${pkgs.map(p => `<tr>
-                  <td>${p.name}</td>
-                  <td>${p.version}</td>
-                  <td>${p.author}</td>
-                  <td>${p.installed ? 'installed' : '<button class="btn btn-sm btn-secondary" onclick="app.installPkg(\'' + p.name + '\')">Install</button>'}
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `;
+
+      this.registryState = {
+        packages: pkgs,
+        installed: installed.map(p => p.name),
+        searchQuery: '',
+        selectedCategory: 'all',
+        sortBy: 'relevance',
+        showInstalledOnly: false,
+      };
+
+      this.renderRegistryUI();
     } catch (e) {
       this.showLoading(false);
+      this.showToast('Failed to load registry', 'error');
     }
   }
 
-  installPkg(name) {
+  renderRegistryUI() {
+    const { packages, searchQuery, selectedCategory, sortBy, showInstalledOnly } = this.registryState;
+
+    // Filter packages
+    let filtered = packages.filter(p => {
+      if (showInstalledOnly && !this.registryState.installed.includes(p.name)) return false;
+      if (searchQuery && !p.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+          !p.description.toLowerCase().includes(searchQuery.toLowerCase()) &&
+          !p.author.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
+      return true;
+    });
+
+    // Sort packages
+    switch (sortBy) {
+      case 'name': filtered.sort((a, b) => a.name.localeCompare(b.name)); break;
+      case 'version': filtered.sort((a, b) => b.version.localeCompare(a.version)); break;
+      case 'rating': filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0)); break;
+      case 'updated': filtered.sort((a, b) => new Date(b.updated) - new Date(a.updated)); break;
+      default: break; // relevance (original order)
+    }
+
+    const categories = ['all', ...new Set(packages.map(p => p.category).filter(Boolean))];
+
+    const packageCards = filtered.map(p => {
+      const isInstalled = this.registryState.installed.includes(p.name);
+      const hasUpdate = isInstalled && p.version !== this.getInstalledVersion(p.name);
+      const rating = p.rating || 0;
+      const stars = '★'.repeat(Math.floor(rating)) + '☆'.repeat(5 - Math.floor(rating));
+
+      return `
+        <div class="package-card" style="border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: var(--color-bg-elevated); transition: all 0.15s;" onmouseover="this.style.borderColor='var(--color-primary)'" onmouseout="this.style.borderColor='var(--color-border)'">
+          <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 200px;">
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <h3 style="margin: 0; font-size: 1.125rem;">${p.name}</h3>
+                <span style="font-size: 0.75rem; padding: 0.125rem 0.375rem; background: var(--color-primary-light); color: var(--color-primary); border-radius: 9999px;">v${p.version}</span>
+                ${hasUpdate ? '<span style="font-size: 0.625rem; padding: 0.125rem 0.375rem; background: var(--color-warning-light); color: var(--color-warning); border-radius: 9999px;">Update Available</span>' : ''}
+                ${isInstalled && !hasUpdate ? '<span style="font-size: 0.625rem; padding: 0.125rem 0.375rem; background: var(--color-success-light); color: var(--color-success); border-radius: 9999px;">Installed</span>' : ''}
+              </div>
+              <p style="margin: 0 0 0.5rem; color: var(--color-text-muted); font-size: 0.875rem; line-height: 1.5;">${p.description || 'No description'}</p>
+              <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.75rem; color: var(--color-text-muted);">
+                <span>📦 ${p.category || 'Uncategorized'}</span>
+                <span>👤 ${p.author}</span>
+                <span>⭐ ${stars} (${rating.toFixed(1)})</span>
+                <span>📥 ${p.downloads || 0} downloads</span>
+                <span>🔄 ${new Date(p.updated).toLocaleDateString()}</span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: flex-start; flex-wrap: wrap;">
+              ${isInstalled ? `
+                ${hasUpdate ? `
+                  <button class="btn btn-primary btn-sm" onclick="app.updatePackage('${p.name}')" style="flex: 1;">Update to ${p.version}</button>
+                ` : `
+                  <button class="btn btn-secondary btn-sm" disabled style="flex: 1;">Up to Date</button>
+                `}
+                <button class="btn btn-critical btn-sm" onclick="app.uninstallPackage('${p.name}')">Uninstall</button>
+              ` : `
+                <button class="btn btn-primary" onclick="app.installPackage('${p.name}')" style="flex: 1;">Install</button>
+                <button class="btn btn-secondary btn-sm" onclick="app.showPackageDetails('${p.name}')">Details</button>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const categoryTabs = categories.map(c => `
+      <button class="category-tab ${selectedCategory === c ? 'active' : ''}" onclick="app.filterRegistryByCategory('${c}')" style="padding: 0.375rem 0.75rem; border: 1px solid ${selectedCategory === c ? 'var(--color-primary)' : 'var(--color-border)'}; background: ${selectedCategory === c ? 'var(--color-primary-light)' : 'transparent'}; color: ${selectedCategory === c ? 'var(--color-primary)' : 'var(--color-text)'}; border-radius: 9999px; font-size: 0.8125rem; cursor: pointer; transition: all 0.15s;">${c}</button>
+    `).join('');
+
+    document.getElementById('content').innerHTML = `
+      <style>
+        .registry-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem; }
+        .search-box { flex: 1; min-width: 250px; position: relative; }
+        .search-box input { width: 100%; padding: 0.5rem 1rem 0.5rem 2.5rem; border: 1px solid var(--color-border); border-radius: 0.375rem; background: var(--color-bg); color: var(--color-text); font-size: 0.875rem; }
+        .search-box svg { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--color-text-muted); width: 18px; height: 18px; }
+        .filter-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
+        .category-tabs { display: flex; gap: 0.375rem; flex-wrap: wrap; }
+        .filter-controls { display: flex; gap: 0.5rem; margin-left: auto; flex-wrap: wrap; }
+        .filter-select { padding: 0.375rem 0.75rem; border: 1px solid var(--color-border); border-radius: 0.375rem; background: var(--color-bg); color: var(--color-text); font-size: 0.8125rem; cursor: pointer; }
+        .package-grid { display: flex; flex-direction: column; gap: 0.75rem; }
+        .package-card:hover { border-color: var(--color-primary) !important; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .package-card .btn { flex-shrink: 0; }
+      </style>
+      <div class="registry-header">
+        <h2 style="margin: 0; font-size: 1.5rem;">Package Registry</h2>
+        <div class="search-box">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="registry-search" placeholder="Search packages…" value="${searchQuery}" oninput="app.filterRegistry(this.value)" style="width: 300px;">
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <div class="category-tabs" id="registry-categories">
+          ${categoryTabs}
+        </div>
+        <div class="filter-controls">
+          <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; color: var(--color-text-muted); cursor: pointer;">
+            <input type="checkbox" id="show-installed-only" ${showInstalledOnly ? 'checked' : ''} onchange="app.toggleInstalledOnly(this.checked)"> Installed only
+          </label>
+          <select class="filter-select" id="registry-sort" value="${sortBy}" onchange="app.sortRegistry(this.value)">
+            <option value="relevance">Relevance</option>
+            <option value="name">Name (A-Z)</option>
+            <option value="version">Version (Newest)</option>
+            <option value="rating">Rating (High-Low)</option>
+            <option value="updated">Recently Updated</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="app.refreshRegistry()">🔄 Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="app.openDhtSearch()">🔍 DHT Search</button>
+        </div>
+      </div>
+
+      <div class="package-grid" id="registry-packages">
+        ${packageCards || '<p style="text-align: center; color: var(--color-text-muted); padding: 3rem;">No packages found</p>'}
+      </div>
+
+      <!-- DHT Search Modal -->
+      <div id="dht-search-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+        <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 600px; width: 90%; box-shadow: var(--shadow-xl);">
+          <h3 style="margin-bottom: 1rem;">DHT Global Search</h3>
+          <p style="color: var(--color-text-muted); margin-bottom: 1rem;">Search packages across the entire DHT network</p>
+          <input type="text" id="dht-search-input" placeholder="Enter package name or keyword" style="width: 100%; padding: 0.75rem; border: 1px solid var(--color-border); border-radius: 0.375rem; background: var(--color-bg); color: var(--color-text); font-size: 1rem; margin-bottom: 1rem;">
+          <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+            <button class="btn btn-secondary" onclick="app.closeDhtSearchModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="app.performDhtSearch()">Search DHT</button>
+          </div>
+          <div id="dht-search-results" style="margin-top: 1rem; max-height: 300px; overflow-y: auto;"></div>
+        </div>
+      </div>
+    `;
+
+    // Attach event listeners
+    this.attachRegistryListeners();
+  }
+
+  attachRegistryListeners() {
+    const searchInput = document.getElementById('registry-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => this.filterRegistry(e.target.value));
+    }
+    const sortSelect = document.getElementById('registry-sort');
+    if (sortSelect) {
+      sortSelect.addEventListener('change', (e) => this.sortRegistry(e.target.value));
+    }
+    const installedOnly = document.getElementById('show-installed-only');
+    if (installedOnly) {
+      installedOnly.addEventListener('change', (e) => this.toggleInstalledOnly(e.target.checked));
+    }
+  }
+
+  filterRegistry(query) {
+    this.registryState.searchQuery = query;
+    this.renderRegistryUI();
+  }
+
+  filterRegistryByCategory(category) {
+    this.registryState.selectedCategory = category;
+    this.renderRegistryUI();
+  }
+
+  sortRegistry(sortBy) {
+    this.registryState.sortBy = sortBy;
+    this.renderRegistryUI();
+  }
+
+  toggleInstalledOnly(checked) {
+    this.registryState.showInstalledOnly = checked;
+    this.renderRegistryUI();
+  }
+
+  getInstalledVersion(name) {
+    // In real implementation, this would check the local package database
+    return null;
+  }
+
+  async installPackage(name) {
     this.showToast(`Installing ${name}…`, 'info');
+    this.showLoading(true);
+
+    try {
+      // In real implementation, this would use the Registry service
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Simulate installation
+      const pkg = this.registryState.packages.find(p => p.name === name);
+      if (pkg) {
+        this.registryState.installed.push(name);
+        this.showToast(`${name} installed successfully`, 'success');
+        this.renderRegistryUI();
+      }
+    } catch (e) {
+      this.showToast('Installation failed: ' + e.message, 'error');
+    }
+    this.showLoading(false);
+  }
+
+  async updatePackage(name) {
+    this.showToast(`Updating ${name}…`, 'info');
+    this.showLoading(true);
+
+    try {
+      await new Promise(r => setTimeout(r, 2000));
+      this.showToast(`${name} updated successfully`, 'success');
+      this.renderRegistryUI();
+    } catch (e) {
+      this.showToast('Update failed: ' + e.message, 'error');
+    }
+    this.showLoading(false);
+  }
+
+  async uninstallPackage(name) {
+    if (!confirm(`Uninstall ${name}?`)) return;
+
+    this.showLoading(true);
+    try {
+      await new Promise(r => setTimeout(r, 1000));
+      this.registryState.installed = this.registryState.installed.filter(n => n !== name);
+      this.showToast(`${name} uninstalled`, 'success');
+      this.renderRegistryUI();
+    } catch (e) {
+      this.showToast('Uninstall failed: ' + e.message, 'error');
+    }
+    this.showLoading(false);
+  }
+
+  showPackageDetails(name) {
+    const pkg = this.registryState.packages.find(p => p.name === name);
+    if (!pkg) return;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
+    modal.innerHTML = `
+      <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 600px; width: 90%; box-shadow: var(--shadow-xl); max-height: 80vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h3 style="margin: 0;">${pkg.name} v${pkg.version}</h3>
+          <button class="btn btn-secondary btn-sm" onclick="this.closest('.modal').remove()">✕</button>
+        </div>
+        <p style="color: var(--color-text-muted); margin-bottom: 1rem;">${pkg.description || 'No description available'}</p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;">
+          <div style="padding: 0.75rem; background: var(--color-bg-elevated); border-radius: 0.375rem;">
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">Category</div>
+            <div style="font-weight: 500;">${pkg.category || 'Uncategorized'}</div>
+          </div>
+          <div style="padding: 0.75rem; background: var(--color-bg-elevated); border-radius: 0.375rem;">
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">Author</div>
+            <div style="font-weight: 500;">${pkg.author}</div>
+          </div>
+          <div style="padding: 0.75rem; background: var(--color-bg-elevated); border-radius: 0.375rem;">
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">Rating</div>
+            <div style="font-weight: 500;">${'★'.repeat(Math.floor(pkg.rating || 0))}${'☆'.repeat(5 - Math.floor(pkg.rating || 0))} (${(pkg.rating || 0).toFixed(1)})</div>
+          </div>
+          <div style="padding: 0.75rem; background: var(--color-bg-elevated); border-radius: 0.375rem;">
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">Downloads</div>
+            <div style="font-weight: 500;">${pkg.downloads || 0}</div>
+          </div>
+          <div style="padding: 0.75rem; background: var(--color-bg-elevated); border-radius: 0.375rem;">
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">Last Updated</div>
+            <div style="font-weight: 500;">${new Date(pkg.updated).toLocaleDateString()}</div>
+          </div>
+          <div style="padding: 0.75rem; background: var(--color-bg-elevated); border-radius: 0.375rem;">
+            <div style="font-size: 0.75rem; color: var(--color-text-muted);">Platforms</div>
+            <div style="font-weight: 500;">${pkg.platforms?.join(', ') || 'Any'}</div>
+          </div>
+        </div>
+        <div style="margin-bottom: 1rem;">
+          <strong>Dependencies:</strong>
+          <div style="font-size: 0.875rem; color: var(--color-text-muted);">${pkg.dependencies?.join(', ') || 'None'}</div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem;">
+          <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">Close</button>
+          <button class="btn btn-primary" onclick="app.installPackage('${pkg.name}'); this.closest('.modal').remove()">Install</button>
+        </div>
+      </div>
+    `;
+    modal.className = 'modal';
+    document.body.appendChild(modal);
+  }
+
+  openDhtSearch() {
+    document.getElementById('dht-search-modal').style.display = 'flex';
+  }
+
+  closeDhtSearchModal() {
+    document.getElementById('dht-search-modal').style.display = 'none';
+  }
+
+  async performDhtSearch() {
+    const query = document.getElementById('dht-search-input').value.trim();
+    if (!query) return;
+
+    const resultsDiv = document.getElementById('dht-search-results');
+    resultsDiv.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--color-text-muted);">Searching DHT…</div>';
+
+    try {
+      // In real implementation, this would query the DHT
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Simulated DHT results
+      const results = [
+        { name: 'awesome-tool', version: '2.1.0', author: 'user1', description: 'A great utility', source: 'DHT Node: peer-abc', downloads: 1250 },
+        { name: 'network-monitor', version: '1.5.3', author: 'user2', description: 'Network traffic analyzer', source: 'DHT Node: peer-def', downloads: 890 },
+        { name: 'file-encryptor', version: '3.0.1', author: 'user3', description: 'Encrypt files with PQ crypto', source: 'DHT Node: peer-ghi', downloads: 2100 },
+      ].filter(r => r.name.toLowerCase().includes(query.toLowerCase()));
+
+      if (results.length === 0) {
+        document.getElementById('dht-search-results').innerHTML = '<p style="text-align: center; color: var(--color-text-muted); padding: 2rem;">No packages found</p>';
+        return;
+      }
+
+      document.getElementById('dht-search-results').innerHTML = results.map(p => `
+        <div style="border: 1px solid var(--color-border); border-radius: 0.375rem; padding: 1rem; margin-bottom: 0.5rem; background: var(--color-bg-elevated);">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+            <div>
+              <div style="font-weight: 600;">${p.name} <span style="font-weight: 400; font-size: 0.875rem; color: var(--color-text-muted);">v${p.version}</span></div>
+              <div style="font-size: 0.8125rem; color: var(--color-text-muted); margin-top: 0.25rem;">${p.description}</div>
+              <div style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.25rem;">By ${p.author} • ${p.downloads} downloads • ${p.source}</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="app.installPackage('${p.name}'); app.closeDhtSearchModal()">Install</button>
+          </div>
+        `).join('');
+    } catch (e) {
+      document.getElementById('dht-search-results').innerHTML = '<p style="color: var(--color-critical); text-align: center; padding: 2rem;">Search failed: ' + e.message + '</p>';
+    }
+  }
+
+  async refreshRegistry() {
+    this.showLoading(true);
+    try {
+      const pkgs = await this.fetchAPI('/registry/packages');
+      this.registryState.packages = pkgs;
+      this.showToast('Registry refreshed', 'success');
+    } catch (e) {
+      this.showToast('Refresh failed: ' + e.message, 'error');
+    }
+    this.showLoading(false);
+    this.renderRegistryUI();
   }
 
   async renderFiles() {
