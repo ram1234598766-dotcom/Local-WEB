@@ -6,102 +6,106 @@ package crypto
 // entropy to the final session key. If a quantum adversary breaks X25519,
 // the Kyber component still protects the session.
 //
-// The Kyber implementation here is a placeholder (uses SHA-256 internally).
-// In production, swap the KyberPublicKey/KyberSecretKey/KyberCiphertext types
-// and KyberEncap/KyberDecap functions with a real Kyber library (e.g.
-// github.com/cloudflare/circl/kyber). The interface is designed for that swap.
+// Uses Kyber-1024 from cloudflare/circl (NIST PQC Round 3 finalist).
 
 import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 
+	"github.com/cloudflare/circl/kem/kyber/kyber1024"
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/sha3"
 )
 
-const hybridProtocolName = "Noise_XX_25519_KYBER_XSalsa20Poly1305_SHA3-256"
+const hybridProtocolName = "Noise_XX_25519_KYBER1024_XSalsa20Poly1305_SHA3-256"
 
-const kyberPublicKeySize = 800
-const kyberSecretKeySize = 1632
-const kyberCiphertextSize = 736
-const kyberSharedSecretSize = 32
+// Kyber-1024 constants (from circl)
+const (
+	kyberPublicKeySize      = kyber1024.PublicKeySize      // 1568
+	kyberSecretKeySize      = kyber1024.PrivateKeySize     // 3168
+	kyberCiphertextSize     = kyber1024.CiphertextSize     // 1568
+	kyberSharedSecretSize   = kyber1024.SharedKeySize      // 32
+	kyberEncapsulationSeedSize = kyber1024.EncapsulationSeedSize // 32
+)
 
-const kyberEncapSeedSize = 32
-
-// KyberPublicKey represents a Kyber public key.
+// KyberPublicKey represents a Kyber-1024 public key.
 type KyberPublicKey []byte
 
-// KyberSecretKey represents a Kyber secret key.
+// KyberSecretKey represents a Kyber-1024 secret key.
 type KyberSecretKey []byte
 
-// KyberCiphertext represents a Kyber ciphertext.
+// KyberCiphertext represents a Kyber-1024 ciphertext.
 type KyberCiphertext []byte
 
-// KyberSharedSecret represents a Kyber shared secret.
+// KyberSharedSecret represents a Kyber-1024 shared secret (32 bytes).
 type KyberSharedSecret []byte
 
-// KyberKeygenFromSeed generates a Kyber keypair from a fixed seed.
-// This is deterministic for testing; production should use random entropy.
-func KyberKeygenFromSeed(seed [32]byte) (KyberPublicKey, KyberSecretKey) {
-	h := sha3.New512()
-	h.Write(seed[:])
-	pk := make([]byte, kyberPublicKeySize)
-	h.Sum(pk[:0])
-	sk := make([]byte, kyberSecretKeySize)
-	h.Write([]byte("sk"))
-	h.Sum(sk[:0])
-	return pk[:kyberPublicKeySize], sk[:kyberSecretKeySize]
-}
-
-func KyberKeygen() (KyberPublicKey, KyberSecretKey) {
-	var seed [32]byte
-	if _, err := io.ReadFull(rand.Reader, seed[:]); err != nil {
-		panic(err)
-	}
-	return KyberKeygenFromSeed(seed)
-}
-
-// KyberEncap encapsulates a shared secret using the Kyber public key.
-func KyberEncap(pk KyberPublicKey) (KyberCiphertext, KyberSharedSecret, error) {
-	if len(pk) != kyberPublicKeySize {
-		return nil, nil, fmt.Errorf("invalid public key length: %d", len(pk))
-	}
-
-	var seed [32]byte
-	if _, err := io.ReadFull(rand.Reader, seed[:]); err != nil {
+// KyberKeygen generates a Kyber-1024 keypair using crypto/rand.
+func KyberKeygen() (KyberPublicKey, KyberSecretKey, error) {
+	pk, sk, err := kyber1024.GenerateKeyPair(rand.Reader)
+	if err != nil {
 		return nil, nil, err
 	}
-
-	h := sha3.New512()
-	h.Write(seed[:])
-	h.Write(pk)
-	ct := make([]byte, kyberCiphertextSize)
-	ss := make([]byte, kyberSharedSecretSize)
-	h.Sum(ct[:0])
-	_, _ = h.Write([]byte{0x01})
-	h.Sum(ss[:0])
-
-	return ct[:kyberCiphertextSize], ss[:kyberSharedSecretSize], nil
+	pkBytes := make([]byte, kyberPublicKeySize)
+	pk.Pack(pkBytes)
+	skBytes := make([]byte, kyberSecretKeySize)
+	sk.Pack(skBytes)
+	return KyberPublicKey(pkBytes), KyberSecretKey(skBytes), nil
 }
 
-// KyberDecap decapsulates a shared secret using the Kyber ciphertext and secret key.
-func KyberDecap(ct KyberCiphertext, sk KyberSecretKey) (KyberSharedSecret, error) {
-	if len(ct) != kyberCiphertextSize {
-		return nil, fmt.Errorf("invalid ciphertext length: %d", len(ct))
+// KyberKeygenFromSeed generates a Kyber-1024 keypair from a fixed seed (deterministic).
+// Note: For production use KyberKeygen() with crypto/rand. This is for testing only.
+func KyberKeygenFromSeed(seed [32]byte) (KyberPublicKey, KyberSecretKey) {
+	// Use NewKeyFromSeed for deterministic key generation (testing only)
+	pk, sk := kyber1024.NewKeyFromSeed(seed[:])
+	pkBytes := make([]byte, kyberPublicKeySize)
+	pk.Pack(pkBytes)
+	skBytes := make([]byte, kyberSecretKeySize)
+	sk.Pack(skBytes)
+	return KyberPublicKey(pkBytes), KyberSecretKey(skBytes)
+}
+
+// KyberEncap encapsulates a shared secret using the Kyber-1024 public key.
+func KyberEncap(pk KyberPublicKey) (KyberCiphertext, KyberSharedSecret, error) {
+	if len(pk) != kyberPublicKeySize {
+		return nil, nil, fmt.Errorf("invalid public key length: %d, expected %d", len(pk), kyberPublicKeySize)
 	}
 
-	h := sha3.New512()
-	h.Write(ct)
-	h.Write(sk)
+	var pubKey kyber1024.PublicKey
+	pubKey.Unpack(pk)
+
+	ct := make([]byte, kyberCiphertextSize)
 	ss := make([]byte, kyberSharedSecretSize)
-	h.Sum(ss[:0])
-	return ss, nil
+	seed := make([]byte, kyberEncapsulationSeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		return nil, nil, err
+	}
+	pubKey.EncapsulateTo(ct, ss, seed)
+
+	return KyberCiphertext(ct), KyberSharedSecret(ss), nil
 }
 
-// HybridHandshakeState extends NoiseSession with post-quantum Kyber KEM.
+// KyberDecap decapsulates a shared secret using the Kyber-1024 ciphertext and secret key.
+func KyberDecap(ct KyberCiphertext, sk KyberSecretKey) (KyberSharedSecret, error) {
+	if len(ct) != kyberCiphertextSize {
+		return nil, fmt.Errorf("invalid ciphertext length: %d, expected %d", len(ct), kyberCiphertextSize)
+	}
+	if len(sk) != kyberSecretKeySize {
+		return nil, fmt.Errorf("invalid secret key length: %d, expected %d", len(sk), kyberSecretKeySize)
+	}
+
+	var privKey kyber1024.PrivateKey
+	privKey.Unpack(sk)
+
+	ss := make([]byte, kyberSharedSecretSize)
+	privKey.DecapsulateTo(ss, ct)
+
+	return KyberSharedSecret(ss), nil
+}
+
+// HybridHandshakeState extends NoiseSession with post-quantum Kyber-1024 KEM.
 type HybridHandshakeState struct {
 	noise      *NoiseSession
 	kyberPub   KyberPublicKey
@@ -119,7 +123,11 @@ func NewHybridInitiator(staticPublic, staticPrivate [32]byte) (*HybridHandshakeS
 		return nil, err
 	}
 
-	pk, sk := KyberKeygen()
+	pk, sk, err := KyberKeygen()
+	if err != nil {
+		return nil, fmt.Errorf("Kyber keygen failed: %w", err)
+	}
+
 	return &HybridHandshakeState{
 		noise:    ns,
 		kyberPub: pk,
@@ -134,7 +142,11 @@ func NewHybridResponder(staticPublic, staticPrivate [32]byte) (*HybridHandshakeS
 		return nil, err
 	}
 
-	pk, sk := KyberKeygen()
+	pk, sk, err := KyberKeygen()
+	if err != nil {
+		return nil, fmt.Errorf("Kyber keygen failed: %w", err)
+	}
+
 	return &HybridHandshakeState{
 		noise:    ns,
 		kyberPub: pk,
@@ -156,7 +168,7 @@ func (h *HybridHandshakeState) WriteHandshake(peerMsg []byte) ([]byte, []byte, b
 
 	switch {
 	case h.noise.isInitiator && peerMsg == nil:
-		// Initiator's first message: -> e
+		// Initiator's first message: -> e + Kyber ct
 		noiseMsg, payload, complete, err := h.noise.WriteHandshake(nil)
 		if err != nil {
 			return nil, nil, false, err
@@ -247,9 +259,10 @@ func (h *HybridHandshakeState) Decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // SessionKey returns the combined Noise + Kyber session key.
+// Uses HKDF-SHA3-256(classical_SS || pq_SS, salt="LocalWEB-v2", info="session")
 func (h *HybridHandshakeState) SessionKey() [32]byte {
 	noiseKey := h.noise.SessionKey()
-	kdf := hkdf.New(sha3.New256, noiseKey[:], h.kyberSS, []byte("hybrid"))
+	kdf := hkdf.New(sha3.New256, noiseKey[:], h.kyberSS, []byte("LocalWEB-v2-session"))
 	var key [32]byte
 	kdf.Read(key[:])
 	return key
@@ -260,12 +273,12 @@ func (h *HybridHandshakeState) RemotePublic() [32]byte {
 	return h.noise.RemotePublic()
 }
 
-// KyberPublicKey returns this node's Kyber public key.
+// KyberPublicKey returns this node's Kyber-1024 public key.
 func (h *HybridHandshakeState) KyberPublicKey() KyberPublicKey {
 	return h.kyberPub
 }
 
-// KyberSharedSecret returns the Kyber shared secret from encapsulation.
+// KyberSharedSecret returns the Kyber-1024 shared secret from encapsulation.
 func (h *HybridHandshakeState) KyberSharedSecret() KyberSharedSecret {
 	return h.kyberSS
 }

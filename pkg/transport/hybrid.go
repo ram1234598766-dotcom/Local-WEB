@@ -118,7 +118,7 @@ func (hkd *HybridKeyDerivation) DeriveTransportKey(sessionKey [32]byte, context 
 
 const (
 	hybridHandshakeStream = "hybrid-handshake"
-	hybridKyberCtSize     = 736
+	hybridKyberCtSize     = 1568 // Kyber-1024 ciphertext size
 )
 
 // HybridServer wraps Server with hybrid handshake support.

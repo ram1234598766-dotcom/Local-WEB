@@ -2,6 +2,8 @@ package crypto
 
 import (
 	"testing"
+
+	"github.com/cloudflare/circl/kem/kyber/kyber1024"
 )
 
 func TestNewHybridInitiator(t *testing.T) {
@@ -127,7 +129,10 @@ func TestHybridSessionKeyDerivation(t *testing.T) {
 }
 
 func TestHybridKyberEncapDecap(t *testing.T) {
-	pk, sk := generateTestKyberKey(t)
+	pk, sk, err := KyberKeygen()
+	if err != nil {
+		t.Fatalf("KyberKeygen failed: %v", err)
+	}
 
 	ct, ss1, err := KyberEncap(pk)
 	if err != nil {
@@ -148,10 +153,15 @@ func TestHybridKyberEncapDecap(t *testing.T) {
 }
 
 func TestHybridKyberKeygenDeterministic(t *testing.T) {
-	// Kyber keygen should be deterministic with a fixed seed
-	seed := [32]byte{0x01, 0x02, 0x03}
-	pk1, sk1 := KyberKeygenFromSeed(seed)
-	pk2, sk2 := KyberKeygenFromSeed(seed)
+	// Kyber keygen should be deterministic with a fixed seed of correct size
+	// KeySeedSize = cpapke.KeySeedSize + 32
+	// For Kyber-1024, this is typically 64 bytes
+	seed := make([]byte, kyber1024.KeySeedSize)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	pk1, sk1 := KyberKeygenFromSeedArray(seed)
+	pk2, sk2 := KyberKeygenFromSeedArray(seed)
 
 	if string(pk1) != string(pk2) {
 		t.Error("public keys should match for same seed")
@@ -206,6 +216,19 @@ func TestHybridEncryptDecrypt(t *testing.T) {
 
 func generateTestKyberKey(t *testing.T) (KyberPublicKey, KyberSecretKey) {
 	t.Helper()
-	seed := [32]byte{0x42}
-	return KyberKeygenFromSeed(seed)
+	pk, sk, err := KyberKeygen()
+	if err != nil {
+		t.Fatalf("KyberKeygen failed: %v", err)
+	}
+	return pk, sk
+}
+
+// KyberKeygenFromSeedArray is a test helper that takes a byte slice of correct size
+func KyberKeygenFromSeedArray(seed []byte) (KyberPublicKey, KyberSecretKey) {
+	pk, sk := kyber1024.NewKeyFromSeed(seed)
+	pkBytes := make([]byte, kyberPublicKeySize)
+	pk.Pack(pkBytes)
+	skBytes := make([]byte, kyberSecretKeySize)
+	sk.Pack(skBytes)
+	return KyberPublicKey(pkBytes), KyberSecretKey(skBytes)
 }

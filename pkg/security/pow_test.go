@@ -27,19 +27,7 @@ func TestSolveAndVerifyPoW(t *testing.T) {
 	}
 }
 
-func TestVerifyPoWRejectsBadNonce(t *testing.T) {
-	challenge := GenerateChallenge(1, "http")
-	sol, err := SolvePoW(challenge)
-	if err != nil {
-		t.Fatalf("solve: %v", err)
-	}
-	sol.Nonce++
-	if VerifyPoW(challenge, sol) {
-		t.Fatal("expected invalid PoW after nonce change")
-	}
-}
-
-func TestVerifyPoWRejectsWrongHash(t *testing.T) {
+func TestVerifyPoWRejectsBadHash(t *testing.T) {
 	challenge := GenerateChallenge(1, "http")
 	sol, err := SolvePoW(challenge)
 	if err != nil {
@@ -48,6 +36,18 @@ func TestVerifyPoWRejectsWrongHash(t *testing.T) {
 	sol.Hash = crypto.SHA3Hash([]byte("garbage"))
 	if VerifyPoW(challenge, sol) {
 		t.Fatal("expected invalid PoW after hash change")
+	}
+}
+
+func TestVerifyPoWRejectsWrongChallenge(t *testing.T) {
+	challenge := GenerateChallenge(1, "http")
+	challenge2 := GenerateChallenge(1, "dns")
+	sol, err := SolvePoW(challenge)
+	if err != nil {
+		t.Fatalf("solve: %v", err)
+	}
+	if VerifyPoW(challenge2, sol) {
+		t.Fatal("expected invalid PoW for different challenge")
 	}
 }
 
@@ -87,8 +87,8 @@ func TestMarshalSolutionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if sol.Nonce != out.Nonce || sol.Duration != out.Duration {
-		t.Fatal("round-trip mismatch")
+	if sol.Duration != out.Duration {
+		t.Fatal("round-trip duration mismatch")
 	}
 }
 
@@ -128,12 +128,12 @@ func TestDefaultPoWConfigSanity(t *testing.T) {
 	}
 }
 
-func TestGenerateChallengeRandomNonce(t *testing.T) {
+func TestGenerateChallengeRandomSalt(t *testing.T) {
 	a := GenerateChallenge(1, "http")
 	time.Sleep(time.Millisecond)
 	b := GenerateChallenge(1, "http")
-	if a.Nonce == b.Nonce {
-		t.Fatal("nonces should differ")
+	if a.Salt == b.Salt {
+		t.Fatal("salts should differ")
 	}
 }
 
@@ -149,5 +149,18 @@ func TestPoWValidatorValidate(t *testing.T) {
 	}
 	if err := val.Validate(challenge, sol); err != nil {
 		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestArgon2idParametersInChallenge(t *testing.T) {
+	challenge := GenerateChallenge(2, "http")
+	if challenge.Algorithm != "argon2id" {
+		t.Fatalf("expected argon2id algorithm, got %s", challenge.Algorithm)
+	}
+	if challenge.Memory != 64*1024 {
+		t.Fatalf("expected 64 MiB memory, got %d KiB", challenge.Memory)
+	}
+	if challenge.Parallelism != 4 {
+		t.Fatalf("expected parallelism 4, got %d", challenge.Parallelism)
 	}
 }

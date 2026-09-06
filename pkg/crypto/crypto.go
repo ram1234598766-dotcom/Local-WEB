@@ -8,12 +8,32 @@ import (
 	"io"
 	"math/big"
 
+	"github.com/cloudflare/circl/sign/ed448"
+	"github.com/cloudflare/circl/sign/eddilithium3"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/sha3"
 )
 
 // KeySize is the byte length of LocalWEB public/private keys.
 const KeySize = 32
+
+// KeyType represents the type of identity key.
+type KeyType uint8
+
+const (
+	KeyTypeEd25519 KeyType = iota
+	KeyTypeEd448
+	KeyTypeEd448Dilithium3
+	KeyTypeMLDSA65
+)
+
+// Identity represents a node identity with key type.
+type KeyIdentity struct {
+	Type       KeyType
+	PublicKey  []byte
+	PrivateKey []byte
+}
 
 // GenerateKeyPair creates a new Ed25519 keypair.
 // The public key is returned as a 32-byte array (the Ed25519 public key
@@ -30,10 +50,68 @@ func GenerateKeyPair() (pub, priv [32]byte, err error) {
 	return pub, priv, nil
 }
 
+// GenerateEd448KeyPair creates a new Ed448 keypair.
+func GenerateEd448KeyPair() (pub, priv [57]byte, err error) {
+	pubKey, privKey, err := ed448.GenerateKey(rand.Reader)
+	if err != nil {
+		return pub, priv, fmt.Errorf("generate Ed448 keypair: %w", err)
+	}
+
+	copy(pub[:], pubKey[:57])
+	copy(priv[:], privKey[:57])
+	return pub, priv, nil
+}
+
+// GenerateEd448Dilithium3KeyPair creates a new Ed448-Dilithium3 hybrid keypair.
+// This provides post-quantum security with Ed448 classical fallback.
+func GenerateEd448Dilithium3KeyPair() (pub, priv []byte, err error) {
+	pk, sk, err := eddilithium3.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate Ed448-Dilithium3 keypair: %w", err)
+	}
+
+	pubBytes, err := pk.MarshalBinary()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal Ed448-Dilithium3 pub: %w", err)
+	}
+
+	privBytes, err := sk.MarshalBinary()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal Ed448-Dilithium3 priv: %w", err)
+	}
+
+	return pubBytes, privBytes, nil
+}
+
+// GenerateMLDSA65KeyPair creates a new ML-DSA-65 (Dilithium3 equivalent) keypair.
+func GenerateMLDSA65KeyPair() (pub, priv []byte, err error) {
+	pk, sk, err := mldsa65.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate ML-DSA-65 keypair: %w", err)
+	}
+
+	pubBytes, err := pk.MarshalBinary()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal ML-DSA-65 pub: %w", err)
+	}
+
+	privBytes, err := sk.MarshalBinary()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal ML-DSA-65 priv: %w", err)
+	}
+
+	return pubBytes, privBytes, nil
+}
+
 // NodeID derives a node ID from a public key using SHA3-256.
 // This matches the DHT's 256-bit Kademlia key space.
 func NodeID(pub [32]byte) [32]byte {
 	return SHA3Hash(pub[:])
+}
+
+// NodeIDFromBytes derives a node ID from a public key of any type using SHA3-256.
+func NodeIDFromBytes(pub []byte) [32]byte {
+	return SHA3Hash(pub)
 }
 
 // Sign signs a message with the given private key.
@@ -51,9 +129,69 @@ func Sign(priv [32]byte, msg []byte) ([]byte, error) {
 	return ed25519.Sign(ed25519.PrivateKey(fullPriv), msg), nil
 }
 
+// SignEd448 signs a message with an Ed448 private key.
+func SignEd448(priv [57]byte, msg []byte) ([]byte, error) {
+	fullPriv := make([]byte, ed448.PrivateKeySize)
+	copy(fullPriv[:57], priv[:])
+	// Derive public key
+	pubKey, err := computeEd448PubFromSeed(priv)
+	if err != nil {
+		return nil, err
+	}
+	copy(fullPriv[57:], pubKey)
+
+	return ed448.Sign(ed448.PrivateKey(fullPriv), msg, ""), nil
+}
+
+// SignPQ signs a message with a post-quantum private key (Ed448-Dilithium3 or ML-DSA-65).
+func SignPQ(priv []byte, msg []byte) ([]byte, error) {
+	// Try Ed448-Dilithium3 first
+	var sk eddilithium3.PrivateKey
+	if err := sk.UnmarshalBinary(priv); err == nil {
+		sig := make([]byte, eddilithium3.SignatureSize)
+		eddilithium3.SignTo(&sk, msg, sig)
+		return sig, nil
+	}
+
+	// Try ML-DSA-65
+	var sk2 mldsa65.PrivateKey
+	if err := sk2.UnmarshalBinary(priv); err == nil {
+		sig := make([]byte, mldsa65.SignatureSize)
+		err := mldsa65.SignTo(&sk2, msg, nil, false, sig)
+		if err != nil {
+			return nil, err
+		}
+		return sig, nil
+	}
+
+	return nil, fmt.Errorf("unknown PQ private key format")
+}
+
 // Verify checks a signature against a public key and message.
 func Verify(pub [32]byte, msg, sig []byte) bool {
 	return ed25519.Verify(ed25519.PublicKey(pub[:]), msg, sig)
+}
+
+// VerifyEd448 checks an Ed448 signature.
+func VerifyEd448(pub [57]byte, msg, sig []byte) bool {
+	return ed448.Verify(ed448.PublicKey(pub[:]), msg, sig, "")
+}
+
+// VerifyPQ verifies a post-quantum signature (Ed448-Dilithium3 or ML-DSA-65).
+func VerifyPQ(pub []byte, msg, sig []byte) bool {
+	// Try Ed448-Dilithium3 first
+	var pk eddilithium3.PublicKey
+	if err := pk.UnmarshalBinary(pub); err == nil {
+		return eddilithium3.Verify(&pk, msg, sig)
+	}
+
+	// Try ML-DSA-65
+	var pk2 mldsa65.PublicKey
+	if err := pk2.UnmarshalBinary(pub); err == nil {
+		return mldsa65.Verify(&pk2, msg, nil, sig)
+	}
+
+	return false
 }
 
 // computePubFromSeed derives the Ed25519 public key from a 32-byte seed.
@@ -63,6 +201,14 @@ func computePubFromSeed(seed [32]byte) ([]byte, error) {
 	// ed25519.NewKeyFromSeed computes both halves.
 	fullPriv := ed25519.NewKeyFromSeed(priv[:32])
 	return fullPriv[32:], nil
+}
+
+// computeEd448PubFromSeed derives the Ed448 public key from a 57-byte seed.
+func computeEd448PubFromSeed(seed [57]byte) ([]byte, error) {
+	priv := make([]byte, ed448.PrivateKeySize)
+	copy(priv[:57], seed[:])
+	fullPriv := ed448.NewKeyFromSeed(priv[:57])
+	return fullPriv[57:], nil
 }
 
 // SHA3Hash computes the SHA3-256 hash of data.
