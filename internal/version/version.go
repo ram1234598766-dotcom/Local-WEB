@@ -2,10 +2,10 @@ package version
 
 // Version information - populated by goreleaser at build time
 var (
-	Version   = "dev"
-	Commit    = "none"
-	Date      = "unknown"
-	BuiltBy   = "goreleaser"
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+	BuiltBy = "goreleaser"
 )
 
 // String returns the full version string
