@@ -107,12 +107,6 @@ nfpms:
       - rpm
       - apk
     bindir: /usr/local/bin
-    config_files:
-      - /etc/localweb/config.json
-    config_dirs:
-      - /etc/localweb
-    config_dirs_permissions: "0750"
-    config_files_permissions: "0640"
     scripts:
       preinstall: installers/linux/preinstall.sh
       postinstall: installers/linux/postinstall.sh
@@ -132,12 +126,6 @@ nfpms:
       - id: windows
         formats:
           - nsis
-        config_files:
-          - C:\\ProgramData\\LocalWEB\\config.json
-        config_dirs:
-          - C:\\ProgramData\\LocalWEB
-        config_dirs_permissions: "0755"
-        config_files_permissions: "0644"
         bindir: C:\\Program Files\\LocalWEB
         scripts:
           preinstall: installers/windows/preinstall.ps1
