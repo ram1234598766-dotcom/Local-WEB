@@ -94,7 +94,7 @@ signs:
     # Requires GPG_PRIVATE_KEY in CI secrets
     # If not available, this step is skipped
 
-# Windows NSIS installer
+# Linux packages (.deb, .rpm, .apk)
 nfpms:
   - package_name: localweb
     vendor: LocalWEB Project
