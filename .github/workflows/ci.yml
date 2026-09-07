@@ -10,6 +10,16 @@ on:
     types: [published]
   schedule:
     - cron: '0 2 * * *'  # Nightly chaos tests
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+        type: string
+      skip_tests:
+        description: 'Skip tests (emergency release)'
+        type: boolean
+        default: false
 
 env:
   GO_VERSION: '1.26'
