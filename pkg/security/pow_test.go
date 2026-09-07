@@ -52,6 +52,9 @@ func TestVerifyPoWRejectsWrongChallenge(t *testing.T) {
 }
 
 func TestDifficultyScalesWithLeadingZeros(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow Argon2 PoW test in short mode")
+	}
 	for difficulty := uint8(1); difficulty <= 3; difficulty++ {
 		challenge := GenerateChallenge(difficulty, "test")
 		sol, err := SolvePoW(challenge)
