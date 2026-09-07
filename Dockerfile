@@ -22,6 +22,11 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /localweb-cli ./cmd/cli
 # Runtime stage
 FROM alpine:3.20
 
+# OCI labels for GitHub Packages linking
+LABEL org.opencontainers.image.source="https://github.com/ram1234598766-dotcom/Local-WEB"
+LABEL org.opencontainers.image.description="LocalWEB - Local-first encrypted mesh network"
+LABEL org.opencontainers.image.licenses="MIT"
+
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
@@ -54,7 +59,17 @@ RUN chown root:localweb /etc/localweb/config.json && chmod 640 /etc/localweb/con
 RUN setcap 'cap_net_admin,cap_net_bind_service,cap_net_raw,cap_sys_admin,cap_dac_override,cap_dac_read_search,cap_sys_resource,cap_sys_nice+ep' /usr/bin/localweb || true
 
 # Expose ports
-EXPOSE 4443/udp 5353/udp 8080/tcp
+# 4443/udp - QUIC transport
+# 5353/udp - mDNS/DNS
+# 8080/tcp - HTTP gateway
+# 587/tcp - SMTP
+# 993/tcp - IMAP
+# 9090/tcp - Messaging
+# 9091/tcp - Docs
+# 9092/tcp - Registry
+# 9093/tcp - Voice
+# 9094/tcp - VPN
+EXPOSE 4443/udp 5353/udp 8080/tcp 587/tcp 993/tcp 9090/tcp 9091/tcp 9092/tcp 9093/tcp 9094/tcp
 
 # Volumes
 VOLUME ["/var/lib/localweb", "/etc/localweb", "/var/log/localweb"]

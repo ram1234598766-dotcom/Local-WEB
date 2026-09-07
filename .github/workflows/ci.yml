@@ -21,6 +21,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+  packages: write
+
 env:
   GO_VERSION: '1.26'
   GORELEASER_VERSION: 'v2.0'
@@ -252,8 +256,9 @@ jobs:
       
       - name: Install nfpm
         run: |
-          curl -sSL https://github.com/goreleaser/nfpm/releases/download/v2.35.0/nfpm_2.35.0_linux_amd64.deb -o nfpm.deb
-          sudo dpkg -i nfpm.deb
+          curl -sSL https://github.com/goreleaser/nfpm/releases/download/v2.35.0/nfpm_2.35.0_linux_amd64.tar.gz | tar xz
+          sudo mv nfpm /usr/local/bin/nfpm
+          nfpm --version
       
       - name: Build packages
         run: |
@@ -299,7 +304,17 @@ jobs:
       - name: Download Wintun driver
         run: |
           $wintunUrl = "https://github.com/wintun/wintun/releases/download/v0.14.1/wintun-0.14.1.zip"
-          Invoke-WebRequest -Uri $wintunUrl -OutFile "wintun.zip"
+          $output = "wintun.zip"
+          $retries = 3
+          for ($i = 1; $i -le $retries; $i++) {
+            try {
+              Invoke-WebRequest -Uri $wintunUrl -OutFile $output -UseBasicParsing
+              break
+            } catch {
+              if ($i -eq $retries) { throw }
+              Start-Sleep 5
+            }
+          }
           Expand-Archive -Path wintun.zip -DestinationPath wintun -Force
           Copy-Item "wintun\wintun\x64\wintun.dll" installers\windows\wintun\wintun.dll
       
@@ -373,12 +388,16 @@ jobs:
           retention-days: 30
 
   # ============================================================
-  # DOCKER IMAGES
+  # DOCKER IMAGES (publish to GHCR on tag push)
   # ============================================================
   docker:
-    name: Build Docker Images
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
     needs: build
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       
@@ -392,61 +411,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/ram1234598766-dotcom/local-web
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+      
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/ram1234598766-dotcom/localweb:latest
-            ghcr.io/ram1234598766-dotcom/localweb:${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   # ============================================================
-  # RELEASE
+  # RELEASE (installers via goreleaser)
   # ============================================================
   release:
-    name: Create GitHub Release
+    name: Create Release with Installers
     runs-on: ubuntu-latest
-    needs: [package-linux, package-windows, package-macos, docker]
+    needs: [package-linux, package-windows, package-macos]
     if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
         with:
-          path: release-assets
-          merge-multiple: true
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       
-      - name: Generate checksums
-        run: |
-          cd release-assets
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
-      
-      - name: Sign artifacts (if GPG key available)
-        if: env.GPG_PRIVATE_KEY != ''
-        run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import --batch
-          for file in release-assets/*; do
-            if [[ "$file" != *.sig && "$file" != *.sum ]]; then
-              gpg --armor --detach-sign --output "${file}.sig" "$file"
-            fi
-          done
-      
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          files: release-assets/*
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          make_latest: true
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================
   # VERIFICATION

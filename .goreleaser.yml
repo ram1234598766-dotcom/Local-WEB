@@ -104,9 +104,6 @@ nfpms:
       - deb
       - rpm
       - apk
-    formats_overrides:
-      - id: windows
-        format: msi
     bindir: /usr/local/bin
     config_files:
       - /etc/localweb/config.json
@@ -132,7 +129,7 @@ nfpms:
     overrides:
       - id: windows
         formats:
-          - msi
+          - nsis
         config_files:
           - C:\\ProgramData\\LocalWEB\\config.json
         config_dirs:
@@ -145,8 +142,8 @@ nfpms:
           postinstall: installers/windows/postinstall.ps1
           preremove: installers/windows/preremove.ps1
           postremove: installers/windows/postremove.ps1
-        # MSI-specific options
-        msi:
+        # NSIS-specific options
+        nfpm:
           product_name: LocalWEB
           manufacturer: LocalWEB Project
           upgrade_code: "{12345678-1234-1234-1234-123456789012}"
@@ -216,26 +213,6 @@ dmg:
     x: 100
     y: 100
 
-# Windows NSIS installer
-msi:
-  - id: localweb
-    path: "installers/windows/localweb.wxs"
-    # This references a WiX source file
-
-# Docker images (optional)
-dockers:
-  - image_templates:
-      - "ghcr.io/ram1234598766-dotcom/localweb:{{ .Version }}"
-      - "ghcr.io/ram1234598766-dotcom/localweb:latest"
-    skip_login: true
-    dockerfile: Dockerfile
-    build_flag_templates:
-      - "--platform=linux/amd64,linux/arm64"
-      - "--build-arg=VERSION={{.Version}}"
-    extra_files:
-      - README.md
-      - LICENSE
-
 # Release notes
 release:
   github:
@@ -296,16 +273,6 @@ changelog:
       regexp: '^refactor\('
     - title: "🎨 Style"
       regexp: '^style\('
-
-# Docker images (optional)
-docker:
-  - image_templates:
-      - "ghcr.io/ram1234598766-dotcom/localweb:{{ .Version }}"
-      - "ghcr.io/ram1234598766-dotcom/localweb:latest"
-    dockerfile: Dockerfile
-    build_flag_templates:
-      - "--platform=linux/amd64,linux/arm64"
-      - "--build-arg=VERSION={{.Version}}"
 
 # Announce release
 announce:
