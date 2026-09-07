@@ -194,27 +194,6 @@ nfpms:
             postinstall: installers/macos/postinstall.sh
           certificate: "Developer ID Installer: <Team ID>"  # Requires Apple Developer ID
 
-# macOS .dmg creation
-dmg:
-  name_template: "{{.ProjectName}}-{{.Version}}-{{.Os}}-{{.Arch}}"
-  use_invalid_chars_as_underscores: false
-  format: UDZO
-  compression_level: 9
-  files:
-    - src: "dist/{{.ProjectName}}-{{.Version}}-darwin-amd64/LocalWEB.app"
-      dst: "LocalWEB.app"
-    - src: "Applications"
-      dst: "/Applications"
-      type: link
-  background: "installers/macos/dmg-background.png"
-  window:
-    position: "center"
-    size: "600x400"
-  icon: "installers/macos/icon.icns"
-  window_position:
-    x: 100
-    y: 100
-
 # Release notes
 release:
   github:
@@ -275,21 +254,3 @@ changelog:
       regexp: '^refactor\('
     - title: "🎨 Style"
       regexp: '^style\('
-
-# Announce release
-announce:
-  github:
-    owner: ram1234598766-dotcom
-    name: Local-WEB
-  message_template: |
-    🚀 LocalWEB {{.Version}} released!
-
-    {{.Changelog}}
-
-    ## Downloads
-    {{#each Artifacts}}
-    - {{.Name}} ({{.Size}}) - {{.URL}}
-    {{/each}}
-
-    ## Checksums
-    {{.Checksums}}
