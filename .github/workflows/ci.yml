@@ -437,18 +437,3 @@ jobs:
             gpg --verify "$sig" "${sig%.sig}" || exit 1
           done
         shell: bash
-
-# ============================================================
-# WORKFLOW SUMMARY
-# ============================================================
-on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g., v1.0.0)'
-        required: true
-        type: string
-      skip_tests:
-        description: 'Skip tests (emergency release)'
-        type: boolean
-        default: false
