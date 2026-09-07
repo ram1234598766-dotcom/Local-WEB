@@ -6,10 +6,6 @@ linters:
     - misspell
     - ineffassign
 
-issues:
-  exclude:
-    - path: vendor
-
 run:
   timeout: 10m
   tests: true
