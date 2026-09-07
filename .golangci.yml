@@ -7,10 +7,8 @@ linters:
     - ineffassign
 
 issues:
-  exclude-rules:
+  exclude:
     - path: vendor
-      linters:
-        - all
 
 run:
   timeout: 10m
