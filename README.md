@@ -85,6 +85,27 @@ bin/localweb-cli peers
 | **macOS** | [Latest `.dmg`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) | Drag to Applications |
 | **Linux** | [`.deb`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) / [`.rpm`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) / [`.apk`](https://github.com/ram1234598766-dotcom/Local-WEB/releases/latest) | `sudo dpkg -i` / `sudo rpm -i` / `apk add` |
 
+### One-Line Installer Scripts (Fastest)
+
+```bash
+# Linux (Debian/Ubuntu/RHEL/Fedora/Alpine/Arch)
+curl -fsSL https://raw.githubusercontent.com/ram1234598766-dotcom/Local-WEB/main/installers/linux/install.sh | sudo bash
+
+# macOS (requires curl + hdiutil)
+curl -fsSL https://raw.githubusercontent.com/ram1234598766-dotcom/Local-WEB/main/installers/macos/install.sh | bash
+
+# Windows (PowerShell, run as Administrator)
+iwr -useb https://raw.githubusercontent.com/ram1234598766-dotcom/Local-WEB/main/installers/windows/install.ps1 | iex
+```
+
+These scripts automatically:
+- Detect your OS/architecture
+- Download the correct installer from GitHub Releases
+- Install dependencies (Wintun on Windows, LaunchDaemon on macOS, systemd on Linux)
+- Configure firewall rules
+- Start the LocalWEB service
+- Print your node ID
+
 ---
 
 ## 📦 Installation by Platform
