@@ -46,7 +46,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v2.13.2
           args: --timeout=10m
       
       - name: Go vet
@@ -131,7 +131,7 @@ jobs:
       
       - name: Run chaos integration tests
         run: |
-          CGO_ENABLED=1 go test -race -v ./test/chaos/... -count=1 -timeout 300s
+          CGO_ENABLED=1 go test -race -v ./pkg/chaos/... -count=1 -timeout 300s
 
   govulncheck:
     name: Vulnerability Scan
