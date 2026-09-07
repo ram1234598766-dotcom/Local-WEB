@@ -402,12 +402,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release-assets/*
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-        make_latest: true
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          make_latest: true
 
   # ============================================================
   # VERIFICATION
