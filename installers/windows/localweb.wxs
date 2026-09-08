@@ -6,12 +6,12 @@
   <?define Manufacturer = "LocalWEB Project"?>
   <?define UpgradeCode = "{12345678-1234-1234-1234-123456789012}"?>
   <?define InstallDir = "ProgramFiles64Folder\LocalWEB"?>
-  <?define SourceDir = "..\.." ?>
-  <?define IconFile = "installers\windows\icon.ico"?>
-  <?define WintunDll = "installers\windows\wintun\wintun.dll"?>
+  <?define SourceDir = "." ?>
+  <?define IconFile = "icon.ico"?>
+  <?define WintunDll = "wintun\wintun.dll"?>
 
   <Product Id="*" Name="$(var.ProductName)" Language="1033" Version="$(var.ProductVersion)" Manufacturer="$(var.Manufacturer)" UpgradeCode="$(var.UpgradeCode)">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="LocalWEB Mesh Network Installer" Comments="Local-first encrypted mesh network" Manufacturer="$(var.Manufacturer)" InstallerVersion="500" Keywords="P2P,mesh,VPN,encrypted" />
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="LocalWEB Mesh Network Installer" Comments="Local-first encrypted mesh network" Manufacturer="$(var.Manufacturer)" Keywords="P2P,mesh,VPN,encrypted" />
     
     <MajorUpgrade DowngradeErrorMessage="A newer version of LocalWEB is already installed." Schedule="afterInstallInitialize" />
     <MediaTemplate EmbedCab="yes" />
@@ -32,7 +32,7 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
     <Binary Id="WintunDll" SourceFile="$(var.WintunDll)" />
-    <Binary Id="ServiceInstallScript" SourceFile="installers\windows\ServiceInstall.ps1" />
+    <Binary Id="ServiceInstallScript" SourceFile="ServiceInstall.ps1" />
   </Product>
 
   <Fragment>
@@ -57,22 +57,22 @@
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLDIR">
       <Component Id="LocalWebExe" Guid="{11111111-1111-1111-1111-111111111111}">
-        <File Id="localweb.exe" Source="$(var.SourceDir)\dist\localweb.exe" KeyPath="yes" Checksum="yes" />
+        <File Id="localweb.exe" Source="localweb.exe" KeyPath="yes" Checksum="yes" />
       </Component>
       <Component Id="LocalWebCliExe" Guid="{22222222-2222-2222-2222-222222222222}">
-        <File Id="localweb-cli.exe" Source="$(var.SourceDir)\dist\localweb-cli.exe" KeyPath="yes" Checksum="yes" />
+        <File Id="localweb-cli.exe" Source="localweb-cli.exe" KeyPath="yes" Checksum="yes" />
       </Component>
       <Component Id="Readme" Guid="{33333333-3333-3333-3333-333333333333}">
-        <File Id="README.md" Source="$(var.SourceDir)\README.md" />
+        <File Id="README.md" Source="README.md" />
       </Component>
       <Component Id="License" Guid="{44444444-4444-4444-4444-444444444444}">
-        <File Id="LICENSE" Source="$(var.SourceDir)\LICENSE" />
+        <File Id="LICENSE" Source="LICENSE" />
       </Component>
       <Component Id="Changelog" Guid="{55555555-5555-5555-5555-555555555555}">
-        <File Id="CHANGELOG.md" Source="$(var.SourceDir)\CHANGELOG.md" />
+        <File Id="CHANGELOG.md" Source="CHANGELOG.md" />
       </Component>
       <Component Id="ConfigFile" Guid="{66666666-6666-6666-6666-666666666666}" Directory="ConfigDir">
-        <File Id="config.json" Source="$(var.SourceDir)\config\config.json" />
+        <File Id="config.json" Source="config\config.json" />
         <CreateFolder Directory="ConfigDir" />
       </Component>
     </ComponentGroup>
