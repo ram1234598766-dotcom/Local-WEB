@@ -94,10 +94,10 @@ SectionEnd
 
 Section "Start Menu Shortcuts" SEC_SHORTCUTS
     CreateDirectory "$SMPROGRAMS\LocalWEB"
-    CreateShortcut "$SMPROGRAMS\LocalWEB\LocalWEB.lnk" "$INSTDIR\localweb.exe" "node" "" "$INSTDIR" "Start LocalWEB node"
-    CreateShortcut "$SMPROGRAMS\LocalWEB\LocalWEB CLI.lnk" "$INSTDIR\localweb-cli.exe" "" "" "$INSTDIR" "LocalWEB command line interface"
-    CreateShortcut "$SMPROGRAMS\LocalWEB\Uninstall.lnk" "$INSTDIR\${UNINSTALLER_NAME}" "" "" "$INSTDIR" "Uninstall LocalWEB"
-    CreateShortcut "$DESKTOP\LocalWEB.lnk" "$INSTDIR\localweb.exe" "node" "" "$INSTDIR" "Start LocalWEB node"
+    CreateShortcut "$SMPROGRAMS\LocalWEB\LocalWEB.lnk" "$INSTDIR\localweb.exe" "node" "$INSTDIR\localweb.exe" 0 SW_SHOWNORMAL "" "Start LocalWEB node"
+    CreateShortcut "$SMPROGRAMS\LocalWEB\LocalWEB CLI.lnk" "$INSTDIR\localweb-cli.exe" "" "$INSTDIR\localweb-cli.exe" 0 SW_SHOWNORMAL "" "LocalWEB command line interface"
+    CreateShortcut "$SMPROGRAMS\LocalWEB\Uninstall.lnk" "$INSTDIR\${UNINSTALLER_NAME}" "" "$INSTDIR\${UNINSTALLER_NAME}" 0 SW_SHOWNORMAL "" "Uninstall LocalWEB"
+    CreateShortcut "$DESKTOP\LocalWEB.lnk" "$INSTDIR\localweb.exe" "node" "$INSTDIR\localweb.exe" 0 SW_SHOWNORMAL "" "Start LocalWEB node"
 SectionEnd
 
 Section "Wintun Driver" SEC_WINTUN
