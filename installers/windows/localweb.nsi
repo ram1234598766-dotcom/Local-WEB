@@ -10,7 +10,7 @@
 
 ; Application info
 !define APP_NAME "LocalWEB"
-!define APP_VERSION "1.0.0"
+!define APP_VERSION "1.0.1"
 !define APP_PUBLISHER "LocalWEB Project"
 !define APP_WEBSITE "https://github.com/ram1234598766-dotcom/Local-WEB"
 !define APP_EXECUTABLE "localweb.exe"

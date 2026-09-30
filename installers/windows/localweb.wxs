@@ -2,7 +2,7 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <?define ProductName = "LocalWEB"?>
-  <?define ProductVersion = "1.0.0"?>
+  <?define ProductVersion = "1.0.1"?>
   <?define Manufacturer = "LocalWEB Project"?>
   <?define UpgradeCode = "{12345678-1234-1234-1234-123456789012}"?>
   <?define InstallDir = "ProgramFiles64Folder\LocalWEB"?>
