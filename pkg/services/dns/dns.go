@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -262,15 +263,71 @@ func (s *Server) resolve(q DNSQuestion) (DNSRecord, error) {
 	return DNSRecord{}, errors.New("not found")
 }
 
+// zoneCanonical returns the byte string that is signed when a zone is signed.
+//
+// Go randomises map iteration order, so walking s.zone.Records directly would
+// produce a different pre-image on nearly every call and a signature would
+// verify only by accident. Both the record names and the records under each
+// name are therefore sorted, and every field that affects resolution is
+// included so that changing a type, class, or TTL invalidates the signature.
 func (s *Server) zoneCanonical() []byte {
+	names := make([]string, 0, len(s.zone.Records))
+	for name := range s.zone.Records {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	var buf bytes.Buffer
-	for name, rrs := range s.zone.Records {
-		buf.WriteString(name)
+	for _, name := range names {
+		rrs := append([]ResourceRecord(nil), s.zone.Records[name]...)
+		sort.SliceStable(rrs, func(i, j int) bool {
+			a, b := rrs[i].Record, rrs[j].Record
+			if a.Type != b.Type {
+				return a.Type < b.Type
+			}
+			if a.Class != b.Class {
+				return a.Class < b.Class
+			}
+			if a.TTL != b.TTL {
+				return a.TTL < b.TTL
+			}
+			return bytes.Compare(rrs[i].Data, rrs[j].Data) < 0
+		})
 		for _, rr := range rrs {
+			buf.WriteString(name)
+			binary.Write(&buf, binary.BigEndian, uint16(rr.Record.Type))
+			binary.Write(&buf, binary.BigEndian, rr.Record.Class)
+			binary.Write(&buf, binary.BigEndian, rr.Record.TTL)
 			buf.Write(rr.Data)
 		}
 	}
 	return buf.Bytes()
+}
+
+// SignZone signs the zone with an Ed25519 keypair, recording the signer
+// public key, signature and timestamp. It must be called again after any
+// change to the zone, otherwise resolve will reject every record.
+func (s *Server) SignZone(pub, priv [32]byte) error {
+	if pub == ([32]byte{}) {
+		return errors.New("zone signer public key is empty")
+	}
+	sig, err := crypto.Sign(priv, s.zoneCanonical())
+	if err != nil {
+		return err
+	}
+	if len(sig) != 64 {
+		return fmt.Errorf("unexpected signature length %d", len(sig))
+	}
+
+	s.zone.Signer = pub
+	s.zone.SignedAt = time.Now()
+	copy(s.zone.Sig[:], sig)
+
+	// Cached answers were resolved under the previous signature.
+	s.mu.Lock()
+	s.cache = make(map[string]cacheEntry)
+	s.mu.Unlock()
+	return nil
 }
 
 func reverseName(addr string) string {

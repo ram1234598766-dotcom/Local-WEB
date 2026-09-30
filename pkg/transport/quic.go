@@ -175,7 +175,7 @@ func (s *Server) handleConn(qc *quic.Conn) {
 
 	// Run the Noise XX handshake over the first stream to establish
 	// peer identity before multiplexing services.
-	peerID, err := s.noiseHandshake(qc)
+	hs, err := s.noiseHandshake(qc)
 	if err != nil {
 		log.Warn().Err(err).Msg("noise handshake failed")
 		return
@@ -183,7 +183,9 @@ func (s *Server) handleConn(qc *quic.Conn) {
 
 	conn := &Connection{
 		handle:          qc,
-		peerID:          peerID,
+		peerID:          hs.PeerID,
+		sendKey:         hs.SendKey,
+		recvKey:         hs.RecvKey,
 		addr:            qc.RemoteAddr().String(),
 		state:           StateReady,
 		services:        make(map[ServiceID]bool),
@@ -194,7 +196,7 @@ func (s *Server) handleConn(qc *quic.Conn) {
 
 	s.mu.Lock()
 	s.stats.ActiveConns++
-	s.conns[peerID] = conn
+	s.conns[hs.PeerID] = conn
 	s.mu.Unlock()
 
 	// Accept and dispatch streams
@@ -260,55 +262,84 @@ func (s *Server) handleConn(qc *quic.Conn) {
 
 	s.mu.Lock()
 	s.stats.ActiveConns--
-	delete(s.conns, peerID)
+	delete(s.conns, hs.PeerID)
 	s.mu.Unlock()
 
-	log.Info().Str("peer", fmt.Sprintf("%x", peerID[:8])).Msg("connection closed")
+	log.Info().Str("peer", fmt.Sprintf("%x", hs.PeerID[:8])).Msg("connection closed")
+}
+
+// HandshakeResult carries what a completed Noise or hybrid handshake
+// established.
+//
+// SendKey and RecvKey are the two directions of the Noise transport cipher.
+// They are deliberately not the same value: the initiator's SendKey is the
+// responder's RecvKey, and vice versa.
+type HandshakeResult struct {
+	PeerID  [32]byte
+	SendKey [32]byte
+	RecvKey [32]byte
+}
+
+// session is the common surface of a classical and a hybrid handshake state,
+// so the result can be assembled without caring which ran.
+type sessionResult interface {
+	RemotePublic() [32]byte
+	SessionKey() [32]byte
+	RecvSessionKey() [32]byte
+}
+
+func handshakeResult(s sessionResult) HandshakeResult {
+	return HandshakeResult{
+		PeerID:  crypto.NodeID(s.RemotePublic()),
+		SendKey: s.SessionKey(),
+		RecvKey: s.RecvSessionKey(),
+	}
 }
 
 // noiseHandshake performs a Noise XX handshake on the first stream
-// opened by the peer and returns the authenticated peer ID.
-func (s *Server) noiseHandshake(qc *quic.Conn) ([32]byte, error) {
+// opened by the peer and returns the authenticated peer ID together with the
+// session keys both sides derived.
+func (s *Server) noiseHandshake(qc *quic.Conn) (HandshakeResult, error) {
 	session, err := crypto.NewNoiseResponder(s.pubKey, s.privKey)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 
 	stream, err := qc.AcceptStream(s.ctx)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("accept noise stream: %w", err)
+		return HandshakeResult{}, fmt.Errorf("accept noise stream: %w", err)
 	}
 	defer stream.Close()
 
 	// Read initiator's first message: -> e (32 bytes)
 	first := make([]byte, 32)
 	if _, err := readFull(stream, first); err != nil {
-		return [32]byte{}, fmt.Errorf("read noise first: %w", err)
+		return HandshakeResult{}, fmt.Errorf("read noise first: %w", err)
 	}
 
 	next, _, done, err := session.WriteHandshake(first)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 	_ = done
 
 	// Send responder message: <- e, ee, s, es
 	if len(next) > 0 {
 		if _, err := stream.Write(next); err != nil {
-			return [32]byte{}, fmt.Errorf("write noise response: %w", err)
+			return HandshakeResult{}, fmt.Errorf("write noise response: %w", err)
 		}
 	}
 
 	// Read the initiator's final -> s, se (encrypted static: 32 + AEAD tag).
 	final := make([]byte, 32+16)
 	if _, err := readFull(stream, final); err != nil {
-		return [32]byte{}, fmt.Errorf("read noise final: %w", err)
+		return HandshakeResult{}, fmt.Errorf("read noise final: %w", err)
 	}
 
 	// Complete the responder handshake, authenticating the initiator's
 	// static public key.
 	if _, _, _, err := session.WriteHandshake(final); err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 
 	// Close the temporary handshake stream.
@@ -316,7 +347,7 @@ func (s *Server) noiseHandshake(qc *quic.Conn) ([32]byte, error) {
 
 	// Authenticate by the peer's NodeID (hash of its Noise static key),
 	// consistent with how the orchestrator derives and compares peer IDs.
-	return crypto.NodeID(session.RemotePublic()), nil
+	return handshakeResult(session), nil
 }
 
 // readFull reads len(p) bytes from a stream.
@@ -386,22 +417,24 @@ func (s *Server) Connect(ctx context.Context, addr string, peerID [32]byte) (*Co
 	}
 
 	// Perform the Noise XX handshake as initiator.
-	peerActual, err := s.dialNoise(qc)
+	hs, err := s.dialNoise(qc)
 	if err != nil {
 		qc.CloseWithError(quic.ApplicationErrorCode(0x02), "noise handshake failed")
 		return nil, fmt.Errorf("noise handshake: %w", err)
 	}
 
 	// Verify the peer's NodeID matches the expected identity.
-	if peerActual != peerID {
+	if hs.PeerID != peerID {
 		qc.CloseWithError(quic.ApplicationErrorCode(0x03), "peer identity mismatch")
-		return nil, fmt.Errorf("peer identity mismatch: got %x want %x", peerActual[:8], peerID[:8])
+		return nil, fmt.Errorf("peer identity mismatch: got %x want %x", hs.PeerID[:8], peerID[:8])
 	}
 
 	c := &Connection{
 		handle:   qc,
 		addr:     addr,
 		peerID:   peerID,
+		sendKey:  hs.SendKey,
+		recvKey:  hs.RecvKey,
 		state:    StateReady,
 		services: make(map[ServiceID]bool),
 		server:   s,
@@ -418,26 +451,26 @@ func (s *Server) Connect(ctx context.Context, addr string, peerID [32]byte) (*Co
 }
 
 // dialNoise performs the Noise XX handshake as initiator.
-func (s *Server) dialNoise(qc *quic.Conn) ([32]byte, error) {
+func (s *Server) dialNoise(qc *quic.Conn) (HandshakeResult, error) {
 	session, err := crypto.NewNoiseInitiator(s.pubKey, s.privKey)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 
 	stream, err := qc.OpenStreamSync(s.ctx)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("open noise stream: %w", err)
+		return HandshakeResult{}, fmt.Errorf("open noise stream: %w", err)
 	}
 
 	// -> e (send ephemeral public key)
 	first, _, done, err := session.WriteHandshake(nil)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 	_ = done
 
 	if _, err := stream.Write(first); err != nil {
-		return [32]byte{}, fmt.Errorf("write noise init: %w", err)
+		return HandshakeResult{}, fmt.Errorf("write noise init: %w", err)
 	}
 
 	// <- e, ee, s, es (read responder message)
@@ -447,7 +480,7 @@ func (s *Server) dialNoise(qc *quic.Conn) ([32]byte, error) {
 	// = 80 bytes.
 	respBuf := make([]byte, 32+48)
 	if _, err := readFull(stream, respBuf); err != nil {
-		return [32]byte{}, fmt.Errorf("read noise response: %w", err)
+		return HandshakeResult{}, fmt.Errorf("read noise response: %w", err)
 	}
 
 	// Process <- e, ee, s, es and produce -> s, se. WriteHandshake returns
@@ -455,12 +488,12 @@ func (s *Server) dialNoise(qc *quic.Conn) ([32]byte, error) {
 	// stream so the responder can complete its side of the handshake.
 	toSend, _, _, err := session.WriteHandshake(respBuf)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 
 	if len(toSend) > 0 {
 		if _, err := stream.Write(toSend); err != nil {
-			return [32]byte{}, fmt.Errorf("write noise final: %w", err)
+			return HandshakeResult{}, fmt.Errorf("write noise final: %w", err)
 		}
 	}
 
@@ -469,11 +502,12 @@ func (s *Server) dialNoise(qc *quic.Conn) ([32]byte, error) {
 	// side of the XX handshake. This guarantees msg3 delivery.
 	// io.EOF means the responder closed cleanly (expected).
 	if _, err := readUntilEOF(stream); err != nil && !errors.Is(err, io.EOF) {
-		return [32]byte{}, fmt.Errorf("wait for responder close: %w", err)
+		return HandshakeResult{}, fmt.Errorf("wait for responder close: %w", err)
 	}
 
-	// Return the peer's NodeID (hash of its authenticated static key).
-	return crypto.NodeID(session.RemotePublic()), nil
+	// Return the peer's NodeID (hash of its authenticated static key) and the
+	// session key both sides derived.
+	return handshakeResult(session), nil
 }
 
 // OpenStream opens a stream to a peer for a service.
@@ -549,6 +583,8 @@ type Connection struct {
 	mu              sync.Mutex
 	handle          *quic.Conn
 	peerID          [32]byte
+	sendKey         [32]byte
+	recvKey         [32]byte
 	addr            string
 	state           ConnectionState
 	services        map[ServiceID]bool
@@ -560,6 +596,21 @@ type Connection struct {
 func (c *Connection) PeerID() [32]byte       { return c.peerID }
 func (c *Connection) Addr() string           { return c.addr }
 func (c *Connection) State() ConnectionState { return c.state }
+
+// SessionKey returns the key this side sends on, as agreed by the Noise
+// handshake. When the hybrid post-quantum handshake is enabled this is the
+// combined HKDF-SHA3-256(classical || Kyber-1024) key, so an
+// application-layer key derived from it inherits post-quantum forward secrecy.
+//
+// Use PeerRecvKey for the inbound direction: the two are different values by
+// construction, and the peer's send key equals this side's receive key.
+//
+// It is not the QUIC/TLS record key: those are managed by quic-go and are not
+// exposed here.
+func (c *Connection) SessionKey() [32]byte { return c.sendKey }
+
+// PeerRecvKey returns the key this side receives on.
+func (c *Connection) PeerRecvKey() [32]byte { return c.recvKey }
 
 // OpenStream opens a new stream for a service.
 func (c *Connection) OpenStream(ctx context.Context, svc ServiceID) (Stream, error) {

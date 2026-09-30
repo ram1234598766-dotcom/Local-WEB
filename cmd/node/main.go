@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,16 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
+
+// stripLeadingSubcommand removes a single leading non-flag argument, which the
+// packaging, installer and service entry points use as a "node" verb.
+// It rewrites os.Args because that is what flag.Parse reads.
+func stripLeadingSubcommand() {
+	args := os.Args[1:]
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		os.Args = append(os.Args[:1:1], args[1:]...)
+	}
+}
 
 func main() {
 	addr := flag.String("addr", "0.0.0.0:4443", "listen address")
@@ -34,7 +45,21 @@ func main() {
 	// Post-quantum hybrid handshake
 	useHybrid := flag.Bool("hybrid", false, "enable post-quantum hybrid Noise+Kyber handshake")
 
+	// The daemon has no subcommands, but the packaging and service files all
+	// invoke it as `localweb node --data-dir ...`. flag.Parse stops at the
+	// first non-flag argument, so every flag after that word was being
+	// silently discarded and the node quietly used the default data dir.
+	// Drop a leading subcommand word so those invocations behave as written.
+	stripLeadingSubcommand()
+
 	flag.Parse()
+
+	// Reject unknown positional arguments rather than ignoring them: a
+	// typo in a service unit should fail loudly, not start a node with
+	// default settings.
+	if flag.NArg() > 0 {
+		log.Fatalf("unexpected argument %q; this daemon takes flags only (see -h)", flag.Arg(0))
+	}
 
 	if *name == "" {
 		hostname, _ := os.Hostname()
@@ -71,6 +96,18 @@ func main() {
 
 	// Derive store encryption key from node identity
 	encKey := crypto.DeriveStorageKey(priv)
+
+	// The transport layer runs Noise XX over X25519, while the node identity is
+	// Ed25519. Handing the Ed25519 key bytes straight to the transport still
+	// "works" — X25519 accepts any 32 bytes as a scalar — but the transport
+	// identity is then unrelated to the node's Ed25519 identity, so a peer
+	// deriving NodeID from the Noise static key cannot match the identity
+	// this node advertises. Converting binds the two.
+	transportPub, err := crypto.Ed25519PublicToX25519(pub)
+	if err != nil {
+		log.Fatalf("derive transport public key: %v", err)
+	}
+	transportPriv := crypto.Ed25519PrivateToX25519(priv)
 
 	// Open encrypted store
 	dbStore, err := store.Open(*storage, encKey)
@@ -147,7 +184,7 @@ func main() {
 	}()
 	defer disc.Stop()
 
-	server, err := transport.NewHybridServer(ctx, *addr, pub, priv, *useHybrid)
+	server, err := transport.NewHybridServer(ctx, *addr, transportPub, transportPriv, *useHybrid)
 	if err != nil {
 		log.Fatalf("transport server: %v", err)
 	}

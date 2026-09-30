@@ -387,7 +387,16 @@ func (s *NoiseSession) Decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // SessionKey returns the current send key (for inspection/debugging).
+// SessionKey returns this side's send key.
+//
+// Noise splits the handshake into two directional keys, so the initiator's send
+// key equals the responder's receive key, not the responder's send key.
+// Compare with RecvSessionKey on the peer rather than expecting both sides to
+// return the same value.
 func (s *NoiseSession) SessionKey() [32]byte { return s.sendKey }
+
+// RecvSessionKey returns this side's receive key.
+func (s *NoiseSession) RecvSessionKey() [32]byte { return s.recvKey }
 
 // RemotePublic returns the peer's static public key after the handshake.
 // It is populated once the peer's static key has been authenticated.

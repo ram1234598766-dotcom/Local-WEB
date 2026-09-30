@@ -12,6 +12,8 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/hkdf"
+	"golang.org/x/crypto/sha3"
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 )
@@ -104,21 +106,40 @@ func NewHybridKeyDerivation() *HybridKeyDerivation {
 	return &HybridKeyDerivation{}
 }
 
-// DeriveTransportKey derives a transport encryption key from the hybrid session key.
+// DeriveTransportKey derives a purpose-specific key from the hybrid session
+// key using HKDF-SHA3-256 with the context string as the info parameter.
+//
+// Domain separation by context is the point: a key derived for one service
+// must not be usable for another. This previously returned its input
+// unchanged, which meant the Kyber contribution reached nothing.
 func (hkd *HybridKeyDerivation) DeriveTransportKey(sessionKey [32]byte, context string) [32]byte {
 	hkd.mu.Lock()
 	defer hkd.mu.Unlock()
 
+	r := hkdf.New(sha3.New256, sessionKey[:], nil,
+		append([]byte("LocalWEB-v2-transport"), []byte(context)...))
 	var key [32]byte
-	copy(key[:], sessionKey[:])
-	// In production, use HKDF with context
-	_ = context
+	if _, err := io.ReadFull(r, key[:]); err != nil {
+		// HKDF never fails on a 32-byte read with a SHA3-256 PRF, but a
+		// zero key would be a silent security failure if that ever changed.
+		log.Error().Err(err).Msg("HKDF transport key derivation failed")
+		return [32]byte{}
+	}
 	return key
 }
 
 const (
 	hybridHandshakeStream = "hybrid-handshake"
-	hybridKyberCtSize     = 1568 // Kyber-1024 ciphertext size
+	// hybridKyberCtSize is the Kyber-1024 ciphertext size carried in msg2.
+	hybridKyberCtSize = 1568
+	// hybridKyberPubSize is the Kyber-1024 public key size carried in msg1.
+	hybridKyberPubSize = 1568
+	// hybridMsg1Size is msg1: initiator PQ public key + Noise "-> e".
+	hybridMsg1Size = hybridKyberPubSize + 32
+	// hybridMsg2Size is msg2: Kyber ciphertext + Noise "<- e, ee, s, es".
+	hybridMsg2Size = hybridKyberCtSize + 32 + 32 + 16
+	// hybridMsg3Size is msg3: Noise "-> s, se" (encrypted static + AEAD tag).
+	hybridMsg3Size = 32 + 16
 )
 
 // HybridServer wraps Server with hybrid handshake support.
@@ -135,112 +156,119 @@ func NewHybridServer(ctx context.Context, addr string, pub, priv [32]byte, useHy
 	return &HybridServer{Server: s, useHybrid: useHybrid}, nil
 }
 
-func (s *HybridServer) dialNoise(qc *quic.Conn) ([32]byte, error) {
+func (s *HybridServer) dialNoise(qc *quic.Conn) (HandshakeResult, error) {
 	if s.useHybrid {
 		return s.dialHybrid(qc)
 	}
 	return s.Server.dialNoise(qc)
 }
 
-func (s *HybridServer) noiseHandshake(qc *quic.Conn) ([32]byte, error) {
+func (s *HybridServer) noiseHandshake(qc *quic.Conn) (HandshakeResult, error) {
 	if s.useHybrid {
 		return s.hybridHandshake(qc)
 	}
 	return s.Server.noiseHandshake(qc)
 }
 
-func (s *HybridServer) dialHybrid(qc *quic.Conn) ([32]byte, error) {
+func (s *HybridServer) dialHybrid(qc *quic.Conn) (HandshakeResult, error) {
 	session, err := crypto.NewHybridInitiator(s.pubKey, s.privKey)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 
 	stream, err := qc.OpenStreamSync(s.ctx)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("open hybrid stream: %w", err)
+		return HandshakeResult{}, fmt.Errorf("open hybrid stream: %w", err)
 	}
 
-	// -> e + Kyber ct
+	// msg1: initiator PQ public key + Noise "-> e"
 	first, _, done, err := session.WriteHandshake(nil)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 	_ = done
-
-	if _, err := stream.Write(first); err != nil {
-		return [32]byte{}, fmt.Errorf("write hybrid init: %w", err)
+	if len(first) != hybridMsg1Size {
+		return HandshakeResult{}, fmt.Errorf("unexpected hybrid msg1 size %d, want %d", len(first), hybridMsg1Size)
 	}
 
-	// <- e, ee, s, es + Kyber ct
-	respBuf := make([]byte, hybridKyberCtSize+80) // 736 + 80
+	if _, err := stream.Write(first); err != nil {
+		return HandshakeResult{}, fmt.Errorf("write hybrid init: %w", err)
+	}
+
+	// msg2: Kyber ciphertext + Noise "<- e, ee, s, es"
+	respBuf := make([]byte, hybridMsg2Size)
 	if _, err := readFull(stream, respBuf); err != nil {
-		return [32]byte{}, fmt.Errorf("read hybrid response: %w", err)
+		return HandshakeResult{}, fmt.Errorf("read hybrid response: %w", err)
 	}
 
 	toSend, _, _, err := session.WriteHandshake(respBuf)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
+	}
+	if len(toSend) != hybridMsg3Size {
+		return HandshakeResult{}, fmt.Errorf("unexpected hybrid msg3 size %d, want %d", len(toSend), hybridMsg3Size)
 	}
 
-	if len(toSend) > 0 {
-		if _, err := stream.Write(toSend); err != nil {
-			return [32]byte{}, fmt.Errorf("write hybrid final: %w", err)
-		}
+	if _, err := stream.Write(toSend); err != nil {
+		return HandshakeResult{}, fmt.Errorf("write hybrid final: %w", err)
 	}
 
 	// Wait for responder to close
 	if _, err := readUntilEOF(stream); err != nil && !errors.Is(err, io.EOF) {
-		return [32]byte{}, fmt.Errorf("wait for responder close: %w", err)
+		return HandshakeResult{}, fmt.Errorf("wait for responder close: %w", err)
 	}
 
-	return crypto.NodeID(session.RemotePublic()), nil
+	return handshakeResult(session), nil
 }
 
-func (s *HybridServer) hybridHandshake(qc *quic.Conn) ([32]byte, error) {
+func (s *HybridServer) hybridHandshake(qc *quic.Conn) (HandshakeResult, error) {
 	session, err := crypto.NewHybridResponder(s.pubKey, s.privKey)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 
 	stream, err := qc.AcceptStream(s.ctx)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("accept hybrid stream: %w", err)
+		return HandshakeResult{}, fmt.Errorf("accept hybrid stream: %w", err)
 	}
 	defer stream.Close()
 
-	// Read initiator's first message: e + Kyber ct
-	first := make([]byte, hybridKyberCtSize+32) // 736 + 32
+	// msg1: initiator PQ public key + Noise "-> e"
+	first := make([]byte, hybridMsg1Size)
 	if _, err := readFull(stream, first); err != nil {
-		return [32]byte{}, fmt.Errorf("read hybrid first: %w", err)
+		return HandshakeResult{}, fmt.Errorf("read hybrid first: %w", err)
 	}
 
 	next, _, done, err := session.WriteHandshake(first)
 	if err != nil {
-		return [32]byte{}, err
+		return HandshakeResult{}, err
 	}
 	_ = done
-
-	// Send responder message: e, ee, s, es + Kyber ct
-	if len(next) > 0 {
-		if _, err := stream.Write(next); err != nil {
-			return [32]byte{}, fmt.Errorf("write hybrid response: %w", err)
-		}
+	if len(next) != hybridMsg2Size {
+		return HandshakeResult{}, fmt.Errorf("unexpected hybrid msg2 size %d, want %d", len(next), hybridMsg2Size)
 	}
 
-	// Read the initiator's final -> s, se (encrypted static: 32 + AEAD tag)
-	final := make([]byte, 32+16)
+	// msg2: Kyber ciphertext + Noise "<- e, ee, s, es"
+	if _, err := stream.Write(next); err != nil {
+		return HandshakeResult{}, fmt.Errorf("write hybrid response: %w", err)
+	}
+
+	// msg3: Noise "-> s, se"
+	final := make([]byte, hybridMsg3Size)
 	if _, err := readFull(stream, final); err != nil {
-		return [32]byte{}, fmt.Errorf("read hybrid final: %w", err)
+		return HandshakeResult{}, fmt.Errorf("read hybrid final: %w", err)
 	}
 
 	// Complete the responder handshake
-	if _, _, _, err := session.WriteHandshake(final); err != nil {
-		return [32]byte{}, err
+	if _, _, complete, err := session.WriteHandshake(final); err != nil {
+		return HandshakeResult{}, err
+	} else if !complete {
+		return HandshakeResult{}, errors.New("hybrid handshake did not complete")
 	}
 
 	stream.Close()
 
-	return crypto.NodeID(session.RemotePublic()), nil
+	return handshakeResult(session), nil
 }
 
 func init() {

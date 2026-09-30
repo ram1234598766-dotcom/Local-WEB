@@ -2,6 +2,7 @@ package security
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/binary"
@@ -14,33 +15,84 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/sha3"
 )
 
-// PoWChallenge represents a proof-of-work challenge (Argon2id-based, memory-hard).
+// Proof-of-work parameters and hard limits.
+//
+// A solution is valid when SHA3-256(workSeed || nonce) has at least
+// `Difficulty` leading zero BITS. Work is exponential in Difficulty, so the
+// difficulty unit is bits and the security cost is 2^difficulty hashes.
+//
+// The memory-hardness comes from a single Argon2id call per challenge that
+// derives `workSeed`. That call is paid once by the solver and once by the
+// verifier; the nonce search over SHA3-256 is then cheap and parallelisable.
+// Running Argon2id per nonce instead would make the search infeasible long
+// before it became expensive to attack.
+//
+// The caps below are a denial-of-service control, not tuning: a challenge is
+// attacker-controlled data, so the requested cost is clamped before any
+// allocation happens.
+const (
+	// DefaultPoWMemoryKiB is the Argon2id memory cost advertised in challenges.
+	DefaultPoWMemoryKiB = 64 * 1024
+	// DefaultPoWTimeCost is the Argon2id iteration count. One pass is enough
+	// because the derived seed is what the (unbounded) nonce search runs on.
+	DefaultPoWTimeCost = 1
+	// DefaultPoWParallelism is the Argon2id lane count. One lane maximises
+	// memory-hardness per allocated MiB.
+	DefaultPoWParallelism uint8 = 1
+
+	// MaxPoWMemoryKiB caps the memory a remote peer can make us allocate.
+	MaxPoWMemoryKiB = 64 * 1024
+	// MaxPoWTimeCost caps Argon2id iterations per verification.
+	MaxPoWTimeCost uint32 = 4
+	// MaxPoWParallelism caps Argon2id lanes per verification.
+	MaxPoWParallelism uint8 = 4
+
+	// MinDifficulty and MaxDifficulty bound the advertised work so a
+	// malicious issuer cannot demand work that is infeasible to perform.
+	MinDifficulty uint8 = 8
+	MaxDifficulty uint8 = 24
+
+	// PowReplayWindow is how long a solved challenge stays valid.
+	PowReplayWindow = 5 * time.Minute
+
+	// powNonceSearchLimit bounds the nonce search so a difficulty that is
+	// unreachable in practice fails fast instead of spinning forever.
+	powNonceSearchLimit uint64 = 1 << 32
+)
+
+// PoWChallenge is a proof-of-work challenge. All cost parameters are hints
+// that the verifier clamps to the caps above before allocating.
 type PoWChallenge struct {
-	Algorithm   string // "argon2id"
-	Difficulty  uint8  // log2 of iterations (time cost)
-	Memory      uint32 // memory cost in KiB
-	Parallelism uint8  // parallelism (lanes)
+	Algorithm   string // "argon2id-sha3"
+	Difficulty  uint8  // required leading zero bits of SHA3-256(workSeed||nonce)
+	Memory      uint32 // Argon2id memory cost in KiB (clamped to MaxPoWMemoryKiB)
+	TimeCost    uint32 // Argon2id iteration count (clamped to MaxPoWTimeCost)
+	Parallelism uint8  // Argon2id lanes (clamped to MaxPoWParallelism)
 	Timestamp   time.Time
 	Service     ServiceID
-	Salt        [16]byte // salt for Argon2id
+	Salt        [16]byte
 }
 
 // PoWSolution is a valid response to a PoWChallenge.
 type PoWSolution struct {
 	Nonce    [8]byte
-	Hash     [32]byte
+	Hash     [32]byte // SHA3-256(workSeed || nonce)
 	Time     time.Time
 	Duration time.Duration
 }
 
-// MarshalChallenge serialises a PoWChallenge to bytes.
+// MarshalChallenge serialises a PoWChallenge to bytes. The encoding is stable:
+// it is hashed by both solver and verifier, so any field order change is a
+// protocol break.
 func (c *PoWChallenge) MarshalChallenge() []byte {
 	buf := new(bytes.Buffer)
 	buf.WriteString(c.Algorithm)
 	buf.WriteByte(c.Difficulty)
 	binary.Write(buf, binary.BigEndian, c.Memory)
+	binary.Write(buf, binary.BigEndian, c.TimeCost)
 	buf.WriteByte(c.Parallelism)
 	binary.Write(buf, binary.BigEndian, c.Timestamp.UnixNano())
 	buf.Write([]byte(c.Service))
@@ -48,104 +100,161 @@ func (c *PoWChallenge) MarshalChallenge() []byte {
 	return buf.Bytes()
 }
 
-// GenerateChallenge creates a new Argon2id PoWChallenge with a random salt.
+// clamp returns the cost parameters actually used, bounded by the hard caps.
+// It is applied on both the solving and verifying paths so a peer cannot make
+// us allocate memory or CPU that the challenge did not legitimately need.
+func (c *PoWChallenge) clamp() (memory uint32, timeCost uint32, parallelism uint8) {
+	memory = c.Memory
+	if memory == 0 || memory > MaxPoWMemoryKiB {
+		memory = MaxPoWMemoryKiB
+	}
+	// Argon2 requires at least 8*p blocks of memory.
+	timeCost = c.TimeCost
+	if timeCost == 0 || timeCost > MaxPoWTimeCost {
+		timeCost = MaxPoWTimeCost
+	}
+	parallelism = c.Parallelism
+	if parallelism == 0 || parallelism > MaxPoWParallelism {
+		parallelism = MaxPoWParallelism
+	}
+	if min := uint32(8) * uint32(parallelism); memory < min {
+		memory = min
+	}
+	return memory, timeCost, parallelism
+}
+
+// workSeed derives the memory-hard seed the nonce search runs on. The Argon2id
+// parameters are taken from the challenge after clamping.
+func (c *PoWChallenge) workSeed() [32]byte {
+	memory, timeCost, parallelism := c.clamp()
+	h := argon2.IDKey(c.MarshalChallenge(), c.Salt[:], timeCost, memory, parallelism, 32)
+	var seed [32]byte
+	copy(seed[:], h)
+	return seed
+}
+
+// candidateHash computes SHA3-256(workSeed || nonce) with an 8-byte
+// big-endian nonce, the single definition of "a hash" used by both paths.
+func candidateHash(seed [32]byte, nonce [8]byte) [32]byte {
+	var nonceBytes [8]byte
+	binary.BigEndian.PutUint64(nonceBytes[:], binary.BigEndian.Uint64(nonce[:]))
+	h := sha3.New256()
+	h.Write(seed[:])
+	h.Write(nonceBytes[:])
+	var out [32]byte
+	h.Sum(out[:0])
+	return out
+}
+
+// leadingZeroBits counts the leading zero bits of a hash, capped at 256.
+func leadingZeroBits(hash [32]byte) int {
+	n := 0
+	for _, b := range hash {
+		if b == 0 {
+			n += 8
+			continue
+		}
+		for i := 7; i >= 0; i-- {
+			if b&(1<<uint(i)) == 0 {
+				n++
+			} else {
+				return n
+			}
+		}
+		return n
+	}
+	return n
+}
+
+// GenerateChallenge creates a new PoW challenge with a random salt.
+// Difficulty is clamped to the supported range; out-of-range values are a
+// caller error and are corrected rather than accepted.
 func GenerateChallenge(difficulty uint8, svc ServiceID) PoWChallenge {
 	var salt [16]byte
 	rand.Read(salt[:])
+	if difficulty < MinDifficulty {
+		difficulty = MinDifficulty
+	}
+	if difficulty > MaxDifficulty {
+		difficulty = MaxDifficulty
+	}
 	return PoWChallenge{
-		Algorithm:   "argon2id",
+		Algorithm:   "argon2id-sha3",
 		Difficulty:  difficulty,
-		Memory:      64 * 1024, // 64 MiB
-		Parallelism: 4,
+		Memory:      DefaultPoWMemoryKiB,
+		TimeCost:    DefaultPoWTimeCost,
+		Parallelism: DefaultPoWParallelism,
 		Timestamp:   time.Now(),
 		Service:     svc,
 		Salt:        salt,
 	}
 }
 
-// SolvePoW finds a solution such that Argon2id(challenge || solution) has
-// at least `difficulty` leading zero bytes in the output hash.
-// Uses Argon2id with memory-hard parameters to resist ASIC/GPU acceleration.
-// Additionally uses SHA3-256 for challenge binding.
+// SolvePoW finds a nonce such that SHA3-256(workSeed || nonce) has at least
+// the challenge's Difficulty leading zero bits.
+//
+// The one expensive Argon2id call happens before the loop. The loop itself is
+// pure SHA3-256, which is what makes 2^difficulty work tractable.
 func SolvePoW(challenge PoWChallenge) (PoWSolution, error) {
-	start := time.Now()
-	challengeBytes := challenge.MarshalChallenge()
+	return SolvePoWContext(context.Background(), challenge)
+}
 
-	// Use Argon2id with configurable parameters
-	// difficulty maps to time cost (iterations): 2^difficulty iterations
-	iterations := uint32(1) << challenge.Difficulty
-	if iterations < 1 {
-		iterations = 1
+// SolvePoWContext is SolvePoW with cancellation, so a caller shutting down
+// does not block on an in-flight nonce search.
+func SolvePoWContext(ctx context.Context, challenge PoWChallenge) (PoWSolution, error) {
+	if err := ctx.Err(); err != nil {
+		return PoWSolution{}, err
+	}
+	if challenge.Difficulty > MaxDifficulty {
+		return PoWSolution{}, errors.New("pow difficulty above maximum")
 	}
 
-	var solution []byte
-	var hash [32]byte
-	target := make([]byte, challenge.Difficulty)
-
-	// For verification, we use a deterministic approach:
-	// The "solution" is finding a nonce such that Argon2id(challenge || nonce) meets difficulty
-	var nonce [8]byte
-	for {
-		binary.BigEndian.PutUint64(nonce[:], uint64(len(solution)))
-
-		// Argon2id: hash = Argon2id(challengeBytes || nonce, salt, iterations, memory, parallelism, 32)
-		input := append(challengeBytes, nonce[:]...)
-		h := argon2.IDKey(input, challenge.Salt[:], iterations, challenge.Memory, challenge.Parallelism, 32)
-		copy(hash[:], h)
-
-		if subtle.ConstantTimeCompare(hash[:challenge.Difficulty], target) == 1 {
+	start := time.Now()
+	seed := challenge.workSeed()
+	var nonce uint64
+	for nonce < powNonceSearchLimit {
+		if nonce&0xffff == 0 {
+			if err := ctx.Err(); err != nil {
+				return PoWSolution{}, err
+			}
+		}
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], nonce)
+		hash := candidateHash(seed, n)
+		if leadingZeroBits(hash) >= int(challenge.Difficulty) {
 			return PoWSolution{
-				Nonce:    nonce,
+				Nonce:    n,
 				Hash:     hash,
 				Time:     time.Now(),
 				Duration: time.Since(start),
 			}, nil
 		}
-
-		// Increment nonce (using solution length as counter)
-		solution = append(solution, 0)
-		if len(solution) > 1000000 { // Safety limit
-			return PoWSolution{}, errors.New("nonce space exhausted")
-		}
+		nonce++
 	}
+	return PoWSolution{}, errors.New("pow nonce space exhausted")
 }
 
-// VerifyPoW checks that a solution satisfies the challenge using Argon2id.
+// VerifyPoW checks that a solution satisfies the challenge. It recomputes the
+// work seed and the candidate hash, so a forged Hash field is rejected even
+// when the nonce would otherwise work.
 func VerifyPoW(challenge PoWChallenge, sol PoWSolution) bool {
-	challengeBytes := challenge.MarshalChallenge()
-	challengeHash := crypto.SHA3Hash(challengeBytes)
-
-	// Recompute Argon2id with the same parameters and the nonce from solution
-	iterations := uint32(1) << challenge.Difficulty
-	if iterations < 1 {
-		iterations = 1
-	}
-
-	// Verify by recomputing Argon2id with the challenge + nonce
-	input := append(challengeBytes, sol.Nonce[:]...)
-	h := argon2.IDKey(input, challenge.Salt[:], iterations, challenge.Memory, challenge.Parallelism, 32)
-	var computedHash [32]byte
-	copy(computedHash[:], h)
-
-	// Check if computed hash matches the solution hash
-	if subtle.ConstantTimeCompare(computedHash[:], sol.Hash[:]) != 1 {
+	seed := challenge.workSeed()
+	computed := candidateHash(seed, sol.Nonce)
+	if subtle.ConstantTimeCompare(computed[:], sol.Hash[:]) != 1 {
 		return false
 	}
+	return leadingZeroBits(computed) >= int(challenge.Difficulty)
+}
 
-	// Check if hash meets difficulty target
-	target := make([]byte, challenge.Difficulty)
-	if subtle.ConstantTimeCompare(computedHash[:challenge.Difficulty], target) != 1 {
+// VerifyPoWWithTime is VerifyPoW plus a freshness check on the challenge
+// timestamp. Challenge freshness is enforced by the validator, not by
+// VerifyPoW, so offline verification of an archived solution stays possible.
+func VerifyPoWWithTime(challenge PoWChallenge, sol PoWSolution, now time.Time) bool {
+	if !VerifyPoW(challenge, sol) {
 		return false
 	}
-
-	// Additional verification: check SHA3-256 of challenge matches expected
-	// This binds the solution to the specific challenge
-	challengeHash2 := crypto.SHA3Hash(challengeBytes)
-	if subtle.ConstantTimeCompare(challengeHash[:], challengeHash2[:]) != 1 {
-		return false
-	}
-
-	return true
+	age := now.Sub(challenge.Timestamp)
+	return age <= PowReplayWindow && age >= -PowReplayWindow
 }
 
 // PoWConfig tunes the proof-of-work subsystem.
@@ -156,21 +265,25 @@ type PoWConfig struct {
 	TargetSolveTime     time.Duration
 	AdjustmentInterval  time.Duration
 	MaxAdjustmentFactor float64
-	Memory              uint32 // memory in KiB
+	Memory              uint32 // Argon2id memory in KiB
+	TimeCost            uint32 // Argon2id iterations
 	Parallelism         uint8
 }
 
-// DefaultPoWConfig returns sensible defaults for Argon2id PoW.
+// DefaultPoWConfig returns sensible defaults for the Argon2id+SHA3 PoW.
+// BaseDifficulty 16 bits is ~65k SHA3-256 hashes, roughly 30ms on a modern
+// core, plus the ~40ms Argon2id seed derivation.
 func DefaultPoWConfig() PoWConfig {
 	return PoWConfig{
-		BaseDifficulty:      2,
-		MinDifficulty:       1,
-		MaxDifficulty:       5,
+		BaseDifficulty:      16,
+		MinDifficulty:       MinDifficulty,
+		MaxDifficulty:       MaxDifficulty,
 		TargetSolveTime:     100 * time.Millisecond,
 		AdjustmentInterval:  5 * time.Minute,
 		MaxAdjustmentFactor: 2.0,
-		Memory:              64 * 1024, // 64 MiB
-		Parallelism:         4,
+		Memory:              DefaultPoWMemoryKiB,
+		TimeCost:            DefaultPoWTimeCost,
+		Parallelism:         DefaultPoWParallelism,
 	}
 }
 
@@ -197,6 +310,10 @@ func NewDifficultyAdjuster(cfg PoWConfig) *DifficultyAdjuster {
 
 // RecordSolve records the duration of a successful PoW solve and adjusts
 // difficulty if enough time has passed.
+//
+// Solve time is exponential in difficulty (2^d hashes), so the correction is
+// logarithmic in the time ratio: shifting difficulty by log2(target/avg)
+// multiplies the expected solve time by avg/target.
 func (a *DifficultyAdjuster) RecordSolve(d time.Duration) uint8 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -206,27 +323,34 @@ func (a *DifficultyAdjuster) RecordSolve(d time.Duration) uint8 {
 		a.history = a.history[len(a.history)-100:]
 	}
 
-	if time.Since(a.lastAdjust) < a.config.AdjustmentInterval {
+	if a.config.TargetSolveTime <= 0 {
+		return a.difficulty
+	}
+	// Adjust on the first solve, then only once per adjustment interval.
+	if !a.lastAdjust.IsZero() && time.Since(a.lastAdjust) < a.config.AdjustmentInterval {
 		return a.difficulty
 	}
 
 	avg := averageDuration(a.history)
-	factor := float64(avg) / float64(a.config.TargetSolveTime)
-
-	var newDiff float64
-	if factor > a.config.MaxAdjustmentFactor {
-		factor = a.config.MaxAdjustmentFactor
-	}
-	if factor < 1.0/a.config.MaxAdjustmentFactor {
-		factor = 1.0 / a.config.MaxAdjustmentFactor
+	if avg <= 0 {
+		return a.difficulty
 	}
 
-	if avg > a.config.TargetSolveTime {
-		newDiff = float64(a.difficulty) - math.Log2(factor)
-	} else {
-		newDiff = float64(a.difficulty) + math.Log2(factor)
+	ratio := float64(a.config.TargetSolveTime) / float64(avg)
+	if a.config.MaxAdjustmentFactor > 0 {
+		// Bound the correction so one slow sample cannot collapse the
+		// difficulty and make the subsystem trivially cheap to attack.
+		lo := 1 / a.config.MaxAdjustmentFactor
+		hi := a.config.MaxAdjustmentFactor
+		if ratio < lo {
+			ratio = lo
+		}
+		if ratio > hi {
+			ratio = hi
+		}
 	}
 
+	newDiff := float64(a.difficulty) + math.Log2(ratio)
 	if newDiff < float64(a.config.MinDifficulty) {
 		newDiff = float64(a.config.MinDifficulty)
 	}
@@ -234,19 +358,19 @@ func (a *DifficultyAdjuster) RecordSolve(d time.Duration) uint8 {
 		newDiff = float64(a.config.MaxDifficulty)
 	}
 
-	a.difficulty = uint8(newDiff)
+	a.difficulty = uint8(math.Round(newDiff))
 	a.lastAdjust = time.Now()
 
 	log.Info().
 		Uint8("difficulty", a.difficulty).
-		Float64("factor", factor).
 		Dur("avg", avg).
+		Dur("target", a.config.TargetSolveTime).
 		Msg("PoW difficulty adjusted")
 
 	return a.difficulty
 }
 
-// CurrentDifficulty returns the current difficulty level.
+// CurrentDifficulty returns the current difficulty level in bits.
 func (a *DifficultyAdjuster) CurrentDifficulty() uint8 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -257,30 +381,59 @@ func (a *DifficultyAdjuster) CurrentDifficulty() uint8 {
 type PoWValidator struct {
 	mu       sync.RWMutex
 	adjuster *DifficultyAdjuster
-	recent   map[string]time.Time // challenge hash -> timestamp
+	seen     map[string]time.Time // challenge digest -> when it was accepted
 }
 
 // NewPoWValidator creates a validator backed by a difficulty adjuster.
 func NewPoWValidator(adjuster *DifficultyAdjuster) *PoWValidator {
 	return &PoWValidator{
 		adjuster: adjuster,
-		recent:   make(map[string]time.Time),
+		seen:     make(map[string]time.Time),
 	}
 }
 
 // Validate checks a PoW solution and records the attempt.
+//
+// Replay protection: a challenge digest is accepted at most once per replay
+// window, so a solution captured off the wire cannot be resubmitted to keep
+// one expensive solve alive for the whole window.
 func (v *PoWValidator) Validate(challenge PoWChallenge, sol PoWSolution) error {
-	if !VerifyPoW(challenge, sol) {
+	now := time.Now()
+	if !VerifyPoWWithTime(challenge, sol, now) {
 		return errors.New("invalid proof-of-work")
 	}
 
-	key := string(challenge.MarshalChallenge())
+	digest := crypto.SHA3Hash(challenge.MarshalChallenge())
+	key := string(digest[:])
+
 	v.mu.Lock()
-	v.recent[key] = time.Now()
-	if len(v.recent) > 1024 {
-		for k := range v.recent {
-			delete(v.recent, k)
-			break
+	if last, ok := v.seen[key]; ok && now.Sub(last) < PowReplayWindow {
+		v.mu.Unlock()
+		return errors.New("proof-of-work replayed")
+	}
+	v.seen[key] = now
+	// Bound the replay cache so a flood of distinct challenges cannot grow it
+	// without limit.
+	if len(v.seen) > 1024 {
+		cutoff := now.Add(-PowReplayWindow)
+		for k, t := range v.seen {
+			if t.Before(cutoff) {
+				delete(v.seen, k)
+			}
+		}
+		// Still full of fresh entries: drop the oldest until under the cap.
+		for len(v.seen) > 1024 {
+			var oldestKey string
+			var oldest time.Time
+			for k, t := range v.seen {
+				if oldestKey == "" || t.Before(oldest) {
+					oldestKey, oldest = k, t
+				}
+			}
+			if oldestKey == "" {
+				break
+			}
+			delete(v.seen, oldestKey)
 		}
 	}
 	v.mu.Unlock()

@@ -1,3 +1,5 @@
+//go:build integration
+
 package integration
 
 import (
@@ -228,11 +230,14 @@ func TestNoiseHandshake(t *testing.T) {
 		t.Skip("skipping in short mode")
 	}
 
-	alicePub, alicePriv, err := crypto.GenerateKeyPair()
+	// The Noise layer runs over X25519, not Ed25519. Passing Ed25519 key bytes
+	// works by accident (X25519 accepts any 32-byte scalar) but the resulting
+	// identity is unrelated to the Ed25519 one.
+	alicePub, alicePriv, err := crypto.GenerateX25519KeyPair()
 	if err != nil {
 		t.Fatalf("alice keys: %v", err)
 	}
-	bobPub, bobPriv, err := crypto.GenerateKeyPair()
+	bobPub, bobPriv, err := crypto.GenerateX25519KeyPair()
 	if err != nil {
 		t.Fatalf("bob keys: %v", err)
 	}
@@ -288,11 +293,33 @@ func TestCRDTOperations(t *testing.T) {
 
 	orSet.Merge(mergeSet)
 	items = orSet.Items()
-	if len(items) != 2 {
-		t.Fatalf("expected 2 items after merge, got %d: %v", len(items), items)
+	// Add-wins merge: item1 was removed and never re-added, so it stays
+	// removed; item4 is new and joins item2 and item3.
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items after merge, got %d: %v", len(items), items)
+	}
+	if contains(items, "item1") {
+		t.Fatal("item1 was removed and must not come back through a merge")
+	}
+	for _, want := range []string{"item2", "item3", "item4"} {
+		if !contains(items, want) {
+			t.Fatalf("expected %s to be live after merge, got %v", want, items)
+		}
 	}
 }
 
+func contains(items []string, want string) bool {
+	for _, it := range items {
+		if it == want {
+			return true
+		}
+	}
+	return false
+}
+
+// RGA semantics are insert-after-parent, not insert-at-index. Inserting five
+// characters each relative to "head" therefore places the newest one first:
+// o, l, l, e, H.
 func TestCRDTRGA(t *testing.T) {
 	rga := crdt.NewRGA("client1")
 
@@ -306,9 +333,37 @@ func TestCRDTRGA(t *testing.T) {
 		t.Fatalf("expected length 5, got %d", rga.Length())
 	}
 
-	v, _ := rga.Get(0)
-	if v != "e" {
-		t.Fatalf("expected second-inserted char at index 0, got %q", v)
+	want := "olleH"
+	for i, expected := range want {
+		v, err := rga.Get(i)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", i, err)
+		}
+		if v != string(expected) {
+			t.Fatalf("position %d: got %q, want %q (full text %q)", i, v, string(expected), rga.String())
+		}
+	}
+}
+
+// Inserting relative to the head sentinel must prepend rather than silently
+// append: findNode used to skip the sentinel, so every "head" insert became an
+// append and the document could never be built in the intended order.
+func TestCRDTPrependViaHeadSentinel(t *testing.T) {
+	rga := crdt.NewRGA("client1")
+	rga.Insert("head", "a")
+	rga.Insert("head", "b")
+	if got := rga.String(); got != "ba" {
+		t.Fatalf("expected inserting after head to prepend, got %q", got)
+	}
+
+	// Inserting relative to a real node must place the new value after it.
+	first := rga.HeadNextID()
+	if first == "" {
+		t.Fatal("expected a node id after head")
+	}
+	rga.Insert(first, "z")
+	if got := rga.String(); got != "bza" {
+		t.Fatalf("expected insert after a node to place the value after it, got %q", got)
 	}
 }
 

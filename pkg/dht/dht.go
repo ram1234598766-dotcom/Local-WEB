@@ -1,12 +1,14 @@
 package dht
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha3"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"sort"
@@ -55,19 +57,25 @@ func (id NodeID) Xor(other NodeID) [32]byte {
 	return out
 }
 
+// PrefixLen returns the number of leading zero bits shared between this ID and
+// the all-zero ID, i.e. the index of the ID's first set bit.
+//
+// Kademlia indexes buckets by the common prefix length between the local ID
+// and the remote ID. Comparing against zero is how the routing table maps a
+// peer to a bucket when it wants a single fixed split axis.
 func (id NodeID) PrefixLen() int {
-	xor := id.Xor(id)
-	for i := range xor {
-		if xor[i] != 0 {
-			for j := 7; j >= 0; j-- {
-				if (xor[i]>>j)&1 != 0 {
-					return i*8 + (7 - j)
-				}
+	for i := range id {
+		if id[i] == 0 {
+			continue
+		}
+		for j := 7; j >= 0; j-- {
+			if id[i]&(1<<uint(j)) != 0 {
+				return i*8 + (7 - j)
 			}
-			break
 		}
 	}
-	return 0
+	// The all-zero ID shares the full 256-bit prefix.
+	return 256
 }
 
 type PeerInfo struct {
@@ -136,7 +144,7 @@ func (b *KBucket) GetClosest(n int, target NodeID) []*Peer {
 	peers := make([]*Peer, len(b.peers))
 	copy(peers, b.peers)
 	sort.Slice(peers, func(i, j int) bool {
-		return xorDist(peers[i].Info.ID, target) < xorDist(peers[j].Info.ID, target)
+		return compareDist(xorDist(peers[i].Info.ID, target), xorDist(peers[j].Info.ID, target)) < 0
 	})
 	if len(peers) > n {
 		peers = peers[:n]
@@ -180,13 +188,25 @@ func (rt *RoutingTable) Remove(id NodeID) {
 	b.Remove(id)
 }
 
+// FindClosest returns the n peers closest to target across every bucket.
+//
+// The global sort matters: each bucket is searched independently, so
+// concatenating per-bucket results in bucket order and truncating would keep
+// whichever peers happen to sit in low-numbered buckets regardless of
+// distance.
 func (rt *RoutingTable) FindClosest(target NodeID, n int) []*Peer {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 	var result []*Peer
 	for _, b := range rt.buckets {
-		result = append(result, b.GetClosest(n, target)...)
+		result = append(result, b.All()...)
 	}
+	if len(result) == 0 {
+		return nil
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return compareDist(xorDist(result[i].Info.ID, target), xorDist(result[j].Info.ID, target)) < 0
+	})
 	if len(result) > n {
 		result = result[:n]
 	}
@@ -203,18 +223,45 @@ func (rt *RoutingTable) AllPeers() []*Peer {
 	return all
 }
 
-func (rt *RoutingTable) bucket(id NodeID) *KBucket {
+// Len reports how many peers the table holds across all buckets.
+func (rt *RoutingTable) Len() int {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+	n := 0
+	for _, b := range rt.buckets {
+		n += b.Len()
+	}
+	return n
+}
+
+// BucketIndex reports which bucket a node ID maps to. Exported so the bucket
+// layout can be asserted directly rather than only through Add/FindClosest.
+func (rt *RoutingTable) BucketIndex(id NodeID) int {
 	prefixLen := id.PrefixLen()
 	if prefixLen > 255 {
 		prefixLen = 0
 	}
-	return rt.buckets[prefixLen]
+	return prefixLen
 }
 
-func xorDist(a, b NodeID) uint64 {
-	xor := a.Xor(b)
-	n := new(big.Int).SetBytes(xor[:])
-	return n.Uint64()
+func (rt *RoutingTable) bucket(id NodeID) *KBucket {
+	return rt.buckets[rt.BucketIndex(id)]
+}
+
+// xorDist returns the full 256-bit XOR distance between two node IDs.
+//
+// The previous implementation truncated this to the low 64 bits, which made
+// every pair of IDs agreeing in the first 192 bits compare equal and ordered
+// the routing table on the least significant bytes instead of the most
+// significant ones. Kademlia closeness is defined by the first differing bit,
+// so the whole value has to be compared.
+func xorDist(a, b NodeID) [32]byte {
+	return a.Xor(b)
+}
+
+// compareDist orders two 256-bit distances: -1, 0, or 1.
+func compareDist(a, b [32]byte) int {
+	return bytes.Compare(a[:], b[:])
 }
 
 type Node struct {
@@ -392,6 +439,14 @@ func (d *DHT) Bootstrap(ctx context.Context, bootstrap []string) error {
 	return nil
 }
 
+// Lookup performs an iterative Kademlia lookup for target.
+//
+// Each round queries the Alpha closest peers that have not been queried yet
+// and folds the responses into a shortlist of the KBucketSize closest nodes
+// seen so far. The shortlist is what bounds the lookup: the previous
+// implementation appended every newly discovered peer to the frontier without
+// re-sorting or pruning, so the query set grew on every hop and the lookup
+// degenerated into a broadcast.
 func (d *DHT) Lookup(ctx context.Context, target NodeID) ([]PeerInfo, error) {
 	d.mu.RLock()
 	if !d.running {
@@ -401,22 +456,45 @@ func (d *DHT) Lookup(ctx context.Context, target NodeID) ([]PeerInfo, error) {
 	d.mu.RUnlock()
 
 	client := NewRPCClient(d.node.transport.Dial)
-	peers := d.node.table.FindClosest(target, Alpha)
-	if len(peers) == 0 {
+	seeds := d.node.table.FindClosest(target, KBucketSize)
+	if len(seeds) == 0 {
 		return nil, ErrNoPeers
 	}
 
-	queried := make(map[NodeID]bool)
-	var closest []*Peer
-	hops := 0
+	// shortlist holds the closest nodes discovered, sorted ascending by
+	// distance to target and capped at KBucketSize.
+	shortlist := append([]*Peer(nil), seeds...)
+	sortPeersByDistance(shortlist, target)
 
-	for hops < MaxHops {
-		closest = nil
-		for _, p := range peers {
+	queried := make(map[NodeID]bool)
+	for hops := 0; hops < MaxHops; hops++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		// Pick the closest unqueried peers, up to Alpha per round.
+		batch := make([]*Peer, 0, Alpha)
+		for _, p := range shortlist {
+			if len(batch) >= Alpha {
+				break
+			}
 			if queried[p.Info.ID] {
 				continue
 			}
+			if len(p.Info.Addrs) == 0 {
+				// Nothing to dial; mark it so the round does not retry it.
+				queried[p.Info.ID] = true
+				continue
+			}
 			queried[p.Info.ID] = true
+			batch = append(batch, p)
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		progressed := false
+		for _, p := range batch {
 			msg := Message{
 				Type:    MsgFindNode,
 				Src:     d.localID,
@@ -427,28 +505,58 @@ func (d *DHT) Lookup(ctx context.Context, target NodeID) ([]PeerInfo, error) {
 			if err != nil {
 				continue
 			}
-			if resp.Type == MsgFoundNode {
-				found, err := decodePeerList(resp.Payload)
-				if err == nil {
-					for _, fp := range found {
-						d.storePeer(fp)
-						closest = append(closest, &Peer{Info: fp})
-					}
+			if resp.Type != MsgFoundNode {
+				continue
+			}
+			found, err := decodePeerList(resp.Payload)
+			if err != nil {
+				continue
+			}
+			for _, fp := range found {
+				if _, known := d.node.peers[fp.ID]; !known {
+					progressed = true
 				}
+				d.storePeer(fp)
+				shortlist = append(shortlist, &Peer{Info: fp})
 			}
 		}
-		if len(closest) == 0 {
+
+		// Re-sort and prune. Duplicate IDs from overlapping responses are
+		// collapsed before pruning so one node cannot occupy several slots.
+		shortlist = dedupeAndPrune(shortlist, target, KBucketSize)
+		if !progressed {
 			break
 		}
-		peers = append(peers, closest...)
-		hops++
 	}
 
-	out := make([]PeerInfo, 0, len(peers))
-	for _, p := range peers {
+	out := make([]PeerInfo, 0, len(shortlist))
+	for _, p := range shortlist {
 		out = append(out, p.Info)
 	}
 	return out, nil
+}
+
+func sortPeersByDistance(peers []*Peer, target NodeID) {
+	sort.SliceStable(peers, func(i, j int) bool {
+		return compareDist(xorDist(peers[i].Info.ID, target), xorDist(peers[j].Info.ID, target)) < 0
+	})
+}
+
+func dedupeAndPrune(peers []*Peer, target NodeID, n int) []*Peer {
+	sortPeersByDistance(peers, target)
+	seen := make(map[NodeID]bool, len(peers))
+	out := peers[:0]
+	for _, p := range peers {
+		if seen[p.Info.ID] {
+			continue
+		}
+		seen[p.Info.ID] = true
+		out = append(out, p)
+		if len(out) == n {
+			break
+		}
+	}
+	return out
 }
 
 func (d *DHT) Store(ctx context.Context, key string, value []byte) error {
@@ -474,8 +582,14 @@ func (d *DHT) Store(ctx context.Context, key string, value []byte) error {
 	return nil
 }
 
+// RegisterNode announces this node to the peers closest to it in the routing
+// table, paying a proof-of-work cost per announcement.
+//
+// The cost is what makes Sybil registration expensive: every announcement
+// costs the registerer 2^difficulty SHA3-256 hashes, and the receiving node
+// verifies it before the peer enters the table.
 func (d *DHT) RegisterNode(ctx context.Context, pubKey [32]byte, name string, addrs []string, difficulty int) error {
-	nonce, err := SolvePoW(append(pubKey[:], []byte(name)...), difficulty)
+	nonce, err := SolvePoW(registrationChallenge(pubKey, name), difficulty)
 	if err != nil {
 		return ErrPoWFailed
 	}
@@ -497,6 +611,9 @@ func (d *DHT) RegisterNode(ctx context.Context, pubKey [32]byte, name string, ad
 	target := NodeIDFromPub(pubKey)
 	peers := d.node.table.FindClosest(target, Alpha)
 	for _, p := range peers {
+		if len(p.Info.Addrs) == 0 {
+			continue
+		}
 		if _, err := client.Call(ctx, p.Info.Addrs[0], msg); err != nil {
 			log.Warn().Err(err).Str("peer", p.Info.ID.String()).Msg("failed to register node with peer")
 		}
@@ -529,16 +646,41 @@ func (d *DHT) Stop() {
 	}
 }
 
+// DHT registration proof-of-work bounds.
+//
+// Unlike pkg/security's memory-hard challenge, registration work is a bare
+// SHA3-256 search over (public key || name || nonce). That keeps the
+// anti-Sybil cost small enough to pay on every node announcement without a
+// 64 MiB allocation, at the cost of being GPU-friendly. Difficulty is
+// therefore capped: an unbounded value would be unsolvable, and a very high
+// one would be a free denial of service for anyone trying to join.
+const (
+	MinPoWDifficulty = 8
+	MaxPoWDifficulty = 24
+)
+
+// registrationChallenge is the pre-image a registering node must hash.
+func registrationChallenge(pubKey [32]byte, name string) []byte {
+	buf := make([]byte, 0, 32+len(name))
+	buf = append(buf, pubKey[:]...)
+	buf = append(buf, name...)
+	return buf
+}
+
+// SolvePoW finds an 8-byte nonce such that
+// SHA3-256(data || nonce) is numerically below 2^(256-difficulty),
+// i.e. it has at least `difficulty` leading zero bits.
 func SolvePoW(data []byte, difficulty int) ([]byte, error) {
-	if difficulty < 1 || difficulty > 255 {
-		return nil, errors.New("invalid difficulty")
+	if difficulty < MinPoWDifficulty || difficulty > MaxPoWDifficulty {
+		return nil, fmt.Errorf("pow difficulty %d outside supported range [%d,%d]",
+			difficulty, MinPoWDifficulty, MaxPoWDifficulty)
 	}
 	target := big.NewInt(1)
 	target.Lsh(target, uint(256-difficulty))
 	var nonce uint64
 	nonceBytes := make([]byte, 8)
 	h := sha3.New256()
-	for {
+	for nonce < powNonceCeiling {
 		binary.BigEndian.PutUint64(nonceBytes, nonce)
 		h.Reset()
 		h.Write(data)
@@ -550,14 +692,21 @@ func SolvePoW(data []byte, difficulty int) ([]byte, error) {
 			return append([]byte{}, nonceBytes...), nil
 		}
 		nonce++
-		if nonce == 0 {
-			return nil, errors.New("pow overflow")
-		}
 	}
+	return nil, errors.New("pow nonce space exhausted")
 }
 
+// powNonceCeiling bounds the search. At the maximum difficulty the expected
+// work is 2^24 hashes; this ceiling is far above that, so hitting it means the
+// hash is degenerate rather than that the work was merely unlucky.
+const powNonceCeiling uint64 = 1 << 32
+
+// VerifyPoW reports whether nonce solves the challenge at the given difficulty.
 func VerifyPoW(data []byte, nonce []byte, difficulty int) bool {
-	if len(nonce) != 8 || difficulty < 1 || difficulty > 255 {
+	if len(nonce) != 8 {
+		return false
+	}
+	if difficulty < MinPoWDifficulty || difficulty > MaxPoWDifficulty {
 		return false
 	}
 	target := big.NewInt(1)
@@ -590,21 +739,43 @@ func decodeStore(data []byte) (string, []byte) {
 	return string(data[2 : 2+kLen]), data[2+kLen:]
 }
 
+// encodeRegister serialises a registration announcement.
+//
+// The layout is: public key (32) || nonce (8) || difficulty (1) || name (2 +
+// len). The name is part of the payload because it is part of the
+// proof-of-work pre-image; omitting it made the server unable to recompute the
+// challenge and therefore unable to verify the work at all.
 func encodeRegister(pi PeerInfo, nonce []byte, difficulty int) []byte {
-	buf := make([]byte, 32+8+1)
+	name := []byte(pi.Name)
+	if len(name) > math.MaxUint16 {
+		name = name[:math.MaxUint16]
+	}
+	buf := make([]byte, 32+8+1+2+len(name))
 	copy(buf[:32], pi.PublicKey[:])
 	copy(buf[32:40], nonce)
 	buf[40] = byte(difficulty)
+	binary.BigEndian.PutUint16(buf[41:43], uint16(len(name)))
+	copy(buf[43:], name)
 	return buf
 }
 
-func decodeRegister(data []byte) (pubKey [32]byte, nonce []byte, difficulty int) {
-	if len(data) < 41 {
+// decodeRegister parses a registration announcement. It reports false when the
+// payload is malformed or truncated, so a hostile peer cannot drive the
+// verifier into a panic with a short buffer.
+func decodeRegister(data []byte) (pubKey [32]byte, nonce []byte, difficulty int, name string, ok bool) {
+	const header = 32 + 8 + 1 + 2
+	if len(data) < header {
 		return
 	}
 	copy(pubKey[:], data[:32])
 	nonce = append([]byte{}, data[32:40]...)
 	difficulty = int(data[40])
+	nameLen := int(binary.BigEndian.Uint16(data[41:43]))
+	if len(data) < header+nameLen {
+		return
+	}
+	name = string(data[header : header+nameLen])
+	ok = true
 	return
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -225,6 +226,48 @@ func (r *RGA) Length() int {
 	return r.length
 }
 
+// String renders the live (non-deleted) characters in order.
+func (r *RGA) String() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var sb strings.Builder
+	for curr := r.head.Next; curr != nil && curr != r.tail; curr = curr.Next {
+		if curr.Deleted {
+			continue
+		}
+		sb.WriteString(curr.Value)
+	}
+	return sb.String()
+}
+
+// HeadNextID returns the ID of the first node after the head sentinel, or the
+// empty string when the document is empty. Callers need it to express an
+// insert relative to the start of the document, since "head" is the sentinel
+// they would otherwise have to guess at.
+func (r *RGA) HeadNextID() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.head.Next == nil || r.head.Next == r.tail {
+		return ""
+	}
+	return r.head.Next.ID
+}
+
+// IDs returns the IDs of all live nodes in order, which is what a caller
+// needs to address a position for a subsequent Insert.
+func (r *RGA) IDs() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for curr := r.head.Next; curr != nil && curr != r.tail; curr = curr.Next {
+		if curr.Deleted {
+			continue
+		}
+		out = append(out, curr.ID)
+	}
+	return out
+}
+
 func (r *RGA) Marshal() []byte {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -317,7 +360,16 @@ func (r *RGA) Merge(other *RGA) {
 	}
 }
 
+// findNode locates a node by ID, including the head sentinel.
+//
+// The head check matters: callers legitimately insert relative to "head" to
+// prepend to the document. Without it, findNode returned nil for "head",
+// Insert fell back to tail.Prev, and every insert silently became an append —
+// so the document could never be built in the intended order.
 func (r *RGA) findNode(id string) *RGANode {
+	if id == r.head.ID {
+		return r.head
+	}
 	curr := r.head.Next
 	for curr != nil && curr != r.tail {
 		if curr.ID == id {

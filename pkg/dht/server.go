@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 type Server struct {
@@ -130,9 +131,68 @@ func (n *Node) handleMessage(msg Message) Message {
 			return Message{Type: MsgFoundValue, Src: n.id, Dst: msg.Src, Payload: encodeStore(key, val)}
 		}
 		return Message{Type: MsgFoundNode, Src: n.id, Dst: msg.Src, Payload: encodePeerList(nil)}
+	case MsgRegisterNode:
+		// This is the anti-Sybil gate. Previously the message type was not
+		// handled at all and fell through to default, so a node could solve
+		// the challenge and be ignored: the proof of work was decorative.
+		pubKey, nonce, difficulty, name, ok := decodeRegister(msg.Payload)
+		if !ok {
+			return Message{Type: MsgPong, Src: n.id, Dst: msg.Src}
+		}
+		if !VerifyPoW(registrationChallenge(pubKey, name), nonce, difficulty) {
+			// Do not admit the peer. A failed challenge is the same shape as
+			// a pong so the responder does not confirm the endpoint is a DHT
+			// registration oracle.
+			return Message{Type: MsgPong, Src: n.id, Dst: msg.Src}
+		}
+		// The announced identity must match the peer that solved the work,
+		// otherwise anyone could reuse another node's published nonce.
+		if msg.Src != NodeIDFromPub(pubKey) {
+			return Message{Type: MsgPong, Src: n.id, Dst: msg.Src}
+		}
+		pi := PeerInfo{
+			ID:        msg.Src,
+			PublicKey: pubKey,
+			Name:      name,
+			Addrs:     []string{msg.Src.String()},
+			Score:     0.5,
+			FirstSeen: time.Now(),
+		}
+		if n.peers == nil {
+			n.peers = make(map[NodeID]*Peer)
+		}
+		if existing, ok := n.peers[msg.Src]; ok {
+			existing.Info = pi
+		} else {
+			peer := &Peer{Info: pi}
+			n.peers[msg.Src] = peer
+			n.table.Add(peer)
+		}
+		return Message{Type: MsgPong, Src: n.id, Dst: msg.Src}
 	default:
 		return Message{Type: MsgPong, Src: n.id, Dst: msg.Src}
 	}
+}
+
+// PruneStale drops peers that have not been seen within ttl.
+//
+// Without this, a bucket that fills up with departed nodes rejects every new
+// peer (KBucket.Add returns false once the bucket is full) and the routing
+// table silently stops learning about the network.
+func (rt *RoutingTable) PruneStale(ttl time.Duration) int {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	cutoff := time.Now().Add(-ttl)
+	removed := 0
+	for _, b := range rt.buckets {
+		for _, p := range b.All() {
+			if p.Info.LastSeen.Before(cutoff) {
+				b.Remove(p.Info.ID)
+				removed++
+			}
+		}
+	}
+	return removed
 }
 
 type WireProtocol struct {
