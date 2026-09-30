@@ -18,21 +18,60 @@
 
     <Feature Id="Complete" Title="LocalWEB" Level="1" ConfigurableDirectory="INSTALLDIR">
       <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="ConfigComponents" />
       <ComponentGroupRef Id="WintunComponents" />
       <ComponentRef Id="ServiceComponent" />
-      <ComponentRef Id="ShortcutComponents" />
+      <ComponentGroupRef Id="ShortcutComponents" />
     </Feature>
 
-    <UIRef Id="WixUI_Minimal" />
-    <UIRef Id="WixUI_ErrorProgressText" />
-    <PropertyRef Id="WIXUI_INSTALLDIR" />
+    <!--
+      No WixUI dialog set is referenced. Every WixUI set pulls in
+      WixUI_Advanced, and in this toolset build the two collide on
+      Property:WixUI_Mode, Property:DefaultUIFont, CheckBox:LicenseAccepted
+      and several ControlEvents, so the package would not link at all.
 
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+      The product has one hardcoded feature and one fixed INSTALLDIR, so there
+      is nothing for a wizard to choose. msiexec /i still shows the standard
+      progress UI, and /qb or /qn give quiet and fully silent installs. Users
+      who want a guided graphical install are served by the NSIS installer.
+    -->
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch LocalWEB after installation" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
     <Binary Id="WintunDll" SourceFile="$(var.WintunDll)" />
-    <Binary Id="ServiceInstallScript" SourceFile="ServiceInstall.ps1" />
+
+    <!--
+      ServiceInstall.ps1 configures the Wintun kernel driver and the firewall
+      rules, which the WiX ServiceInstall element cannot express. The
+      LocalWEB service itself is created by the native ServiceInstall element
+      below, so the script only does driver and firewall work.
+
+      These live inside Product rather than a Fragment: a CustomAction declared
+      in a Fragment was silently dropped at compile time and never reached the
+      linked package, leaving the driver uninstalled.
+
+      Type 5 (Directory + Value) is the deferred form. It is used instead of a
+      BinaryKey, because a BinaryKey is launched as a PE image and pointing one
+      at a .ps1 fails. Property + Value is Type 51, which must be immediate.
+    -->
+    <CustomAction Id="ConfigureWintunAndFirewall"
+                  Directory="INSTALLDIR"
+                  Value='"[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[INSTALLDIR]ServiceInstall.ps1" -Install -InstallDir "[INSTALLDIR]"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <CustomAction Id="RemoveWintunAndFirewall"
+                  Directory="INSTALLDIR"
+                  Value='"[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[INSTALLDIR]ServiceInstall.ps1" -Uninstall -InstallDir "[INSTALLDIR]"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ConfigureWintunAndFirewall" After="InstallFiles">NOT Installed</Custom>
+      <Custom Action="RemoveWintunAndFirewall" Before="RemoveFiles">Installed AND REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
   </Product>
 
   <Fragment>
@@ -57,10 +96,10 @@
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLDIR">
       <Component Id="LocalWebExe" Guid="{11111111-1111-1111-1111-111111111111}">
-        <File Id="localweb.exe" Source="localweb.exe" KeyPath="yes" Checksum="yes" />
+        <File Id="localweb.exe" Name="localweb.exe" Source="localweb.exe" KeyPath="yes" Checksum="yes" />
       </Component>
       <Component Id="LocalWebCliExe" Guid="{22222222-2222-2222-2222-222222222222}">
-        <File Id="localweb-cli.exe" Source="localweb-cli.exe" KeyPath="yes" Checksum="yes" />
+        <File Id="localweb_cli.exe" Name="localweb-cli.exe" Source="localweb-cli.exe" KeyPath="yes" Checksum="yes" />
       </Component>
       <Component Id="Readme" Guid="{33333333-3333-3333-3333-333333333333}">
         <File Id="README.md" Source="README.md" />
@@ -71,9 +110,18 @@
       <Component Id="Changelog" Guid="{55555555-5555-5555-5555-555555555555}">
         <File Id="CHANGELOG.md" Source="CHANGELOG.md" />
       </Component>
-      <Component Id="ConfigFile" Guid="{66666666-6666-6666-6666-666666666666}" Directory="ConfigDir">
+      <Component Id="ServiceScript" Guid="{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}">
+        <File Id="ServiceInstall.ps1" Source="ServiceInstall.ps1" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- ConfigDir is not under INSTALLDIR, so it needs its own ComponentGroup
+       rather than a Directory override on the Component (which WiX rejects). -->
+  <Fragment>
+    <ComponentGroup Id="ConfigComponents" Directory="ConfigDir">
+      <Component Id="ConfigFile" Guid="{66666666-6666-6666-6666-666666666666}">
         <File Id="config.json" Source="config\config.json" />
-        <CreateFolder Directory="ConfigDir" />
       </Component>
     </ComponentGroup>
   </Fragment>
@@ -106,24 +154,6 @@
         <Shortcut Id="DesktopShortcut" Name="LocalWEB" Description="Start LocalWEB node" Target="[INSTALLDIR]localweb.exe" Arguments="node" WorkingDirectory="INSTALLDIR" />
       </Component>
     </ComponentGroup>
-  </Fragment>
-
-  <Fragment>
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch LocalWEB after installation" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
-  </Fragment>
-
-  <Fragment>
-    <CustomAction Id="InstallWintun" BinaryKey="WintunDll" ExeCommand="" Execute="deferred" Impersonate="no" Return="check" />
-    <CustomAction Id="InstallService" BinaryKey="ServiceInstallScript" ExeCommand="-Install" Execute="deferred" Impersonate="no" Return="check" />
-    <CustomAction Id="UninstallService" BinaryKey="ServiceInstallScript" ExeCommand="-Uninstall" Execute="deferred" Impersonate="no" Return="check" />
-
-    <InstallExecuteSequence>
-      <Custom Action="InstallWintun" After="InstallFiles"><![CDATA[NOT Installed]]></Custom>
-      <Custom Action="InstallService" After="InstallWintun"><![CDATA[NOT Installed]]></Custom>
-      <Custom Action="UninstallService" Before="RemoveFiles"><![CDATA[Installed AND REMOVE="ALL"]]></Custom>
-    </InstallExecuteSequence>
   </Fragment>
 
   <Fragment>

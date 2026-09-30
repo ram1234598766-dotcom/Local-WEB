@@ -6,6 +6,7 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "FileFunc.nsh"
+!include "WinVer.nsh"
 
 ; Application info
 !define APP_NAME "LocalWEB"
@@ -57,6 +58,12 @@ RequestExecutionLevel admin
 InstallDir "${INSTALL_DIR}"
 InstallDirRegKey HKLM "${REG_KEY}" "InstallLocation"
 
+; Output is declared here rather than passed as makensis /OutFile, because
+; not every makensis build accepts that switch. Declaring it in the script
+; makes the build reproducible with any NSIS 3.x.
+Name "${APP_NAME} ${APP_VERSION} Setup"
+OutFile "localweb-${APP_VERSION}-setup.exe"
+
 ; Pages
 Page custom PreComponentPage
 Page components
@@ -106,17 +113,26 @@ Section "Wintun Driver" SEC_WINTUN
     ; Install Wintun service if not present
     nsExec::ExecToLog 'sc query wintun'
     Pop $0
-    ${If} $0 != "0"
-        ; Wintun not installed, install it
-        nsExec::ExecToLog 'powershell -Command "Expand-Archive -Path $INSTDIR\wintun\wintun.dll -DestinationPath $env:SYSTEMROOT\System32\drivers -Force"'
-        nsExec::ExecToLog 'sc create wintun binPath= "C:\Windows\System32\drivers\wintun.dll" type= kernel start= demand'
-        nsExec::ExecToLog 'sc start wintun'
+      ${If} $0 != "0"
+          ; Wintun not installed, install it.
+          ;
+          ; CopyFiles rather than a PowerShell one-liner: Expand-Archive only
+          ; accepts .zip archives and so never worked on a .dll, and a nested
+          ; "-Command \"... $env:... \"" string is fragile here because NSIS
+          ; tries to expand the $ itself. CopyFiles does it natively.
+          ClearErrors
+          CopyFiles "$INSTDIR\wintun\wintun.dll" "$WINDIR\System32\drivers\wintun.dll"
+          ${If} ${Errors}
+              DetailPrint "Failed to copy wintun.dll to $WINDIR\System32\drivers"
+          ${EndIf}
+          nsExec::ExecToLog 'sc create wintun binPath= "C:\Windows\System32\drivers\wintun.dll" type= kernel start= demand'
+          nsExec::ExecToLog 'sc start wintun'
     ${EndIf}
 SectionEnd
 
 Function .onInit
     ; Check if running on Windows 10/11
-    ${If} ${AtLeastWin10} == 0
+    ${IfNot} ${AtLeastWin10}
         MessageBox MB_ICONSTOP "LocalWEB requires Windows 10 or later." IDOK
         Abort
     ${EndIf}

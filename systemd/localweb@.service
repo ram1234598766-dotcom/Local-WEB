@@ -1,12 +1,13 @@
 [Unit]
-Description=LocalWEB Mesh Network Daemon (%i)
+Description=LocalWEB Mesh Network Daemon (instance %i)
 Documentation=https://github.com/ram1234598766-dotcom/Local-WEB
 After=network-online.target localweb.service
 Wants=network-online.target
 
 [Service]
-Type=notify
-ExecStart=/usr/bin/localweb node --data-dir /var/lib/localweb/%i
+# Type=simple: the daemon has no sd_notify integration.
+Type=simple
+ExecStart=/usr/bin/localweb -data-dir /var/lib/localweb/%i
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
@@ -21,8 +22,8 @@ SendSIGKILL=yes
 User=localweb
 Group=localweb
 DynamicUser=no
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SYS_RESOURCE CAP_SYS_NICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SYS_RESOURCE CAP_SYS_NICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
@@ -42,13 +43,7 @@ SystemCallErrorNumber=EPERM
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 ProtectProc=invisible
-ProtectKernelLogs=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
 ProcSubset=pid
-LockPersonality=yes
-MemoryDenyWriteExecute=yes
 
 # Instance-specific resource limits
 LimitNOFILE=65536
