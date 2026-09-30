@@ -27,7 +27,10 @@ $APP_NAME = "LocalWEB"
 $MSI_NAME = "LocalWEB-Setup.msi"
 $INSTALL_DIR = "C:\Program Files\LocalWEB"
 $SERVICE_NAME = "LocalWEB"
-$WINTUN_URL = "https://github.com/wintun/wintun/releases/download/v0.14.1/wintun-0.14.1.zip"
+# Wintun is published by wintun.net, not as a GitHub release. The archive
+# SHA-256 is verified by scripts/fetch-wintun.sh at build time; this script
+# re-fetches the same pinned artefact at install time.
+$WINTUN_URL = "https://www.wintun.net/builds/wintun-0.14.1.zip"
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
@@ -38,7 +41,10 @@ function Write-Log {
         WARN = "Yellow"
         ERROR = "Red"
     }
-    $color = $colors[$Level] ?? "White"
+    # The ?? operator requires PowerShell 7, but this script runs under Windows
+    # PowerShell 5.1 via the NSIS installer, so use an explicit fallback.
+    $color = $colors[$Level]
+    if (-not $color) { $color = "White" }
     Write-Host "[$timestamp] [$Level] $Message" -ForegroundColor $color
 }
 
@@ -72,7 +78,11 @@ function Get-LatestRelease {
         
         $script:VERSION = $response.tag_name
         $script:MSI_URL = $response.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1 -ExpandProperty browser_download_url
-        $script:WINTUN_URL = $response.assets | Where-Object { $_.name -like "*wintun*" } | Select-Object -First 1 -ExpandProperty browser_download_url
+        # Wintun is deliberately NOT discovered from the release assets. It is
+        # bundled inside the MSI/EXE and fetched from wintun.net at install
+        # time, so no release asset matches "*wintun*". Assigning the result of
+        # that lookup here used to overwrite the pinned $WINTUN_URL with $null,
+        # which then made the Wintun download fail silently.
         
         if (-not $script:VERSION -or -not $script:MSI_URL) {
             Write-Log "Failed to find MSI asset in latest release" -Level "ERROR"
@@ -101,7 +111,7 @@ function Download-File {
         $size = [math]::Round((Get-Item $OutFile).Length / 1MB, 2)
         Write-Log "Downloaded $Description ($size MB)" -Level "SUCCESS"
     } catch {
-        Write-Log "Failed to download $Description: $_" -Level "ERROR"
+        Write-Log "Failed to download ${Description}: $_" -Level "ERROR"
         exit 1
     }
 }
@@ -110,16 +120,26 @@ function Install-Wintun {
     Write-Log "Installing Wintun driver..." -Level "INFO"
     
     $wintunZip = "$env:TEMP\wintun.zip"
-    Download-File -Url "https://github.com/wintun/wintun/releases/download/v0.14.1/wintun-0.14.1.zip" -OutFile $wintunZip -Description "Wintun driver"
+    Download-File -Url $WINTUN_URL -OutFile $wintunZip -Description "Wintun driver"
     
     $wintunDir = "$env:TEMP\wintun"
     if (Test-Path $wintunDir) { Remove-Item $wintunDir -Recurse -Force }
     New-Item -ItemType Directory -Path $wintunDir -Force | Out-Null
     
     Expand-Archive -Path $wintunZip -DestinationPath $wintunDir -Force
-    $wintunDll = Join-Path $wintunDir "wintun\x64\wintun.dll"
+    # The archive ships one wintun.dll per architecture under wintun\bin\<arch>.
+    $wintunDll = Join-Path $wintunDir "wintun\bin\amd64\wintun.dll"
     
-    if (Test-Path $wintunDll) {
+    if (-not (Test-Path $wintunDll)) {
+        # Tolerate a future layout change rather than silently skipping the VPN
+        # driver, and say exactly which paths were tried.
+        Write-Log "Wintun DLL not found; searched:" -Level "WARN"
+        Write-Log "  $wintunDll" -Level "WARN"
+        Get-ChildItem -Path $wintunDir -Recurse -Filter "wintun.dll" -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Log "  found: $($_.FullName)" -Level "WARN" }
+        Write-Log "The VPN service will not be able to create a tunnel." -Level "WARN"
+    }
+    else {
         Copy-Item $wintunDll -Destination "C:\Windows\System32\drivers\wintun.dll" -Force
         Write-Log "Wintun driver installed to System32\drivers" -Level "SUCCESS"
         
@@ -129,8 +149,6 @@ function Install-Wintun {
             sc.exe start wintun 2>$null
             Write-Log "Wintun service registered and started" -Level "SUCCESS"
         }
-    } else {
-        Write-Log "Wintun DLL not found in archive" -Level "WARN"
     }
     
     Remove-Item $wintunZip -Force -ErrorAction SilentlyContinue

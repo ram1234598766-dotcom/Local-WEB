@@ -78,7 +78,11 @@ function Get-LatestRelease {
         
         $script:VERSION = $response.tag_name
         $script:MSI_URL = $response.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1 -ExpandProperty browser_download_url
-        $script:WINTUN_URL = $response.assets | Where-Object { $_.name -like "*wintun*" } | Select-Object -First 1 -ExpandProperty browser_download_url
+        # Wintun is deliberately NOT discovered from the release assets. It is
+        # bundled inside the MSI/EXE and fetched from wintun.net at install
+        # time, so no release asset matches "*wintun*". Assigning the result of
+        # that lookup here used to overwrite the pinned $WINTUN_URL with $null,
+        # which then made the Wintun download fail silently.
         
         if (-not $script:VERSION -or -not $script:MSI_URL) {
             Write-Log "Failed to find MSI asset in latest release" -Level "ERROR"
