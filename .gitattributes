@@ -1,0 +1,23 @@
+# Line endings
+#
+# core.autocrlf is often true on Windows, which rewrites LF to CRLF on checkout.
+# That breaks shell scripts: a CRLF shebang makes bash fail with
+# "bad interpreter: ...^M", so `make msi` / `make nsis` would fail on any
+# fresh clone made on Windows. Force LF for anything the shell executes.
+*.sh text eol=lf
+Makefile text eol=lf
+*.mk text eol=lf
+
+# PowerShell is executed only by Windows, where CRLF is native.
+*.ps1 text eol=crlf
+
+# Release artefacts. Marking them binary stops git from applying any
+# line-ending conversion to files that must survive a round trip byte for byte.
+*.deb binary
+*.rpm binary
+*.apk binary
+*.msi binary
+*.exe binary
+*.dll binary
+*.so binary
+*.zip binary

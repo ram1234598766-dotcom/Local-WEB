@@ -8,6 +8,14 @@
 *.so
 *.dylib
 
+# Windows installer build output. `make msi` / `make nsis` write here; the
+# .wixpdb is WiX's debug symbol file. Both are re-created by the build.
+*.msi
+*.wixpdb
+*.wixobj
+# staging directory used by scripts/build-msi.sh and build-nsis.sh
+/dist/.stage/
+
 # Test artifacts
 coverage.out
 coverage.html

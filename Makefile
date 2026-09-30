@@ -1,7 +1,11 @@
 .PHONY: all build build-node build-cli clean run-node run-cli quickstart \
         test test-unit test-integration test-chaos test-race test-cover cover-func \
         bench lint vet fmt fmt-check staticcheck govulncheck security \
-        cross-compile generate tidy deps release-dry clean-test ci help
+        cross-compile generate tidy deps release-dry clean-test ci help \
+        deps-wintun msi nsis
+
+VERSION ?= 1.0.1
+DISTDIR ?= dist
 
 GO      := go
 BINDIR  := bin
@@ -113,6 +117,22 @@ cross-compile: $(BINDIR)
 	GOOS=darwin  GOARCH=arm64 $(GO) build -trimpath -o $(BINDIR)/localweb-cli-darwin-arm64  ./cmd/cli
 	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -o $(BINDIR)/localweb-windows-amd64.exe ./cmd/node
 	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -o $(BINDIR)/localweb-cli-windows-amd64.exe ./cmd/cli
+
+# Fetch and SHA-256 verify the Wintun kernel driver that the Windows VPN service
+# loads. wintun.dll is gitignored (*.dll), so without this a fresh clone cannot
+# build either installer. No-op when the driver is already present and correct.
+deps-wintun:
+	@bash scripts/fetch-wintun.sh
+
+# Windows installer targets. Both fetch the Wintun driver first, stage the
+# payload their script references, and run the real toolchain (WiX / NSIS).
+#   make msi    -> $(DISTDIR)/localweb_$(VERSION)_x64_en-US.msi
+#   make nsis   -> $(DISTDIR)/localweb-$(VERSION)-setup.exe
+msi:
+	@bash scripts/build-msi.sh $(DISTDIR)
+
+nsis:
+	@bash scripts/build-nsis.sh $(DISTDIR)
 
 bench:
 	$(GO) test -bench=. -benchmem -benchtime=1s -run=XXX ./pkg/crdt/ ./pkg/dht/ ./pkg/crypto/ ./pkg/chaos/ ./pkg/store/ ./pkg/security/

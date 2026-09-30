@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Build the Windows Installer (MSI) from the current source.
+#
+# Stages the payload that localweb.wxs references, then runs candle and light.
+# The wintun driver is fetched and verified first, because the MSI bundles it.
+#
+# Requires: go, a WiX 3.x toolset, and network access on the first run.
+# Run scripts/fetch-wintun.sh on its own if you only need the driver.
+#
+# Usage: scripts/build-msi.sh [output-directory]
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/windows-toolchain.sh
+. "${REPO_ROOT}/scripts/windows-toolchain.sh"
+
+OUT_DIR="${1:-${REPO_ROOT}/dist}"
+OUT_DIR="$(normalize_out_dir "${OUT_DIR}")"
+VERSION="${VERSION:-1.0.1}"
+STAGE="$(make_stage_dir "${OUT_DIR}/.stage")"
+trap 'rm -rf "${STAGE}"' EXIT
+
+# ---------------------------------------------------------------- locate ----
+
+if ! CANDLE="$(find_build_tool candle "WiX Toolset v3.14/bin/candle.exe" "WiX*/bin/candle.exe")"; then
+  cat >&2 <<'MSG'
+error: candle not found.
+
+candle and light ship with the WiX 3.x toolset. A copy of the installer is
+committed in this repository, so you can either:
+
+  installers/windows/wix314.exe      (double-click to install, then re-run)
+
+or install WiX Toolset 3.14 from https://wixtoolset.org/ and make sure
+candle.exe and light.exe are on PATH.
+MSG
+  exit 1
+fi
+
+if ! LIGHT="$(find_build_tool light "WiX Toolset v3.14/bin/light.exe" "WiX*/bin/light.exe")"; then
+  echo "error: light not found. candle was found at ${CANDLE}, so the WiX" >&2
+  echo "       install looks incomplete; reinstall the toolset." >&2
+  exit 1
+fi
+
+echo "==> toolchain"
+echo "    candle: ${CANDLE}"
+echo "    light:  ${LIGHT}"
+
+# ------------------------------------------------------------------ build ---
+
+echo "==> wintun driver"
+"${REPO_ROOT}/scripts/fetch-wintun.sh"
+
+echo "==> windows binaries"
+( cd "${REPO_ROOT}" && GOOS=windows GOARCH=amd64 go build -trimpath -o "${STAGE}/localweb.exe"      ./cmd/node )
+( cd "${REPO_ROOT}" && GOOS=windows GOARCH=amd64 go build -trimpath -o "${STAGE}/localweb-cli.exe" ./cmd/cli )
+
+echo "==> staging payload"
+mkdir -p "${STAGE}/config" "${STAGE}/wintun"
+cp -f "${REPO_ROOT}/installers/windows/README.md"          "${STAGE}/README.md"
+cp -f "${REPO_ROOT}/installers/windows/CHANGELOG.md"       "${STAGE}/CHANGELOG.md"
+cp -f "${REPO_ROOT}/LICENSE"                               "${STAGE}/LICENSE"
+cp -f "${REPO_ROOT}/installers/windows/ServiceInstall.ps1" "${STAGE}/ServiceInstall.ps1"
+cp -f "${REPO_ROOT}/installers/windows/config/config.json" "${STAGE}/config/config.json"
+cp -f "${REPO_ROOT}/installers/windows/localweb.wxs"       "${STAGE}/localweb.wxs"
+# the wxs references wintun\wintun.dll, which is gitignored and fetched above
+cp -f "${REPO_ROOT}/installers/windows/wintun/wintun.dll"  "${STAGE}/wintun/wintun.dll"
+
+# WSL launches a native Windows .exe from its Linux-style path, so ${CANDLE}
+# is invoked as-is; only the file arguments are translated, because Windows
+# cannot resolve a /mnt/c/... path.
+WXS_ARG="$(to_tool_path "${CANDLE}" "${STAGE}/localweb.wxs")"
+OBJ_ARG="$(to_tool_path "${CANDLE}" "${STAGE}/localweb.wixobj")"
+
+echo "==> candle"
+"${CANDLE}" -nologo -arch x64 -out "${OBJ_ARG}" -ext WixUtilExtension "${WXS_ARG}"
+
+echo "==> light"
+mkdir -p "${OUT_DIR}"
+MSI="${OUT_DIR}/localweb_${VERSION}_x64_en-US.msi"
+rm -f "${MSI}"
+"${LIGHT}" -nologo -ext WixUtilExtension -out "$(to_tool_path "${LIGHT}" "${MSI}")" "${OBJ_ARG}"
+
+[ -f "${MSI}" ] || { echo "error: light produced no MSI at ${MSI}" >&2; exit 1; }
+echo "==> built ${MSI}"
+ls -l "${MSI}"

@@ -1,6 +1,6 @@
 # nfpm configuration for LocalWEB Linux packages (simplified for nfpm v2.35+)
 name: "localweb"
-version: "1.0.0"
+version: "1.0.1"
 epoch: 1
 release: "1"
 vendor: "LocalWEB Project"
@@ -13,14 +13,16 @@ priority: "optional"
 arch: "amd64"
 
 contents:
-  - src: "dist/localweb-linux-amd64"
+  # The binary paths must match the `cross-compile` target, which writes to
+  # $(BINDIR) = bin/. Run `make cross-compile` before `nfpm package`.
+  - src: "bin/localweb-linux-amd64"
     dst: "/usr/bin/localweb"
     type: "file"
     file_info:
       mode: 493
       owner: "root"
       group: "root"
-  - src: "dist/localweb-cli-linux-amd64"
+  - src: "bin/localweb-cli-linux-amd64"
     dst: "/usr/bin/localweb-cli"
     type: "file"
     file_info:
