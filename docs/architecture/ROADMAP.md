@@ -1,287 +1,219 @@
-# LocalWEB — Master Roadmap & Strategic Plan
+# LocalWEB — Roadmap
 
-**Version: 3.0 | Status: Phase 6 Complete | Next: Phase 7 Advanced UX | Module: `github.com/ram1234598766-dotcom/Local-WEB`**
+**Grounded in the code at commit `df30121` + the correctness pass described in
+`ARCHITECTURE.md` §9.**
+**Module: `github.com/ram1234598766-dotcom/Local-WEB`**
 
-**Author: Mrityunjay K**
-
----
-
-## 🎯 Executive Summary
-
-LocalWEB is a **production-grade**, **formally specified**, **post-quantum ready** peer-to-peer networking stack that enables zero-infrastructure, end-to-end encrypted communication between devices. This roadmap tracks the evolution from core protocol implementation through advanced UX, native applications, enterprise features, and research innovations.
-
-### Current State (v3.0.0)
-
-| Metric | Value |
-|--------|-------|
-| **Core Protocol** | 9-layer stack complete |
-| **Services** | 9/9 implemented & tested |
-| **Security** | Noise-XX + Hybrid-PQ (X25519+Kyber-1024) |
-| **Links** | 7 physical layers + Multi-path aggregation |
-| **Tests** | 500+ unit, 25+ integration, 12 chaos, 11 QoS |
-| **Quality Gates** | `make lint` ✅ 0 issues, `make test -race` ✅ All green |
-| **Platforms** | Linux/macOS/Windows (amd64/arm64) |
-| **Documentation** | 15+ guides, formal specs, API refs |
+> The previous revision of this roadmap reported "Phase 6 Complete" with a
+> checklist asserting ≥90% coverage, `make lint` covering five linters, an SBOM
+> from Syft, a clean Trivy scan, and GPG-signed commits. None of those held: the
+> measured coverage was 25.9%, `.golangci.yml` enabled two linters, neither Syft
+> nor Trivy was configured, and no commit was signed. This revision reports what
+> is true.
 
 ---
 
-## 🔄 Mandatory Development Protocol
+## 1. Where the project actually is
 
-**This protocol is ENFORCED for every phase. No exceptions.**
+| Metric | Value | How it was measured |
+|---|---|---|
+| Core protocol | 9 layers designed; L1/L2/L3/L4/L5/L6/L7 substantially implemented; **L8 services not wired into the daemon** | `ARCHITECTURE.md` §1.1 |
+| Services | 9/9 exist as tested libraries; **0/9 started by the daemon** | `cmd/node/main.go` registers only `Control` |
+| Security | Noise XX + hybrid PQ verified; capability tokens are not Macaroons | `pkg/transport/hybrid_test.go`, `pkg/security/capability.go` |
+| Links | 3 partially functional (WiFi/adhoc/USB); BLE stubbed; acoustic and Ethernet absent | `pkg/link` 103 tests |
+| Tests | **783 unit + 71 integration** | `make test-unit`, `make test-integration` |
+| Coverage | **63.7%** (was 25.9%) | `make test-cover` |
+| Quality gates | `go build`, `go vet`, `golangci-lint` (0 issues), `gofmt -s -l` all clean | verified |
+| Race detector | clean across the unit suite | `make test-race` |
+| Platforms built | 5 (linux/darwin/windows × amd64/arm64 minus windows/arm64) | `make cross-compile` |
+| CI | runs on push; **no release workflow** | `.github/workflows/ci.yml` |
+| Formal verification | **none** — no `.tla` file exists, no model checker is configured | — |
 
-```mermaid
-graph TD
-    A[Complete Phase Work] --> B[Run make lint && make test -race]
-    B --> C{All Green?}
-    C -->|No| D[Fix ALL Errors]
-    D --> B
-    C -->|Yes| E[Commit to GitHub]
-    E --> F[Update ROADMAP.md]
-    F --> G[Update CHANGELOG.md]
-    G --> H[Proceed to Next Phase]
+The honest summary: this is a well-tested **library** with a thin daemon on
+top. The next phase should not be new features.
+
+---
+
+## 2. Phase 8 (current) — Close the gap between library and daemon
+
+**Rationale.** Every remaining severity-1 item is a wiring or honesty problem,
+not a missing feature. Adding Phase 9 UX on top would multiply the gap.
+
+| # | Item | Severity | Acceptance criterion |
+|---|---|---|---|
+| 8.1 | Start the nine services in `cmd/node` | Critical | `make run-node` shows `/api/services/health` reporting the services it actually started; each has a live round-trip test |
+| 8.2 | `/metrics` with real Prometheus instrumentation; `/debug/pprof` | Critical | `curl :8080/metrics` returns the metrics the docs name; a test asserts the registry is non-empty |
+| 8.3 | Serve the SPA's event stream as SSE (or upgrade the client to WS) | High | A peer connecting in the GUI produces a visible live event in an E2E test |
+| 8.4 | Persist the audit log across restarts | High | Restart a node, mutate a historical entry, and confirm the chain verification fails |
+| 8.5 | Capability tokens: Macaroon caveat chain with attenuation and DHT-distributed revocation | High | Delegate a token, exceed its scope, confirm rejection; verify offline with a third-party key |
+| 8.6 | Turn TLS certificate verification on by default | High | `InsecureSkipVerify` requires an explicit opt-out flag |
+| 8.7 | RGA `Merge` as a true positional CRDT merge | High | Two replicas, same ops, different orders → identical state |
+| 8.8 | Config file loader matching `config/config.json` | Medium | `localweb --config` works and precedence is documented and tested |
+| 8.9 | DHT bucket refresh + split | Medium | Table quality holds after 1k joins/leaves |
+| 8.10 | Close the coverage gap on `pkg/services/messaging`, `pkg/gui`, `pkg/dht`, `pkg/services/dns` | Medium | Total ≥75% |
+| 8.11 | Repair `nfpm.yaml` output paths; untrack the committed build artifacts | Medium | `nfpm pack` succeeds; `dist/` and `installers/` hold no binaries |
+| 8.12 | Add a release workflow invoking goreleaser + cosign + syft | Medium | Tagging produces a signed release with an SBOM |
+| 8.13 | Fix the SPA's WebSocket/SSE mismatch and its 6 missing endpoints | Low | No console errors on any screen |
+| 8.14 | `cmd/cli node` subcommand, or remove it | Low | It must not claim to start a node it does not start |
+
+### Definition of done for Phase 8
+
+```
+go build ./...
+go vet ./...
+golangci-lint run          # 0 issues
+gofmt -s -l .              # no output
+make test-race             # all pass, no races
+make test-integration      # all pass
+make test-cover            # >= 75%
+make cross-compile         # 5 targets
+make ci                    # the gate CI runs
 ```
 
-### Phase Gate Checklist
-
-- [ ] All code compiles (`go build ./...`)
-- [ ] `make lint` = 0 issues (golangci-lint, vet, fmt, staticcheck, gosec)
-- [ ] `make test -race` = All pass (unit + integration + chaos + QoS)
-- [ ] `govulncheck ./...` = No vulnerabilities
-- [ ] Coverage ≥ 90% (unit), ≥ 80% (integration)
-- [ ] Documentation updated (README, ARCHITECTURE, TECH_STACK, ROADMAP, guides)
-- [ ] CHANGELOG entry (Conventional Commits)
-- [ ] Signed commit (GPG)
-- [ ] SBOM generated (Syft)
-- [ ] Trivy scan = No HIGH/CRITICAL
+Plus, for each of 8.1–8.5, a named test that fails against the current code.
 
 ---
 
-## 📅 Phase History (Complete)
+## 3. Phase 9 (planned) — Make the documented physical layers real
 
-| Phase | Theme | Duration | Key Deliverables | Commit |
-|-------|-------|----------|------------------|--------|
-| **1-2** | Core P2P Stack | 8 weeks | 9 layers, 9 services, Noise-XX, BadgerDB, Kademlia, CRDTs | `9918745` |
-| **3** | Beginner UX | 4 weeks | `make quickstart`, `cli init`, plain-language README, troubleshooting | `44aea3f` |
-| **4** | Advanced Capabilities | 6 weeks | Federation, Hybrid-PQ, Multi-path, Plugins, Chaos CI, QoS | `0ea7376` |
-| **5** | Web GUI | 5 weeks | 13-screen SPA, SSE real-time, topology viz, live audit verification | `bfe5804` |
-| **6.1** | Federation (Rendezvous) | 2 weeks | HTTP/3 rendezvous, cross-LAN discovery, NAT traversal | `e98e233` |
-| **6.2** | PQ Hybrid Handshake | 2 weeks | X25519+Kyber-1024 in Noise, formal verification | `7259890` |
-| **6.3** | Multi-Path Aggregation | 2 weeks | 6 policies, RLNC, MPTCP, link quality estimation | `5066d66` |
-| **6.4** | Plugin Interface | 2 weeks | Go plugin + WASM (WASI), capability sandbox | `fef2cee` |
-| **6.5** | Chaos Engineering | 2 weeks | 12 scenarios, nightly CI, fault injection framework | `1c5c7fe` |
-| **6.6** | QoS/Bandwidth Shaping | 2 weeks | 9 classes, HTB+FQ-CoDel, eBPF acceleration | `254c579` |
-| **6.7** | Module Publishing | 1 week | pkg.go.dev, cosign, SBOM, Homebrew, Docker | `375c935` |
+Only after Phase 8. These require platform bindings that pure Go does not
+provide.
 
----
-
-## 🚀 Phase 7: Advanced UX & Power Features (ACTIVE)
-
-**Timeline: 12 weeks | Priority: HIGH | Target: v3.1.0**
-
-| Sub-phase | Goal | Owner | Status | Dependencies |
-|-----------|------|-------|--------|--------------|
-| **7.1** | Onboarding Wizard (QR pairing, passphrase backup, device naming) | UX Team | 📋 Planned | Phase 5 GUI |
-| **7.2** | File Transfer UX (drag-drop, progress, resume, multi-file, preview) | Frontend | 📋 Planned | Files Service |
-| **7.3** | Collaborative Docs (RGA editor, presence, cursors, comments, version history) | Frontend | 📋 Planned | Docs Service |
-| **7.4** | Voice/Video Call UI (WebRTC, screenshare, recording, virtual bg) | Frontend | 📋 Planned | Voice Service |
-| **7.5** | VPN Dashboard (routes, split tunnel, ACLs, kill switch, DNS leak test) | Frontend | 📋 Planned | VPN Service |
-| **7.6** | Registry Search/Install (DHT-backed, categories, ratings, updates) | Backend | 📋 Planned | Registry Service |
-| **7.7** | Native Desktop (Wails v3, system tray, notifications, autostart) | Desktop | 📋 Planned | Phase 8.1 |
-| **7.8** | Mobile Apps (iOS NetworkExtension, Android VpnService, QR pairing) | Mobile | 📋 Planned | Phase 8.4/8.5 |
-
-### Phase 7 Success Criteria
-
-- [ ] New user → connected peers in < 60 seconds (measured)
-- [ ] File transfer success rate > 99% (100MB files)
-- [ ] Collaborative editing latency < 100ms (LAN)
-- [ ] Call setup time < 3 seconds (ICE + DTLS)
-- [ ] VPN throughput > 100 Mbps (WiFi Direct)
-- [ ] GUI accessibility score ≥ AA (WCAG 2.2)
-- [ ] Desktop app startup < 2 seconds (cold)
+| # | Item | Notes |
+|---|---|---|
+| 9.1 | BLE via a real backend | Needs cgo or an external helper. `IsAvailable()` must stop returning true unconditionally. |
+| 9.2 | Acoustic FSK | Needs an audio I/O binding plus a round-trip encode→audio→decode test at a stated bit-error rate |
+| 9.3 | WiFi Direct peer discovery | `listenLinuxEvents` is currently a sleep loop; needs real event parsing |
+| 9.4 | Link quality estimation | Kalman/EWMA over RTT, jitter, loss, bandwidth — the input multipath scheduling needs |
+| 9.5 | Real multi-path distribution | Round-robin currently duplicates bytes to every link; needs RLNC or MP-TCP |
+| 9.6 | Voice codecs | Opus/VP9 via a library, plus ICE/DTLS/SRTP |
+| 9.7 | VPN packet forwarding | A read loop on the TUN fd; documented root/`CAP_NET_ADMIN` requirement |
+| 9.8 | Files diff sync | `Sync()` must actually contact the peer; benchmark diff vs. full transfer |
+| 9.9 | Registry cross-node resolution | `ResolveMeta` currently always returns not-found after a real lookup |
+| 9.10 | Plugin sandbox | Per-plugin capability grants; WASM/WASI as the isolation boundary |
 
 ---
 
-## 🏗️ Phase 8: Native Desktop & Mobile (PLANNED)
+## 4. Phase 10 (exploratory) — Research
 
-**Timeline: 16 weeks | Priority: HIGH | Target: v3.2.0**
+Unchanged in intent from the previous roadmap, with one addition.
 
-| Sub-phase | Goal | Technical Approach | Platform |
-|-----------|------|-------------------|----------|
-| **8.1** | Wails v3 Desktop | Go backend + WebView2/WebKitGTK + Native tray | Windows/macOS/Linux |
-| **8.2** | System Tray + Autostart | LaunchAgent/plist, systemd user, Task Scheduler | All desktop |
-| **8.3** | Native Notifications | libnotify, NSUserNotification, Windows Toast | All desktop |
-| **8.4** | iOS App | NetworkExtension + SwiftUI + WireGuard-style | iOS 16+ |
-| **8.5** | Android App | VpnService + Jetpack Compose + Kotlin Coroutines | Android 10+ |
-| **8.6** | QR Pairing | Secure QR code (Ed25519 signed payload) | Mobile ↔ Desktop |
-| **8.7** | Background Sync | iOS BGTaskScheduler, Android WorkManager | Mobile |
-| **8.8** | App Store Release | TestFlight → App Store, Play Console → Play Store | Both stores |
-
-### Technical Requirements
-
-- **iOS**: NetworkExtension entitlement, App Groups, Keychain sharing
-- **Android**: VpnService, Foreground Service, WorkManager, Keystore
-- **Desktop**: Code signing (Apple Developer, Windows EV cert), Notarization
-- **Shared**: Go mobile (gomobile bind), shared core library
+| # | Item | Area |
+|---|---|---|
+| 10.1 | Formal verification | TLA+/Coq for the Noise XX and hybrid KEM state machines. **Note:** the previous roadmap claimed shipped TLA+ specs; none exist. Start from scratch. |
+| 10.2 | Anonymous routing | Mixnets, cover traffic |
+| 10.3 | Delay-tolerant networking | RFC 5050 Bundle Protocol |
+| 10.4 | ML link selection | TinyML, bandits |
+| 10.5 | Hardware acceleration | P4, FPGA |
+| 10.6 | Quantum networking | QKD |
 
 ---
 
-## 🏢 Phase 9: Enterprise & Scale (FUTURE)
+## 5. Documentation — actual state
 
-**Timeline: 20 weeks | Priority: MEDIUM | Target: v4.0.0**
+The previous roadmap listed a 31-file `docs/` tree. **Ten files exist; 21 are
+missing**, including all four `.tla` specs and the entire `operations/` and
+`development/` trees.
 
-| Sub-phase | Goal | Technical Approach |
-|-----------|------|-------------------|
-| **9.1** | Multi-Node Cluster (1000+) | Gossip discovery (SWIM), Raft consensus, sharded DHT |
-| **9.2** | Policy Engine | OPA/Rego, capability tokens, ABAC, audit policies |
-| **9.3** | Observability Stack | Prometheus + Grafana + Tempo + Loki + OpenTelemetry |
-| **9.4** | Backup/Disaster Recovery | Age encryption, Shamir secret sharing, social recovery |
-| **9.5** | SSO Integration | OIDC/SAML, device trust, conditional access |
-| **9.6** | Fleet Management | MDM integration, remote config, compliance reporting |
-| **9.7** | High Availability | Active-active clusters, geo-replication, failover |
-| **9.8** | Compliance | SOC2 Type II, ISO 27001, GDPR, HIPAA readiness |
-
----
-
-## 🔬 Phase 10: Research & Innovation (EXPLORATORY)
-
-**Timeline: Ongoing | Priority: LOW | Target: v5.0.0+**
-
-| Sub-phase | Goal | Research Area |
-|-----------|------|---------------|
-| **10.1** | Anonymous Routing | Mixnets (Loopix, Nym), cover traffic, timing analysis |
-| **10.2** | Delay-Tolerant Networking | Bundle Protocol (RFC 5050), DTN, store-and-forward |
-| **10.3** | ML Link Selection | TinyML on-device, federated learning, bandit algorithms |
-| **10.4** | Formal Verification | TLA+ model checking, Coq proofs, Rust verification |
-| **10.5** | Hardware Acceleration | FPGA/ASIC for crypto, P4 for data plane |
-| **10.6** | Satellite Integration | Starlink, Kuiper, laser inter-satellite links |
-| **10.7** | Quantum Networking | QKD integration, entanglement distribution |
-
----
-
-## 📋 Definition of Done (All Phases)
-
-### Code Quality
-- [ ] All tests pass with `-race` on Go 1.26, 1.27, 1.28
-- [ ] `make lint` = 0 issues (golangci-lint, vet, fmt, staticcheck, gosec, govulncheck)
-- [ ] Coverage: Unit ≥ 90%, Integration ≥ 80%, Chaos ≥ 70%
-- [ ] No `// TODO` without linked issue
-- [ ] All public APIs have godoc with examples
-
-### Security
-- [ ] Threat model updated (STRIDE)
-- [ ] Security review completed (internal + external)
-- [ ] Penetration test (annual)
-- [ ] Dependency audit (govulncheck, OSV, Snyk)
-- [ ] SBOM generated (SPDX + CycloneDX)
-- [ ] Signed releases (cosign keyless + hardware key)
-- [ ] SLSA Level 3 provenance
-
-### Documentation
-- [ ] README updated with new features
-- [ ] ARCHITECTURE.md reflects changes
-- [ ] TECH_STACK.md reflects dependencies
-- [ ] ROADMAP.md updated with status
-- [ ] CHANGELOG.md (Keep a Changelog format)
-- [ ] API docs (OpenAPI 3.1 + gRPC)
-- [ ] Migration guide (if breaking changes)
-- [ ] Man pages for CLI
-
-### Release
-- [ ] Cross-compiled binaries (all 6 targets)
-- [ ] Checksums (SHA256 + SHA512)
-- [ ] Cosign signatures (.sig + .pem)
-- [ ] GitHub Release with notes
-- [ ] Docker images (multi-arch: `ghcr.io/...`)
-- [ ] Homebrew formula updated
-- [ ] pkg.go.dev documentation visible
-- [ ] Announcement (blog + social + mailing list)
-
----
-
-## 📂 Documentation Structure (Current)
+### Exists
 
 ```
 docs/
-├── README.md                    # Documentation index
-├── architecture/
-│   ├── ARCHITECTURE.md         # Formal system architecture (TLA+ specs)
-│   ├── TECH_STACK.md           # Technology stack specification
-│   └── ROADMAP.md              # This roadmap
-├── guides/
-│   ├── QUICKSTART.md           # 2-command setup
-│   ├── ONBOARDING.md           # First-time user guide
-│   ├── CLI_REFERENCE.md        # Complete CLI reference
-│   ├── GUI_GUIDE.md            # Web GUI walkthrough
-│   ├── SERVICES.md             # All 9 services deep-dive
-│   ├── FEDERATION.md           # Cross-LAN setup
-│   ├── PLUGINS.md              # Plugin development
-│   └── TROUBLESHOOTING.md      # Common issues & solutions
-├── api/
-│   ├── REST_API.md             # HTTP API reference
-│   ├── WS_API.md               # WebSocket/SSE events
-│   ├── PLUGIN_API.md           # Plugin API (Go + WASM)
-│   ├── GRPC_API.md             # gRPC services (future)
-│   └── OPENAPI.yaml            # OpenAPI 3.1 specification
-├── operations/
-│   ├── DEPLOYMENT.md           # Production deployment
-│   ├── MONITORING.md           # Observability setup
-│   ├── SECURITY.md             # Security hardening
-│   ├── BACKUP_RECOVERY.md      # Backup & DR procedures
-│   └── UPGRADE.md              # Version upgrade guide
-├── development/
-│   ├── CONTRIBUTING.md         # Contribution guide
-│   ├── CODE_OF_CONDUCT.md      # Community standards
-│   ├── TESTING.md              # Testing strategy
-│   ├── RELEASE_PROCESS.md      # Release checklist
-│   └── ARCHITECTURE_DECISIONS/ # ADRs (Markdown)
-└── specs/
-    ├── noise_xx.tla            # Noise-XX formal spec
-    ├── crdt.tla                # CRDT formal spec
-    ├── dht.tla                 # DHT formal spec
-    └── audit_log.tla           # Audit log formal spec
+├── api/{PLUGIN_API.md, REST_API.md, WS_API.md}
+├── architecture/{ARCHITECTURE.md, TECH_STACK.md, ROADMAP.md}
+└── guides/{CLI_REFERENCE.md, GUI_GUIDE.md, QUICKSTART.md, SERVICES.md}
 ```
 
+Plus at the repo root: `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+`SECURITY.md`, `LICENSE` (MIT, genuine), `AGENTS.md`, `PHASE1_FINDINGS.md`,
+`PHASE2_PLAN.md`, and a **second, conflicting `ROADMAP.md`**.
+
+### Missing, and whether it should be written
+
+| File | Should it exist? |
+|---|---|
+| `docs/README.md` (index) | ✅ yes — there is no index today |
+| `docs/guides/TROUBLESHOOTING.md` | ✅ yes — "no peers found", port conflicts, VPN privileges |
+| `docs/guides/ONBOARDING.md` | ✅ yes — `cli init` has no guide |
+| `docs/guides/PLUGINS.md` | ✅ yes — `PLUGIN_API.md` exists but there is no tutorial |
+| `docs/guides/FEDERATION.md` | ⚠️ only after the rendezvous poll loop actually looks peers up |
+| `docs/api/OPENAPI.yaml` | ✅ yes — the REST API is hand-rolled and drifting |
+| `docs/api/GRPC_API.md` | ❌ no — there is no gRPC in the project |
+| `docs/operations/*` (5 files) | ⚠️ partially — `SECURITY.md` exists at the root; DEPLOYMENT/MONITORING are premature before the release workflow exists |
+| `docs/development/*` (5 files) | ⚠️ `CONTRIBUTING.md` exists at the root; the rest duplicate it |
+| `docs/specs/*.tla` | ❌ no — not until Phase 10.1 actually produces them |
+
+There are also two `ROADMAP.md` files with different content and neither
+references the other. Consolidate to one.
+
+### Committed build artifacts
+
+68.7 MB of build output is tracked in git across 14 files, which bloats every
+clone and every diff:
+
+| Path | Size |
+|---|---|
+| `dist/localweb_1.0.0-1_amd64.deb` | 9.0 MB |
+| `dist/localweb-1.0.0-1.x86_64.rpm` | 9.3 MB |
+| `dist/localweb_1.0.0_p1_x86_64.apk` | 9.3 MB |
+| `installers/windows/` — three Linux packages, misplaced | 26.3 MB |
+| `installers/windows/wintun.zip` | 0.75 MB |
+| `dist/localweb-cli-linux-amd64` | 8.1 MB |
+| `dist/localweb-cli-darwin-arm64` | 7.9 MB |
+| `pkg/localweb_1.0.0-1_amd64.deb` | **0 bytes, tracked** — an empty build artifact inside the Go source tree |
+
+`.gitignore` excludes `*.exe` but not `*.deb`, `*.rpm`, `*.apk` or `dist/`.
+Linux `.deb`/`.rpm`/`.apk` packages are also committed inside the **Windows**
+installer directory. Phase 8 item 8.11 covers this.
+
+### Documentation debt found while auditing
+
+- `CHANGELOG.md` claims "Formal TLA+ specifications for core protocols" shipped.
+- `docs/api/REST_API.md` documents `/api/audit-log/verify` returning 200 with
+  `"integrity":"tampered"`; the handler returns HTTP 500.
+- `docs/api/WS_API.md` documents a 30 s SSE heartbeat; the handler has no ticker.
+- `AGENTS.md` still says there is no `LICENSE`, no CI, no `SECURITY.md` and no
+  `CONTRIBUTING.md`. All four now exist.
+- Version split: `1.0.0` in every shipped artefact and in `wails.json` and
+  `CHANGELOG.md`; `3.0.0` in the previous revision of all three architecture
+  docs; `"dev"` as the compile-time default in `internal/version`. Pick one.
+
 ---
 
-## 🔗 Quick Reference Links
+## 6. Release process — what exists
 
-| Resource | Link |
-|----------|------|
-| **Repository** | `https://github.com/ram1234598766-dotcom/Local-WEB` |
-| **Quickstart** | `make quickstart` |
-| **CLI Help** | `bin/localweb-cli --help` |
-| **Web GUI** | `http://localhost:8080` (with `--dashboard`) |
-| **Architecture Spec** | `docs/architecture/ARCHITECTURE.md` |
-| **Tech Stack** | `docs/architecture/TECH_STACK.md` |
-| **Roadmap** | `docs/architecture/ROADMAP.md` |
-| **API Docs** | `docs/api/REST_API.md` |
-| **Issue Tracker** | `https://github.com/ram1234598766-dotcom/Local-WEB/issues` |
-| **Discussions** | `https://github.com/ram1234598766-dotcom/Local-WEB/discussions` |
-| **Security** | `SECURITY.md` |
-| **Releases** | `https://github.com/ram1234598766-dotcom/Local-WEB/releases` |
+| Step | State |
+|---|---|
+| Cross-compile 5 targets | ✅ `make cross-compile` |
+| Checksums | ❌ not generated by any make target |
+| SBOM | ❌ no Syft in the toolchain or CI |
+| Signing | ⚠️ `.goreleaser.yml` uses GPG; no key, no cosign, and the macOS certificate is an unfilled placeholder |
+| GitHub Release | ❌ no release workflow |
+| Docker images | ❌ `Dockerfile` exists, nothing builds or pushes it |
+| Homebrew / pkg.go.dev | ❌ not wired |
+| Tagged commit signing | ❌ no commit in the history is signed |
+| Trivy scan | ❌ not configured |
 
----
-
-## 📊 Milestone Tracking
-
-| Milestone | Target Date | Status | Blocking |
-|-----------|-------------|--------|----------|
-| v3.0.0 (Phase 6 complete) | 2025-09-05 | ✅ Done | — |
-| v3.1.0 (Phase 7 UX) | 2025-11-28 | 📋 Planned | Phase 7.1-7.6 |
-| v3.2.0 (Phase 8 Native) | 2026-03-20 | 📋 Planned | Phase 8.1-8.6 |
-| v4.0.0 (Phase 9 Enterprise) | 2026-08-07 | 📋 Planned | Phase 9.1-9.4 |
-| v5.0.0 (Phase 10 Research) | 2027+ | 🔬 Research | Phase 10.1-10.3 |
+Phase 8 items 8.11 and 8.12 address this.
 
 ---
 
-## 🎯 Strategic Priorities (Q4 2025 - Q2 2026)
+## 7. Milestones
 
-1. **User Experience** — Make LocalWEB as easy as AirDrop, as powerful as WireGuard
-2. **Mobile First** — iOS/Android apps are critical for adoption
-3. **Developer Platform** — Plugin ecosystem + Registry = extensibility
-4. **Enterprise Ready** — SSO, compliance, fleet management
-5. **Research Leadership** — Publish papers, contribute to standards (IETF, W3C)
+| Milestone | Scope | Status |
+|---|---|---|
+| Current | library-complete, daemon thin | ✅ measured above |
+| Phase 8 | services wired, observability real, security honest | 📋 next |
+| Phase 9 | physical link layers and codecs real | 📋 planned |
+| Phase 10 | formal verification and research | 🔬 exploratory |
+
+No target dates. The previous roadmap carried v3.1.0 (2025-11-28) and v3.2.0
+(2026-03-20) as "Planned" while both dates were already ten and eighteen months
+in the past, and marked a v3.0.0 milestone "Done" that never shipped under that
+name. Dates without a team behind them are noise; the milestones above are
+scoped by what must be true, not by when.
 
 ---
 
-*Last Updated: 2025-09-05 | Commit: `beff4fd` | Next Review: 2025-09-19 (Phase 7 kickoff)*
+*LocalWEB Roadmap — coverage, test counts and gate results measured, not
+estimated.*

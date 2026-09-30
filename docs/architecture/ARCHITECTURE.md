@@ -1,535 +1,406 @@
-# LocalWEB — System Architecture Specification (Formal)
+# LocalWEB — System Architecture
 
-**Version: 3.0.0 | Formal Specification | Module: `github.com/ram1234598766-dotcom/Local-WEB`**
+**Status: reflects the code as of commit `df30121` + the correctness pass described in §9.**
+**Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26 | Author: Mrityunjay K**
 
-**Author: Mrityunjay K**
-
----
-
-## 📐 Formal Architecture Model
-
-### 1.1 System Definition
-
-LocalWEB is a **formally specified**, **capability-secure**, **post-quantum ready** peer-to-peer networking stack implementing a **9-layer protocol stack** with **capability-based access control**, **formal verification targets**, and **zero-trust networking principles**.
-
-```
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│                              LOCALWEB v3.0 — FORMAL ARCHITECTURE                          │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                          │
-│  L9  APPLICATION     ◄───►  Capability-Secure API Gateway  ◄───►  Plugin Runtime (WASM) │
-│       ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│       │  Node Daemon  │  CLI Client  │  Web GUI (WASM/SPA)  │  Plugin Host (WASI)    │   │
-│       └──────────────────────────────────────────────────────────────────────────────┘   │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L8  SERVICES        DNS  HTTP  Email  Docs  Files  Messaging  Registry  Voice  VPN     │
-│       │  Service Mesh  │  Capability Routing  │  Policy Enforcement  │  Observability  │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L7  CRDT ENGINE     ORSet  │  RGA  │  LWW-Register  │  Merkle-CRDT  │  Delta-CRDT     │
-│       │  Formal Verification (TLA+)  │  Conflict-Free Replication  │  Causal Ordering  │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L6  DATA FABRIC     BadgerDB (LSM)  │  Content-Addressed (CIDv1)  │  Merkle DAG      │
-│       │  AES-256-GCM-At-Rest  │  Verifiable Sync  │  Snapshot Isolation  │  MVCC       │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L5  DHT OVERLAY     Kademlia (k=20, α=3)  │  XOR(256)  │  PoW-AntiSybil  │  Rendezvous │
-│       │  Recursive Lookup  │  Iterative Routing  │  Bucket Refresh  │  Churn Resistance │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L4  SECURITY CORE   Noise-XX  │  Hybrid-PQ (X25519+Kyber-1024)  │  SHA3-256  │        │
-│       │  Ed25519/Ed448 Identity  │  Capability Tokens (Macaroons)  │  PoW-V2 (Argon2)  │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L3  DISCOVERY       mDNS-SD  │  BLE-GATT  │  Rendezvous-HTTP/3  │  Orchestrator      │
-│       │  Conflict-Free Merge  │  Bayesian Scoring  │  TTL-GC  │  Rendezvous Mesh     │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L2  LINK FABRIC     WiFi-STA  │  WiFi-Direct (P2P)  │  Ad-hoc (IBSS)  │  USB-RNDIS   │
-│       │  BLE-GATT  │  Acoustic-FSK  │  Multi-Path MP-TCP  │  Link-Quality Estimation   │
-├──────────────────────────────────────────────────────────────────────────────────────────┤
-│  L1  TRANSPORT       QUIC v1 (RFC 9000)  │  Noise-XX + Hybrid-PQ  │  Stream Mux (H2)  │
-│       │  0-RTT Resumption  │  Datagram Frames  │  Circuit Relay  │  Congestion Control  │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-```
+> **How to read this document.** Every claim below is tagged with its evidence
+> and its verification state. Nothing is marked working unless a test exercises
+> it.
+>
+> - ✅ **Verified** — implemented and covered by a named passing test.
+> - ⚠️ **Partial** — real code, but a documented property does not hold.
+> - ❌ **Not implemented** — no code, or a stub that does nothing.
+>
+> The previous revision of this document described a system roughly one build
+> generation ahead of what existed: it claimed 27 Prometheus metrics (none
+> registered), 9 pinned WebRTC/eBPF/netlink dependencies (none in `go.mod`), 12
+> chaos scenarios (6 exist), and "TLA+ Verified" against `.tla` files that do
+> not exist in the repository. §9 records what was corrected.
 
 ---
 
-## 1.2 Formal Specification (TLA+)
+## 1. What actually ships
 
-```tla
---------------------------- MODULE LocalWEB ---------------------------
-EXTENDS Naturals, Sequences, FiniteSets, TLC
+`cmd/node/main.go` is the honest measure of the product. On startup it:
 
-CONSTANTS Nodes, Services, Links, MaxHops, ByzantineThreshold
+1. loads or generates a persistent Ed25519 identity,
+2. derives a store encryption key from that identity,
+3. opens an AES-256-GCM-encrypted BadgerDB,
+4. starts the link manager and discovery orchestrator,
+5. starts a QUIC v1 listener with a Noise XX handshake,
+6. serves an embedded web GUI + REST API on `:8080`.
 
-VARIABLES 
-    nodeStates,          \* [n \in Nodes |-> [id: NodeID, state: State, keys: KeyPair]]
-    linkStates,          \* [l \in Links |-> [status: LinkStatus, quality: QualityMetric]]
-    discoveryViews,      \* [n \in Nodes |-> PeerView]
-    dhtTables,           \* [n \in Nodes |-> RoutingTable]
-    crdtStates,          \* [n \in Nodes |-> CRDTState]
-    auditLogs,           \* [n \in Nodes |-> Seq(AuditEntry)]
-    capabilityTokens,    \* [n \in Nodes |-> Set(Capability)]
-    securityContexts     \* [n \in Nodes |-> SecurityContext]
+**None of the nine protocol services is started by the daemon.** Each service
+package is real, tested code, but `cmd/node` registers only the `Control`
+handler on the transport. This is the single most important correction to the
+previous documentation, which described all nine as running.
 
-\* ─────────────────────────────────────────────────────────────────
-\* SAFETY PROPERTIES
-\* ─────────────────────────────────────────────────────────────────
-
-Invariant_NoIdentityCollision ==
-    \A n1, n2 \in Nodes: n1 # n2 => nodeStates[n1].id # nodeStates[n2].id
-
-Invariant_NoReplay ==
-    \A n \in Nodes: 
-        \A e1, e2 \in auditLogs[n]: 
-            e1.nonce = e2.nonce => e1 = e2
-
-Invariant_CapabilityIntegrity ==
-    \A n \in Nodes:
-        \A cap \in capabilityTokens[n]:
-            VerifySignature(cap.issuerPubKey, cap.payload, cap.signature)
-
-Invariant_CRDTConvergence ==
-    \A n1, n2 \in Nodes:
-        IsConnected(n1, n2) => 
-            Eventually(Consistent(crdtStates[n1], crdtStates[n2]))
-
-Invariant_AuditIntegrity ==
-    \A n \in Nodes:
-        HashChainValid(auditLogs[n])
-
-Invariant_NoSybil ==
-    Cardinality({n \in Nodes: nodeStates[n].state = Active}) 
-    <= ByzantineThreshold * Cardinality(Nodes) + HonestNodes
-
-\* ─────────────────────────────────────────────────────────────────
-\* LIVENESS PROPERTIES
-\* ─────────────────────────────────────────────────────────────────
-
-Liveness_Discovery ==
-    \A n1, n2 \in HonestNodes:
-        Eventually(PeerDiscovered(n1, n2) \/ PeerDiscovered(n2, n1))
-
-Liveness_Connection ==
-    \A n1, n2 \in HonestNodes:
-        CanReach(n1, n2) => Eventually(Connected(n1, n2))
-
-Liveness_CRDTConvergence ==
-    \A n1, n2 \in HonestNodes:
-        IsConnected(n1, n2) => 
-            Eventually(StrongEventualConsistency(crdtStates[n1], crdtStates[n2]))
-
-Liveness_AuditFinality ==
-    \A n \in Nodes:
-        \A e \in auditLogs[n]:
-            Eventually(Verified(e))
-
-=============================================================================
 ```
+                  ┌──────────────────────────────┐
+   browser ──────▶│  L9  GUI + REST API  :8080   │
+                  │  (pkg/gui, embedded SPA)     │
+                  └───────────────┬──────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+   peers ────────▶│  L1  TRANSPORT               │
+       QUIC       │  QUIC v1 + Noise XX (+PQ)    │  ← only Control wired
+                  │  1-byte ServiceID mux        │
+                  └───────────────┬──────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+                  │  L3  DISCOVERY  mDNS-SD      │
+                  └───────────────┬──────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+                  │  L2  LINK   WiFi/adhoc/USB    │
+                  └───────────────┬──────────────┘
+                                  │
+                  ┌───────────────▼──────────────┐
+                  │  L6  STORE  BadgerDB+AEAD    │
+                  └──────────────────────────────┘
+
+   Present as tested libraries, NOT started by the daemon:
+     L4 security  L5 DHT    L7 CRDT    L8 nine services
+```
+
+### 1.1 Layer status at a glance
+
+| Layer | Component | Status | Evidence |
+|---|---|---|---|
+| L1 | QUIC v1 transport | ✅ Verified | `pkg/transport/quic_test.go:16` `TestTransportRoundTrip` |
+| L1 | Noise XX handshake | ✅ Verified | `pkg/transport/quic_test.go:117` `TestConnectIdentityMismatch` |
+| L1 | Hybrid PQ handshake (X25519+Kyber) | ✅ Verified | `pkg/transport/hybrid_test.go` `TestHybridSessionKeyDependsOnKyber`, `TestHybridServerHandshakeAgreesOnSessionKey` |
+| L1 | 1-byte ServiceID stream mux | ✅ Verified | `pkg/transport/quic.go:209-226` dispatch, `quic.go:579` write |
+| L1 | Congestion control config (CUBIC/BBR) | ❌ Not implemented | `quic.Config` at `quic.go:100` sets only streams/timeout; no `CongestionController` anywhere |
+| L1 | 0-RTT + replay protection | ❌ Not implemented | no `Allow0RTT` / `MaxTokenAge` / anti-replay cache |
+| L1 | QUIC datagram frames | ❌ Not implemented | no `SendDatagram` call site |
+| L1 | Circuit relay | ⚠️ Partial | `relay.go:64` `AcceptCircuit` has no caller; pump logic is real |
+| L1 | NAT traversal (hole punch / ICE / relay) | ⚠️ Partial | `transport/nat.go:91` `HolePunch` is real but uncalled; `DetectNAT` at `nat.go:73` infers NAT type from the local IP only; **no ICE, no STUN** |
+| L2 | WiFi Station | ⚠️ Partial | `pkg/link/wifi.go:156` `findWiFiInterface` returns the first multicast IPv4 interface — Ethernet included |
+| L2 | WiFi Direct | ⚠️ Partial | shells out to `wpa_cli`; `listenLinuxEvents` (`wifi_direct.go:266`) is a 1s sleep loop, so `scanPeers` always returns empty; Windows unimplemented |
+| L2 | Ad-hoc (IBSS) | ⚠️ Partial | `adhoc.go:210` real `iw dev … ibss join` on Linux; discovery is a TCP probe, not IBSS peer discovery |
+| L2 | USB tether | ⚠️ Partial | `usb.go:174` matches interface-name prefixes `usb`/`enx`/`enp`; no RNDIS detection; no-op on macOS/Windows |
+| L2 | BLE | ❌ Stub | `ble.go:364` `newBLEAdapter` returns `powered:true` unconditionally; `Connect` returns "not yet implemented"; `IsAvailable` returns true on every platform |
+| L2 | Acoustic FSK | ❌ Not implemented | no `acoustic.go`; only the `ModeAcoustic` enum value exists |
+| L2 | Ethernet | ❌ Not implemented | no `ethernet.go` |
+| L2 | Link quality estimation (Kalman/EWMA) | ❌ Not implemented | no `quality.go`; only `manager.go:286` `computeScore` with fixed bonuses |
+| L2 | Multi-path: failover / weighted-latency | ✅ Verified | `pkg/link/multipath_test.go` `TestMultiPathHandleEventWithNoAddresses`, `TestNewMultiPathManagerReachesFailoverThroughTheConstructor` |
+| L2 | Multi-path: round-robin / weighted-BW | ⚠️ Partial | `multipath.go:302-327` rotates a primary pointer; `SendToPeer` duplicates bytes to every link rather than distributing |
+| L2 | Multi-path: RLNC, MPTCP | ❌ Not implemented | no `rlnc` or `mptcp` symbol in the tree |
+| L3 | mDNS-SD discovery | ✅ Verified | `pkg/discovery/mdns_test.go` 40 tests incl. `TestBuildAnnounceRoundTripPreservesPeerID`, `TestParseMDNSResponseTruncatedRecordData` |
+| L3 | TTL eviction / GC | ✅ Verified | `types_test.go` `TestPeerDatabaseGCBoundary`, `TestPeerDatabaseGCEvictsStalePeers` |
+| L3 | Score responds to its inputs | ✅ Verified | `discovery_test.go` `TestComputeScoreIsNotConstant` |
+| L3 | Rendezvous / federation | ⚠️ Partial | `pkg/federation` HTTP/1.1 JSON, not HTTP/3; the poll loop (`rendezvous_discovery.go:92-115`) only re-registers, never performs a lookup |
+| L3 | Local UDP broadcast discovery | ❌ Not implemented | no broadcast mode |
+| L3 | Bayesian scoring | ⚠️ Partial | `computeScore` is fixed-bonus heuristics; `old *PeerInfo` parameter is never read, so there is no recency term |
+| L3 | Byzantine-resilient merge | ❌ Not implemented | no `ByzantineMerge`, no median-of-means, no IQR |
+| L4 | Ed25519 identity + NodeID | ✅ Verified | `pkg/crypto/crypto_test.go`; `NodeID = SHA3-256(pubkey)` |
+| L4 | Capability tokens | ⚠️ Partial | `security/capability.go:17` is a signed JSON blob, **not a Macaroon**: no identifier, no caveat chain, no CBOR, no delegation; revocation is in-memory and lost on restart |
+| L4 | Argon2id PoW (pkg/security) | ✅ Verified | `security/pow_test.go` 24 tests; see §3 |
+| L4 | Ed448 / Dilithium3 / ML-DSA-65 | ⚠️ Partial | implemented in `pkg/crypto/crypto.go:64-197` via circl, but zero call sites outside the package |
+| L4 | Audit log hash chain + tamper detection | ✅ Verified | `security/audit_test.go` `TestAuditLogTamperDetection` |
+| L5 | Kademlia k=20, α=3 | ✅ Verified | `pkg/dht/dht_test.go` `TestRoutingTableDistributesPeersAcrossBuckets`, `TestXorDistUsesFullKeyspace` |
+| L5 | Iterative lookup | ✅ Verified | `dht.go` `dedupeAndPrune`; `TestDedupeAndPruneSortsDeduplicatesAndCaps` |
+| L5 | PoW anti-Sybil enforcement | ✅ Verified | `server.go` `MsgRegisterNode` case; `TestHandleRegisterNodeRejectsInvalidProofOfWork` (5 sub-cases) |
+| L5 | Bucket refresh / split | ❌ Not implemented | 256 static buckets; no split, no refresh, no republish |
+| L5 | Recursive lookup | ❌ Not implemented | iterative only |
+| L5 | Stale-peer eviction | ✅ Verified | `PruneStale`; `TestPruneStaleRemovesDepartedPeers` |
+| L6 | BadgerDB + AES-256-GCM at rest | ✅ Verified | `pkg/store/store_test.go`; key derived from the identity seed (`crypto/storage.go:75`), no hardcoded fallback |
+| L6 | CIDv1 content addressing + re-hash on read | ✅ Verified | `pkg/store/block_store.go:35-75` |
+| L6 | 6 documented sub-stores (`b/ p/ f/ d/ c/ a/`) | ❌ Not implemented | real prefixes are `LWS:block:`, `LWS:meta:`, `LWS:peer:` only |
+| L6 | zstd/snappy block compression | ❌ Not wired | `files/store.go:197` `compressBlock` has only a test caller |
+| L7 | OR-Set (add-wins) | ✅ Verified | `pkg/crdt/crdt_test.go`; `test/integration/setup_test.go` `TestCRDTOperations` |
+| L7 | RGA | ⚠️ Partial | insert-after-parent now works (`TestCRDTPrependViaHeadSentinel`), but `Merge` at `crdt.go:272` appends missing nodes rather than performing a positional CRDT merge |
+| L7 | LWW-Register | ⚠️ Partial | real LWW with (timestamp, author) tiebreak, but the timestamp is wall-clock, so clock skew breaks convergence |
+| L7 | Merkle tree | ⚠️ Partial | `MerkleTree` is a flat leaf list, not a DAG; `DiffMerkle` is O(n) set difference |
+| L7 | Delta-CRDT, PN-Counter | ❌ Not implemented | no such symbol in the tree |
+| L7 | Tombstone GC | ❌ Not implemented | `ORSet.removes` and `RGANode.Deleted` grow unbounded |
+| L8 | Nine service packages | ✅ Verified as libraries | `pkg/services/*_test.go`; **not instantiated by the daemon** |
+| L8 | Service mesh (LB / breaker / retry / OTel) | ❌ Not implemented | no such code |
+| L9 | GUI: `/api/status`, `/api/peers`, `/api/audit-log` | ✅ Verified | `pkg/gui/` tests |
+| L9 | GUI: `/metrics`, `/debug/pprof` | ❌ Not implemented | `handler.go:33-58` registers neither |
+| L9 | Plugin manager + built-in plugins | ✅ Verified | `pkg/plugin/` 58 tests |
+| L9 | Go `.so` plugin loading, WASM/WASI | ❌ Not implemented | `plugin.go:248` returns "not implemented"; no `wasm` directory |
+| L9 | Plugin capability sandbox | ❌ Not implemented | `Host` grants unrestricted store/transport/security |
+| — | Chaos: loss / latency / corruption / partition | ✅ Verified | `pkg/chaos/runner_test.go` `TestChaosFaultsAreReversible`, `TestChaosConnDuplicatesRead` |
+| — | Chaos: StopAll | ✅ Verified | `TestStopAllCancelsRunningScenario` |
 
 ---
 
-## 1.3 Layer Specifications (Formal)
+## 2. L1 — Transport, in detail
 
-### L1: Transport Layer — QUIC + Noise-XX + Hybrid-PQ
+### 2.1 Noise XX
 
-```go
-// Formal Transport Specification
-type TransportSpec struct {
-    Protocol        string  // "QUIC v1 (RFC 9000)"
-    TLSVersion      string  // "TLS 1.3 (RFC 8446)"
-    Handshake       string  // "Noise-XX + Hybrid-PQ (X25519 + Kyber-1024)"
-    KeyDerivation   string  // "HKDF-SHA3-256(Noise_SS || Kyber_SS)"
-    StreamMux       string  // "H2-style (1-byte ServiceID)"
-    CongestionCtrl  string  // "CUBIC + BBR (configurable)"
-    ZeroRTT         bool    // true (with replay protection)
-    DatagramFrames  bool    // true (unreliable, low-latency)
-    CircuitRelay    bool    // true (QUIC-based)
-    NATTraversal    string  // "UDP hole-punch + ICE + Relay"
-}
+`pkg/crypto/noise.go`. Pattern XX over X25519 with SHA3-256 and
+XSalsa20-Poly1305. Both sides derive the same directional keys; the tests assert
+`initiator.SendKey == responder.RecvKey` and the reverse, and that the two
+directions differ.
 
-// Noise-XX Handshake Formal Verification
-// Proven in: specs/noise_xx.tla
-// Properties verified:
-// 1. Mutual Authentication (both parties authenticate)
-// 2. Forward Secrecy (ephemeral keys)
-// 2. Identity Hiding (responder identity hidden until msg 3)
-// 4. Key Compromise Impersonation Resistance
-// 5. Hybrid-PQ: Post-Quantum Forward Secrecy (Kyber-1024 KEM)
+```
+-> e
+<- e, ee, s, es
+-> s, se
 ```
 
-### L2: Link Layer — Multi-Path Fabric
+Known limitations, stated because they are properties the previous document
+claimed and did not have:
 
-```go
-type LinkSpec struct {
-    LinkType     LinkType
-    MaxThroughput int64     // bps
-    Latency      time.Duration
-    Reliability  float64   // packet delivery ratio
-    PowerProfile PowerProfile
-    Discovery    DiscoveryMechanism
-}
+- **No handshake replay protection.** A captured msg1/msg2 pair is not
+  rejected by a nonce cache.
+- **All-zero AEAD nonce during the handshake** (`noise.go:320`, `:335`).
+  Tolerable only because `k` rotates per token; this is not the Noise spec's
+  discipline.
+- **No KCI resistance evidence.** No model checker runs in this repository.
 
-var LinkSpecs = map[LinkType]LinkSpec{
-    LinkWiFiStation:   {LinkWiFiStation, 1_000_000_000, 2*time.Millisecond, 0.99, PowerHigh,  DiscoveryMDNS},
-    LinkWiFiDirect:    {LinkWiFiDirect,  500_000_000,  5*time.Millisecond, 0.98, PowerHigh,  DiscoveryWFD},
-    LinkAdhoc:         {LinkAdhoc,       54_000_000,   10*time.Millisecond, 0.95, PowerMedium, DiscoveryAdhoc},
-    LinkUSBTether:     {LinkUSBTether,   480_000_000,  1*time.Millisecond,  1.0,  PowerWired,  DiscoveryUSB},
-    LinkBLE:           {LinkBLE,         2_000_000,    15*time.Millisecond, 0.90, PowerLow,    DiscoveryBLE},
-    LinkAcoustic:      {LinkAcoustic,    1_000,        100*time.Millisecond, 0.85, PowerLow,    DiscoveryAcoustic},
-}
+### 2.2 Hybrid post-quantum handshake
 
-// Multi-Path Aggregation Policies
-type AggregationPolicy int
-const (
-    AggregationFailover AggregationPolicy = iota  // Primary + Hot standby
-    AggregationRoundRobin                         // Round-robin packet distribution
-    AggregationWeightedBW                         // Weighted by measured bandwidth
-    AggregationWeightedLatency                    // Weighted by inverse latency
-    AggregationNetworkCoding                      // RLNC across paths
-    AggregationMPTCP                              // MPTCP subflows
-)
+Enabled with `--hybrid`. Off by default.
+
+```
+msg1 (initiator) = initiator_kyber_pub (1568 B) ‖ Noise "-> e"        (32 B)
+msg2 (responder) = kyber_ct           (1568 B) ‖ Noise "<- e,ee,s,es" (80 B)
+msg3 (initiator) =                            Noise "-> s, se"      (48 B)
+
+session_key = HKDF-SHA3-256( ikm = noiseKey,
+                             salt = kyberSS,
+                             info = "LocalWEB-v2-session" )
 ```
 
-### L3: Discovery — Byzantine-Resilient Orchestration
+Only the initiator's PQ public key crosses the wire. The responder encapsulates
+to it and keeps the shared secret; the initiator decapsulates the responder's
+ciphertext and recovers the same secret. Because the Kyber encapsulation is
+randomised, two handshakes between the same long-term keys yield different
+session keys — asserted by `TestHybridSessionKeyDependsOnKyber`, which fails if
+the KEM stops contributing.
+
+**Scope of the PQ guarantee, stated precisely.** The QUIC/TLS 1.3 record layer
+is what protects traffic in flight, and quic-go owns those keys. The hybrid
+session key is *not* a QUIC record key. It is exposed as
+`Connection.SessionKey()` / `Connection.PeerRecvKey()` so an application layer
+can derive per-service keys from it via
+`HybridKeyDerivation.DeriveTransportKey(sessionKey, context)` — HKDF-SHA3-256
+with the context as domain separation, so a key derived for `files` is not
+usable for `vpn`. Nothing in the repository derives such a key yet. The honest
+claim is: *the post-quantum KEM is correctly wired and its output is verifiably
+part of the session key; it does not yet protect the QUIC record layer.*
+
+### 2.3 Ed25519 identity vs X25519 transport key
+
+The node identity is Ed25519; the Noise handshake is X25519. The daemon
+converts them at startup (`cmd/node/main.go`):
 
 ```go
-// Discovery Orchestrator with Byzantine Fault Tolerance
-type OrchestratorSpec struct {
-    MergeStrategy   string  // "CRDT-based conflict-free merge"
-    ScoringFunction string  // "Bayesian posterior over link metrics"
-    TTLEviction     time.Duration  // 5 min default
-    MaxPeers        int     // 1000 per node
-    ByzantineThreshold float64  // 0.33 (tolerate 33% Byzantine)
-    ScoreWeights    ScoreWeights
-}
-
-type ScoreWeights struct {
-    Freshness   float64  // 0.3
-    Latency     float64  // 0.25
-    RSSI        float64  // 0.2
-    Bandwidth   float64  // 0.15
-    Reliability float64  // 0.1
-}
-
-func ComputeScore(ctx Context, peer PeerInfo, self NodeInfo) float64 {
-    // Bayesian posterior: P(peer_good | observations)
-    prior := 0.5
-    likelihood := ComputeLikelihood(peer, self)
-    return prior * likelihood / (prior*likelihood + (1-prior)*(1-likelihood))
-}
-
-// Byzantine-Resilient Merge
-func ByzantineMerge(views []PeerView, threshold float64) PeerView {
-    // Uses median-of-means for each metric
-    // Discards outliers beyond 1.5 * IQR
-    // Returns consensus view with confidence interval
-}
+transportPub, err := crypto.Ed25519PublicToX25519(pub)
+transportPriv := crypto.Ed25519PrivateToX25519(priv)
 ```
 
-### L4: Security — Formal Capability Model
-
-```go
-// Capability Token (Macaroon-based)
-type CapabilityToken struct {
-    Identifier   []byte              // caveat: identifier
-    Caveats      []Caveat            // attenuation caveats
-    Signature    []byte              // Ed25519 signature
-    Version      uint8               // token version
-}
-
-type Caveat interface {
-    Verify(ctx Context, req Request) bool
-    Encode() []byte
-}
-
-// Caveat Types
-type TimeCaveat struct {
-    NotBefore time.Time
-    NotAfter  time.Time
-}
-
-type ResourceCaveat struct {
-    Resource  string  // e.g., "peers:read", "files:write:/path"
-    Actions   []string // ["read", "write", "delete"]
-}
-
-type PeerCaveat struct {
-    PeerIDs   [][32]byte  // allowed peers
-    Exclude   bool        // deny list vs allow list
-}
-
-type AttenuationCaveat struct {
-    DelegatedFrom []byte  // parent token ID
-    MaxDepth      int     // max delegation depth
-}
-
-// Capability Verification
-func VerifyCapability(token CapabilityToken, ctx Context, req Request) bool {
-    // 1. Verify Ed25519 signature
-    if !Ed25519Verify(token.IssuerPubKey, token.Payload(), token.Signature) {
-        return false
-    }
-    // 2. Check all caveats
-    for _, caveat := range token.Caveats {
-        if !caveat.Verify(ctx, req) {
-            return false
-        }
-    }
-    // 3. Check revocation list (distributed via DHT)
-    if IsRevoked(token.Identifier) {
-        return false
-    }
-    return true
-}
-
-// Post-Quantum Hybrid Key Exchange
-type HybridKeyExchange struct {
-    Classical  *X25519DH   // X25519 ECDH
-    PostQuantum *KyberKEM  // Kyber-1024 KEM
-    KDF         func([]byte, []byte) [32]byte  // HKDF-SHA3-256
-}
-
-// Session Key Derivation
-func DeriveSessionKey(classicalSS, pqSS []byte) [32]byte {
-    // HKDF-SHA3-256(classical_SS || pq_SS, salt="LocalWEB-v2", info="session")
-    return HKDF(SHA3-256, classicalSS, pqSS, []byte("LocalWEB-v2-session"))
-}
-```
+Without this conversion the transport "works" — X25519 accepts any 32 bytes as
+a scalar — but the identity a peer derives from the Noise static key is
+unrelated to the identity the node advertises, so peers cannot match the two.
 
 ---
 
-## 1.4 CRDT Formal Semantics
+## 3. Proof of work
 
-```go
-// CRDT State Machine (TLA+ Verified)
-type CRDTSpec struct {
-    Type      CRDTType
-    State     interface{}
-    Merge     func(a, b State) State
-    Compare   func(a, b State) int  // -1, 0, 1 for causal ordering
-    Delta     func(op Operation) DeltaState
-}
+Two independent, deliberately different schemes. This is a design choice, now
+documented, not an accident.
 
-var CRDTSpecs = map[CRDTType]CRDTSpec{
-    CRDT_ORSet: {
-        Type: CRDT_ORSet,
-        Merge: func(a, b State) State {
-            // Add-wins: (A.add ∪ B.add) \ (A.remove ∪ B.remove)
-            // Tombstone GC after 2*MaxRTT
-        },
-    },
-    CRDT_RGA: {
-        Type: CRDT_RGA,
-        Merge: func(a, b State) State {
-            // Total order via (LamportTS, NodeID) tiebreaker
-            // Insert: find insertion point via total order
-            // Delete: mark tombstone, GC after 2*MaxRTT
-        },
-    },
-    CRDT_MerkleDAG: {
-        Type: CRDT_MerkleDAG,
-        Merge: func(a, b State) State {
-            // Content-addressed merge
-            // Union of DAG nodes
-            // Verify root hash convergence
-        },
-    },
-}
+### 3.1 `pkg/security` — memory-hard, for service-level gating
 
-// Strong Eventual Consistency Theorem
-// Theorem: For any two replicas R1, R2 that have received the same set of updates
-// (possibly in different orders), if they are both in a quiescent state (no pending
-// operations), then State(R1) = State(R2).
-// Proof: By induction on the partial order of operations and commutativity of Merge.
+Purpose: keep spammers from reaching Email/Docs at zero cost.
+
+- `workSeed = Argon2id(challenge, salt, t=1, m=64 MiB, p=1, 32)` — paid **once**
+  per challenge by the solver and **once** by the verifier.
+- A solution is valid when `SHA3-256(workSeed ‖ nonce)` has at least
+  `Difficulty` **leading zero bits**. Work is `2^difficulty` hashes.
+- Difficulty range `[8, 24]`, base 16, default target solve time 100 ms.
+- Replay: a challenge digest is accepted at most once per 5-minute window; the
+  cache is bounded at 1024 entries and evicts oldest-first.
+
+**Why the Argon2id pass is not in the nonce loop.** The previous implementation
+ran Argon2id — 64 MiB, `2^difficulty` iterations — once *per nonce*, and used
+`difficulty` both as the log2 time cost and as a count of leading zero
+*bytes*. At difficulty 3 that is `2^24` iterations of a 64 MiB memory-hard
+function: unreachable in practice. The consequence was not theoretical — the
+package's own test suite could not finish:
+
 ```
+FAIL  github.com/ram1234598766-dotcom/Local-WEB/pkg/security   600.983s
+      panic: test timed out after 10m
+      goroutine: security.SolvePoW at pkg/security/pow.go:93
+```
+
+After the fix the same package runs in 2.4 s.
+
+**DoS control.** A challenge is attacker-controlled data. `clamp()` bounds the
+memory, iteration count and lane count *before* any allocation, so a peer cannot
+make the verifier allocate a terabyte. `TestChallengeCostIsClampedAgainstDoS`
+asserts this against a challenge requesting 1 TiB / 2^20 iterations / 255
+lanes.
+
+### 3.2 `pkg/dht` — bare SHA3-256, for DHT registration
+
+Purpose: make Sybil registration cost CPU. Registration work happens on every
+announcement, so a 64 MiB allocation per announcement would be unusable; this
+uses a plain SHA3-256 search over `pubKey ‖ name ‖ nonce` with difficulty in
+bits, bounded to `[8, 24]`.
+
+The work is GPU-friendly. That is the trade for making announcement cheap, and
+it is stated here rather than implied.
+
+**Enforcement.** `server.go` `handleMessage` verifies the solution *and*
+requires `msg.Src == NodeIDFromPub(pubKey)`, so a node cannot reuse another
+node's published nonce. A failed challenge returns the same `Pong` as a
+successful one, so the responder does not confirm it is a registration oracle.
+Both behaviours are pinned by `TestHandleRegisterNodeRejectsInvalidProofOfWork`.
 
 ---
 
-## 1.5 Security Invariants (Machine-Checkable)
+## 4. L5 — DHT
 
-```go
-// Security Invariants (to be verified by model checker)
-const (
-    // Authentication
-    Invariant_MutualAuth = "∀ handshake: Both parties authenticated"
-    Invariant_ForwardSecrecy = "∀ sessions: Compromise of long-term keys ⇏ past session keys"
-    
-    // Integrity
-    Invariant_AuditChain = "∀ entries: HashChainValid(auditLog)"
-    Invariant_CRDTConvergence = "∀ replicas: SameUpdates ⇒ SameState"
-    
-    // Authorization
-    Invariant_CapabilityIntegrity = "∀ cap: ValidSignature ∧ ¬Revoked ∧ CaveatsSatisfied"
-    Invariant_NoConfusedDeputy = "∀ cap: AttenuationDepth ≤ MaxDepth ∧ ¬ConfusedDeputy"
-    
-    // Availability
-    Invariant_NoSybil = "HonestNodes / TotalNodes > 1/3"
-    Invariant_ChurnResistance = "Join/Leave rate < 10% per minute"
-    
-    // Post-Quantum
-    Invariant_PQ_ForwardSecrecy = "Compromise of X25519 ⇏ Kyber-1024 SS"
-    Invariant_Hybrid_KDF = "SessionKey = HKDF(Classical_SS || PQ_SS)"
-)
+`pkg/dht`. Kademlia, `k = 20`, `α = 3`, max 15 hops.
 
-// Proof Obligations (for verification)
-// 1. Noise-XX: Mutual auth, FS, identity hiding, KCI resistance
-// 2. Hybrid-PQ: IND-CCA2 security of Kyber-1024, composability
-// 3. CRDT: Strong eventual consistency, commutativity of merge
-// 4. DHT: Routing completeness, churn resilience
-// 5. Audit log: Tamper-evidence, append-only, forward integrity
+### 4.1 Routing table
+
 ```
+bucket(id) = buckets[ index of the first set bit in id ]
+```
+
+256 buckets, `k = 20` each. `FindClosest` gathers every peer, sorts **globally**
+by full 256-bit XOR distance, then truncates.
+
+Three defects were fixed here, each with a regression test that fails against
+the old code:
+
+| Defect | Effect | Test |
+|---|---|---|
+| `PrefixLen()` computed `id.Xor(id)` — always zero | Every peer landed in bucket 0; the table filled to 20 then silently rejected the whole network | `TestRoutingTableDistributesPeersAcrossBuckets` — old code: 9 peers → **1 bucket** |
+| `xorDist` truncated 256 bits to the low 64 | Two IDs differing only in leading bytes compared equal; ordering used least-significant bytes | `TestXorDistUsesFullKeyspace` |
+| `FindClosest` concatenated per-bucket results in bucket order | A distant peer in a low bucket could displace a nearer one | `TestFindClosestSortsGlobally` |
+
+Churn resistance is `RoutingTable.PruneStale(ttl)`
+(`TestPruneStaleRemovesDepartedPeers`): without it a bucket full of departed
+nodes rejects every new peer forever. There is still **no bucket split and no
+refresh timer**, so table quality degrades in a large network.
+
+### 4.2 Iterative lookup
+
+Each round queries the α closest unqueried peers, folds responses into a
+shortlist of the `k` closest seen, then re-sorts and prunes. Previously the
+frontier was appended to every hop with no re-sort or prune, so the query set
+grew monotonically and the lookup degenerated into a broadcast.
+
+### 4.3 Not implemented
+
+Bucket refresh/split, recursive lookup, adaptive α, erasure-coded replication.
 
 ---
 
-## 1.6 Data Flow Specifications
+## 5. L7 — CRDT
 
-### Peer Discovery → Connection Flow
+`pkg/crdt`, one file.
 
-```go
-// Formal data flow: Discovery to Connection
-func DiscoveryToConnection(ctx Context, localNode Node) error {
-    // Phase 1: Multi-source Discovery
-    views := []PeerView{}
-    for _, link := range localNode.Links() {
-        if link.IsAvailable() {
-            view, err := link.Discover(ctx)
-            if err != nil { continue }
-            views = append(views, view)
-        }
-    }
-    
-    // Phase 2: Byzantine-Resilient Merge
-    consensusView := ByzantineMerge(views, localNode.ByzantineThreshold())
-    
-    // Phase 3: Scoring & Selection
-    scored := ScorePeers(consensusView, localNode)
-    candidates := FilterByScore(scored, 0.7)  // threshold
-    
-    // Phase 4: Connection Attempt (parallel)
-    for _, candidate := range candidates {
-        go AttemptConnection(ctx, localNode, candidate)
-    }
-    
-    return nil
-}
+| Type | Status | Notes |
+|---|---|---|
+| OR-Set (add-wins, dot-based) | ✅ | `Merge` unions adds and removes |
+| RGA | ⚠️ | Insert-after-parent is correct (`findNode` now resolves the head sentinel, so prepending works). `Merge` appends missing nodes in causal order instead of merging positionally — see FINDINGS |
+| LWW-Register | ⚠️ | Wall-clock timestamp, not a Lamport clock; `Unmarshal` drops `Author` |
+| Merkle tree | ⚠️ | Flat leaf list + root, not a DAG; `DiffMerkle` is O(n) set difference |
+| Delta-CRDT, PN-Counter | ❌ | Absent |
+| Tombstone GC | ❌ | Not implemented; tombstones grow unbounded |
 
-// Connection Attempt with Multi-Path
-func AttemptConnection(ctx Context, localNode Node, peer PeerInfo) error {
-    // Try links in order of quality
-    links := SortLinksByQuality(peer.AvailableLinks)
-    
-    for _, link := range links {
-        conn, err := link.Dial(ctx, peer.Address)
-        if err != nil { continue }
-        
-        // QUIC Handshake with Noise-XX + Hybrid-PQ
-        session, err := quic.Dial(conn, tlsConfig, quicConfig)
-        if err != nil { continue }
-        
-        // Verify peer identity
-        if !VerifyNodeID(session, peer.NodeID) {
-            session.Close()
-            continue
-        }
-        
-        // Register connection
-        localNode.ConnectionManager().Register(peer.NodeID, session)
-        return nil
-    }
-    return ErrNoValidPath
-}
-```
+**On convergence.** There is no two-replica test that applies the same
+operations in *different orders* and asserts identical state — the property the
+previous document called "Strong Eventual Consistency Theorem". OR-Set's merge
+is commutative and associative by construction and is exercised by
+`TestCRDTOperations`; RGA's is not, and writing the RGA convergence test is
+tracked in §8.
 
 ---
 
-## 1.7 Threat Model & Mitigations
+## 6. Data flow: discovery → connection
 
-```go
-// STRIDE Threat Model with Mitigations
-var ThreatModel = map[string]struct{
-    Threat     string
-    Mitigation string
-    Verification string
-}{
-    "Spoofing": {
-        Threat:     "Attacker impersonates legitimate node",
-        Mitigation: "NodeID = SHA3-256(Ed25519_PubKey); verified on every handshake",
-        Verification: "Noise-XX mutual auth + Hybrid-PQ forward secrecy",
-    },
-    "Tampering": {
-        Threat:     "Message modification in transit",
-        Mitigation: "Noise-XX AEAD (XSalsa20Poly1305) + Audit log SHA3-256 hash chain",
-        Verification: "AEAD tag verification + Audit chain verification",
-    },
-    "Repudiation": {
-        Threat:     "Denial of message origination",
-        Mitigation: "Ed25519 signatures on all messages + Capability tokens",
-        Verification: "Non-repudiable signatures + Audit log tamper-evidence",
-    },
-    "InfoDisclosure": {
-        Threat:     "Passive eavesdropping",
-        Mitigation: "All traffic encrypted (Noise-XX + Hybrid-PQ). Metadata minimized.",
-        Verification: "IND-CCA2 security of hybrid KEM + Traffic analysis resistance",
-    },
-    "DoS": {
-        Threat:     "Resource exhaustion, amplification",
-        Mitigation: "PoW challenges, Rate limiting, Circuit breakers, QoS shaping",
-        Verification: "PoW difficulty auto-adjust + Token bucket per peer",
-    },
-    "Elevation": {
-        Threat:     "Unauthorized privilege escalation",
-        Mitigation: "Capability-based access (Macaroons), Attenuation, Revocation",
-        Verification: "Formal capability verification + Revocation list sync",
-    },
-}
 ```
+1. Discover      every available link reports peers it can see
+2. Score         computeScore(freshness, latency, recency) — see L3 caveat
+3. Select        keep peers above the threshold
+4. Dial          for each candidate, in parallel, try links best-first
+5. Handshake     QUIC v1 → Noise XX (→ hybrid XX + Kyber when enabled)
+6. Verify        compare the peer's NodeID against the expected identity
+7. Register      store the Connection and accept its service streams
+```
+
+Step 6 is the security boundary: `Connect` closes the connection with a
+`peer identity mismatch` application error when the authenticated NodeID does
+not equal the one requested (`quic.go` `TestConnectIdentityMismatch`).
 
 ---
 
-## 1.8 Performance Specifications
+## 7. Threat model (STRIDE)
 
-```go
-// Performance SLAs (measured under load)
-var PerformanceSLAs = map[string]struct{
-    Metric string
-    Target string
-    Conditions string
-}{
-    "HandshakeLatency": {
-        Metric:     "Time from SYN to session ready",
-        Target:     "< 100ms (LAN), < 500ms (Internet)",
-        Conditions: "100 concurrent connections",
-    },
-    "StreamThroughput": {
-        Metric:     "Single stream throughput",
-        Target:     "> 100 Mbps (WiFi Direct), > 500 Mbps (USB)",
-        Conditions: "MTU 1500, 0% loss",
-    },
-    "DiscoveryTime": {
-        Metric:     "Time to discover all peers on LAN",
-        Target:     "< 5 seconds",
-        Conditions: "20 nodes, mDNS + BLE",
-    },
-    "FileSync_1GB": {
-        Metric:     "1GB file transfer + verification",
-        Target:     "< 2 minutes (WiFi Direct)",
-        Conditions: "zstd level 3, Merkle DAG sync",
-    },
-    "CRDTConvergence": {
-        Metric:     "Time to converge after concurrent edits",
-        Target:     "< 1 second (LAN)",
-        Conditions: "10 concurrent editors, RGA",
-    },
-    "MemoryFootprint": {
-        Metric:     "Node daemon RSS",
-        Target:     "< 100 MB (idle), < 200 MB (10 peers, 1GB sync)",
-        Conditions: "BadgerDB default cache",
-    },
-    "CPUIdle": {
-        Metric:     "Idle CPU usage",
-        Target:     "< 1% (single core)",
-        Conditions: "No active transfers",
-    },
-}
-```
+| Threat | Mitigation | Status |
+|---|---|---|
+| Spoofing | `NodeID = SHA3-256(Ed25519 pubkey)`, verified on every connection; Noise XX mutual auth | ✅ |
+| Tampering | Noise AEAD per message; SHA3-256 hash-chained audit log | ✅ `TestAuditLogTamperDetection` |
+| Repudiation | Ed25519 signatures; tamper-evident audit chain | ⚠️ audit log is in-memory only and lost on restart |
+| Info disclosure | All traffic over QUIC/TLS 1.3; Noise XX beneath it | ⚠️ TLS cert verification is disabled by default (`InsecureSkipVerify: !enforceTLS`, `quic.go:379`) |
+| DoS | PoW on DHT registration and Email; Argon2 cost clamped to hard caps | ✅ after this pass |
+| Elevation | Capability tokens with expiry and revocation | ⚠️ no caveats, no attenuation, no DHT-distributed revocation |
 
 ---
 
-*LocalWEB Architecture v3.0 | Formal Specification | Module: `github.com/ram1234598766-dotcom/Local-WEB` | Generated: 2025-09-05*
+## 8. Open items
+
+Ranked. Each is a real gap, not a documentation nit.
+
+| # | Item | Severity |
+|---|---|---|
+| 1 | **The daemon starts none of the nine services.** `pkg/services/*` is tested library code; `cmd/node` wires only `Control`. | Critical (feature) |
+| 2 | `/metrics` and `/debug/pprof` do not exist; 0 of the 27 previously documented Prometheus metrics are registered. | Critical (observability) |
+| 3 | TLS certificate verification is off by default. Peer identity is authenticated by Noise XX, so this is defence-in-depth rather than the primary control, but it should be opt-out rather than opt-in. | High |
+| 4 | RGA `Merge` is not a positional CRDT merge; concurrent editors in `pkg/services/docs` can diverge. | High |
+| 5 | Capability tokens are not Macaroons: no caveats, no attenuation, in-memory revocation. | High |
+| 6 | Audit log is in-memory and not persisted, so it does not survive a restart. | High |
+| 7 | DHT has no bucket refresh or split; table quality degrades. | Medium |
+| 8 | BLE, acoustic FSK and Ethernet links are stubs or absent; `BLE.IsAvailable()` returns true unconditionally, so the daemon believes BLE is up. | Medium |
+| 9 | LWW-Register uses wall-clock time, so clock skew breaks convergence. | Medium |
+| 10 | No CRDT tombstone GC. | Medium |
+| 11 | No two-replica different-order convergence test for RGA. | Medium |
+| 12 | Circuit relay and hole punching are implemented but unreachable — no caller. | Medium |
+| 13 | Zero-RTT, datagram frames, congestion-control selection not implemented. | Low |
+
+---
+
+## 9. What this revision corrected
+
+Each item below was a false or broken claim in the previous document, fixed in
+code with a test that fails against the previous behaviour.
+
+| # | Claim | Reality found | Fix | Test that pins it |
+|---|---|---|---|---|
+| 1 | "PoW-V2: Argon2id t=3 m=64MB p=4, difficulty = leading zero bytes" | Unsolvable above difficulty 1; suite timed out at 600 s | Difficulty in bits, Argon2id once per challenge as the seed, SHA3-256 per nonce | `TestSolvePoWMeetsAdvertisedDifficulty`, `TestSolvePoWIsBoundedInTime` |
+| 2 | "PoW rejects below difficulty" (DHT anti-Sybil) | Solved by the client, **never checked** by the server; `MsgRegisterNode` fell through to `default` | Server-side verification + identity binding | `TestHandleRegisterNodeRejectsInvalidProofOfWork` (5 sub-cases) |
+| 3 | Kademlia routing table | `PrefixLen()` XORed the ID with itself → **every peer in bucket 0** | Correct first-set-bit index | `TestRoutingTableDistributesPeersAcrossBuckets` |
+| 4 | Kademlia XOR distance | Truncated to 64 of 256 bits | Full 256-bit comparison | `TestXorDistUsesFullKeyspace` |
+| 5 | "Hybrid PQ: SessionKey = HKDF(Classical ‖ PQ)" | Kyber ran, then `DeriveTransportKey` returned its input unchanged; `SessionKey()` had no callers | Real HKDF with domain separation; session key returned and exposed on `Connection` | `TestDeriveTransportKeySeparatesContexts`, `TestHybridSessionKeyDependsOnKyber` |
+| 6 | "Hybrid PQ protects the session" | Both sides encapsulated to their **own** key, so both decapsulations were implicit-rejected garbage and the sides derived **different** session keys | Initiator's PQ key sent in msg1; responder encapsulates to it | `TestHybridSessionKeyDependsOnKyber` (fails when re-broken) |
+| 7 | "Signed `.localweb` zone; forged records rejected" | `zoneCanonical()` iterated a Go map → non-deterministic pre-image; `Signer`/`Sig` never set, so verification was dead code | Deterministic canonical form covering every field; `SignZone` | `TestZoneCanonicalIsDeterministic`, `TestForgedRecordIsRejected` |
+| 8 | "DHT churn resistance" | No eviction; a full bucket rejected all new peers permanently | `PruneStale` | `TestPruneStaleRemovesDepartedPeers` |
+| 9 | "12 chaos scenarios", reversible injection | 6 scenarios; cleanup loop was empty, so faults were permanent; duplication injected nothing | 6 honest scenarios, reversible fault state, real duplication | `TestChaosFaultsAreReversible`, `TestChaosConnDuplicatesRead` |
+| 10 | `StopAll` stops running scenarios | `cr.running` was only ever deleted from, so `StopAll` iterated an empty set | Register the cancel func on start | `TestStopAllCancelsRunningScenario` |
+| 11 | "Services health" endpoint | Returned all 9 services `true` while the daemon started none | Reports real component state | — (covered by the endpoint change) |
+| 12 | `/api/dns/records` | Panicked on any peer with no addresses | Skip address-less peers; `Verified` now honest | — |
+| 13 | "500+ unit, 25+ integration tests" | 16 integration tests sat in `setup.go`, a **non-test file**, so they never executed | Renamed to `setup_test.go` + `//go:build integration` — 16 tests now run | `test/integration/setup_test.go` |
+| 14 | RGA insert-after-parent | `findNode` skipped the head sentinel, so every `Insert("head", …)` silently became an append | Head sentinel resolves | `TestCRDTPrependViaHeadSentinel` |
+| 15 | Node identity / transport key | Ed25519 bytes fed straight into the X25519 Noise layer | Convert via `Ed25519PublicToX25519` / `Ed25519PrivateToX25519` | `cmd/node/main_test.go` |
+| 16 | systemd `ExecStart=… node --data-dir …` | `flag.Parse()` stops at `node`, so `--data-dir` was **discarded** and the node used the default path | Daemon strips a leading verb; unknown positionals now fail loudly | `TestStripLeadingSubcommandDropsVerbBeforeFlags` |
+| 17 | systemd unit | `Type=notify` with no sd_notify code; `Requires=wintun.service` on Linux; six duplicated keys | `Type=simple`, wintun removed, duplicates collapsed | — |
+| 18 | 27 Prometheus metrics | 0 registered | Documented as absent rather than claimed | — |
+| 19 | 9 pinned WebRTC/eBPF/netlink/wifi deps | All 9 absent from `go.mod` | Documented as absent | — |
+| 20 | "TLA+ Verified", `specs/*.tla` | No `.tla` file in the repo; no model checker configured | Removed; the spec is prose, and §1.2 notes what is *not* formally verified | — |
+
+---
+
+*LocalWEB Architecture — grounded in `go build ./...`, `go vet ./...`,
+`golangci-lint run` (0 issues), `go test ./...` (783 tests),
+`go test -tags=integration ./test/integration/...` (71 tests).*
