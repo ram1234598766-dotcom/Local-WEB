@@ -24,6 +24,7 @@ type Orchestrator struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+	stopped     bool
 }
 
 // DiscoveryMode defines a peer discovery mechanism.
@@ -187,8 +188,14 @@ func (o *Orchestrator) handleEvent(evt PeerEvent) {
 		}
 	}
 
-	// Notify handlers
-	for _, h := range o.handlers {
+	// Notify handlers. The slice is snapshotted under the read lock because
+	// OnPeer appends to it from any goroutine while the event loop is running.
+	o.mu.RLock()
+	handlers := make([]func(PeerEvent), len(o.handlers))
+	copy(handlers, o.handlers)
+	o.mu.RUnlock()
+
+	for _, h := range handlers {
 		h(evt)
 	}
 }
@@ -239,8 +246,17 @@ func (o *Orchestrator) OnPeer(handler func(PeerEvent)) {
 	o.handlers = append(o.handlers, handler)
 }
 
-// Stop halts all discovery operations.
+// Stop halts all discovery operations. Repeated calls are no-ops: the event
+// channel is closed exactly once.
 func (o *Orchestrator) Stop() {
+	o.mu.Lock()
+	if o.stopped {
+		o.mu.Unlock()
+		return
+	}
+	o.stopped = true
+	o.mu.Unlock()
+
 	o.cancel()
 	o.wg.Wait()
 

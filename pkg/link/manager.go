@@ -165,17 +165,17 @@ func (m *Manager) handleEvent(evt PeerEvent) {
 		m.onPeer(evt)
 	}
 
-	// Auto-escalation: BLE peer → try WiFi Direct
+	// Auto-escalation: BLE peer → try WiFi Direct. Still under m.mu, so
+	// tryEscalate must not lock it again.
 	if m.autoEscalate && evt.Peer.LinkMode == ModeBLE {
 		m.tryEscalate(&evt.Peer)
 	}
 }
 
 // tryEscalate attempts to upgrade a BLE connection to WiFi Direct.
+// The caller must hold m.mu: it only reads m.links and the link itself, and
+// taking m.mu again here would self-deadlock the RWMutex handleEvent holds.
 func (m *Manager) tryEscalate(peer *PeerInfo) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	for _, link := range m.links {
 		if link.Mode() == ModeWiFiDirect && link.IsAvailable(m.ctx) {
 			log.Info().

@@ -212,13 +212,25 @@ func TestDefaultChaosSuite(t *testing.T) {
 	}
 }
 
+// newTestChaosConn builds a chaosConn with the given faults. The fault state
+// lives behind a shared pointer so a test (or the runner) can clear it.
+func newTestChaosConn(conn net.Conn, s Scenario) *chaosConn {
+	return &chaosConn{
+		conn: conn,
+		f: &chaosFaults{
+			lossRate:    s.LossRate,
+			latency:     s.Latency,
+			duplicate:   s.Duplicate,
+			partition:   s.Partition,
+			corruptRate: s.CorruptRate,
+		},
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
 func TestChaosConnPartition(t *testing.T) {
 	conn1, _ := net.Pipe()
-	c := &chaosConn{
-		conn:      conn1,
-		partition: true,
-		rng:       nil,
-	}
+	c := newTestChaosConn(conn1, Scenario{Partition: true})
 
 	_, err := c.Read(make([]byte, 10))
 	if err != nil {
@@ -235,13 +247,7 @@ func TestChaosConnLatency(t *testing.T) {
 		conn2.Close()
 	}()
 
-	c := &chaosConn{
-		conn:      conn1,
-		latency:   10 * time.Millisecond,
-		partition: false,
-		lossRate:  0,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
+	c := newTestChaosConn(conn1, Scenario{Latency: 10 * time.Millisecond})
 
 	start := time.Now()
 	_, _ = c.Read(make([]byte, 10))
@@ -253,12 +259,7 @@ func TestChaosConnLatency(t *testing.T) {
 
 func TestChaosConnLoss(t *testing.T) {
 	conn1, _ := net.Pipe()
-	c := &chaosConn{
-		conn:      conn1,
-		lossRate:  1.0, // 100% loss
-		partition: false,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
+	c := newTestChaosConn(conn1, Scenario{LossRate: 1.0}) // 100% loss
 
 	// With 100% loss and no rng, the behavior depends on implementation
 	// This test just ensures no panic
@@ -289,4 +290,143 @@ func TestChaosRunnerStopAll(t *testing.T) {
 	}
 
 	runner.StopAll()
+}
+
+// The cleanup loop used to be empty, so a faulted connection stayed faulted
+// for the rest of the process. Faults must be removable.
+func TestChaosFaultsAreReversible(t *testing.T) {
+	conn1, conn2 := net.Pipe()
+	go func() {
+		_, _ = conn2.Write([]byte("payload"))
+	}()
+
+	c := newTestChaosConn(conn1, Scenario{Partition: true})
+
+	// While partitioned, reads return nothing.
+	buf := make([]byte, 16)
+	if n, _ := c.Read(buf); n != 0 {
+		t.Fatalf("expected a partitioned read to yield nothing, got %d bytes", n)
+	}
+
+	c.f.clear()
+
+	// The wrapper stays installed, but with faults cleared it forwards again.
+	go func() {
+		_, _ = conn2.Write([]byte("payload"))
+	}()
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := c.Read(buf)
+	if err != nil {
+		t.Fatalf("read after clearing faults: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("expected data to flow after faults were cleared")
+	}
+}
+
+func TestChaosFaultsClearResetsEveryField(t *testing.T) {
+	f := &chaosFaults{lossRate: 1, latency: time.Second, duplicate: 3, partition: true, corruptRate: 0.5}
+	f.clear()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lossRate != 0 || f.latency != 0 || f.duplicate != 0 || f.partition || f.corruptRate != 0 {
+		t.Fatalf("clear left fault state behind: loss=%v latency=%v dup=%d partition=%v corrupt=%v",
+			f.lossRate, f.latency, f.duplicate, f.partition, f.corruptRate)
+	}
+}
+
+// The duplication scenario previously decremented a counter and queued
+// nothing, so it injected no duplication at all.
+func TestChaosConnDuplicatesRead(t *testing.T) {
+	conn1, conn2 := net.Pipe()
+	c := newTestChaosConn(conn1, Scenario{Duplicate: 1})
+
+	go func() {
+		_, _ = conn2.Write([]byte("abc"))
+	}()
+
+	buf := make([]byte, 16)
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := c.Read(buf)
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("first read yielded nothing")
+	}
+
+	// The queued duplicate is served without the peer sending anything more.
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err = c.Read(buf)
+	if err != nil {
+		t.Fatalf("replay read: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("expected the read to be replayed as a duplicate")
+	}
+}
+
+// StopAll could never work: the running map was only ever deleted from, so
+// there was never a cancel func to call.
+func TestStopAllCancelsRunningScenario(t *testing.T) {
+	pm := newMockPeerManager()
+	runner := NewChaosRunner(pm, nil)
+	pm.peers["peer1"], _ = net.Pipe()
+
+	runner.AddScenario(ScenarioPartition(30 * time.Second))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = runner.RunScenario(context.Background(), "partition")
+	}()
+
+	// Wait for the scenario to register itself as running.
+	deadline := time.Now().Add(3 * time.Second)
+	registered := false
+	for time.Now().Before(deadline) {
+		runner.mu.RLock()
+		n := len(runner.running)
+		runner.mu.RUnlock()
+		if n > 0 {
+			registered = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !registered {
+		t.Fatal("scenario never registered as running, so StopAll could never stop it")
+	}
+
+	runner.StopAll()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll did not stop the running scenario")
+	}
+}
+
+// A scenario stopped early did not run for its duration, so it must not be
+// reported as passed.
+func TestStoppedScenarioIsNotPassed(t *testing.T) {
+	pm := newMockPeerManager()
+	runner := NewChaosRunner(pm, nil)
+	pm.peers["peer1"], _ = net.Pipe()
+
+	runner.AddScenario(ScenarioPartition(30 * time.Second))
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		runner.StopAll()
+	}()
+	_ = runner.RunScenario(context.Background(), "partition")
+
+	results := runner.GetResults()
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Passed {
+		t.Fatal("a scenario stopped before its duration must not report Passed")
+	}
 }

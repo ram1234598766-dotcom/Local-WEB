@@ -140,6 +140,16 @@ func (cr *ChaosRunner) runScenario(ctx context.Context, s Scenario) error {
 	ctx, cancel := context.WithTimeout(ctx, s.Duration)
 	defer cancel()
 
+	// Register the cancel func so StopAll can actually stop this scenario.
+	// Without this the running map was only ever deleted from, so StopAll
+	// iterated an empty set and was a no-op.
+	cr.mu.Lock()
+	if cr.running == nil {
+		cr.running = make(map[string]context.CancelFunc)
+	}
+	cr.running[s.Name] = cancel
+	cr.mu.Unlock()
+
 	result := ScenarioResult{
 		Scenario:  s,
 		StartTime: time.Now(),
@@ -152,6 +162,7 @@ func (cr *ChaosRunner) runScenario(ctx context.Context, s Scenario) error {
 	peers := cr.peerManager.GetPeers()
 	targetPeers := cr.filterPeers(peers, s.TargetPeers)
 
+	injected := make([]*chaosConn, 0, len(targetPeers))
 	for _, peer := range targetPeers {
 		conn := cr.peerManager.GetConn(peer)
 		if conn == nil {
@@ -160,6 +171,9 @@ func (cr *ChaosRunner) runScenario(ctx context.Context, s Scenario) error {
 		}
 
 		wrapped := cr.wrapConn(conn, s)
+		if cc, ok := wrapped.(*chaosConn); ok {
+			injected = append(injected, cc)
+		}
 		if err := cr.peerManager.WrapConn(peer, func(_ net.Conn) net.Conn {
 			return wrapped
 		}); err != nil {
@@ -171,13 +185,20 @@ func (cr *ChaosRunner) runScenario(ctx context.Context, s Scenario) error {
 	select {
 	case <-ctx.Done():
 		result.EndTime = time.Now()
-		result.Passed = ctx.Err() == context.DeadlineExceeded
+		// A scenario passes when it ran for its full duration and nothing
+		// errored while doing so. Stopping it early via StopAll does not
+		// count, which is what context.Canceled signals here.
+		result.Passed = ctx.Err() == context.DeadlineExceeded && len(result.Errors) == 0
 	}
 
-	// Cleanup: remove wrappers
-	for range targetPeers {
-		// In real implementation, would restore original connection
+	// Remove the injected faults so the connection forwards normally again.
+	// The wrapper stays installed (PeerManager has no unwrap), but with its
+	// fault state cleared it is transparent. Previously the cleanup loop was
+	// empty, so a faulted connection stayed faulted for the process lifetime.
+	for _, cc := range injected {
+		cc.f.clear()
 	}
+	result.Metrics["injected"] = len(injected)
 
 	cr.mu.Lock()
 	delete(cr.running, s.Name)
@@ -211,44 +232,93 @@ func (cr *ChaosRunner) filterPeers(peers []string, targets []string) []string {
 	return filtered
 }
 
-// wrapConn wraps a connection with chaos behavior.
+// wrapConn wraps a connection with chaos behavior. The returned conn carries
+// the shared fault state so the runner can clear it when the scenario ends.
 func (cr *ChaosRunner) wrapConn(conn net.Conn, s Scenario) net.Conn {
 	return &chaosConn{
-		conn:        conn,
-		lossRate:    s.LossRate,
-		latency:     s.Latency,
-		duplicate:   s.Duplicate,
-		partition:   s.Partition,
-		corruptRate: s.CorruptRate,
-		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		conn: conn,
+		f: &chaosFaults{
+			lossRate:    s.LossRate,
+			latency:     s.Latency,
+			duplicate:   s.Duplicate,
+			partition:   s.Partition,
+			corruptRate: s.CorruptRate,
+		},
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-// chaosConn wraps a net.Conn with chaos behavior.
-type chaosConn struct {
-	conn        net.Conn
+// chaosFaults is the mutable fault state shared by a chaosConn with the runner
+// that created it.
+//
+// Keeping it behind a pointer is what makes injection reversible: the wrapper
+// stays installed on the connection (the PeerManager interface has no unwrap),
+// but clearing these fields restores normal forwarding. The previous version
+// left a faulted connection faulted for the rest of the process.
+type chaosFaults struct {
+	mu          sync.Mutex
 	lossRate    float64
 	latency     time.Duration
 	duplicate   int
 	partition   bool
 	corruptRate float64
-	rng         *rand.Rand
-	mu          sync.Mutex
+}
+
+func (f *chaosFaults) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lossRate = 0
+	f.latency = 0
+	f.duplicate = 0
+	f.partition = false
+	f.corruptRate = 0
+}
+
+// snapshot reads the current fault settings and consumes one pending
+// duplicate instruction, if any.
+func (f *chaosFaults) snapshot() (loss, corrupt float64, latency time.Duration, partition bool, duplicate bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	dup := f.duplicate > 0
+	if dup {
+		f.duplicate--
+	}
+	return f.lossRate, f.corruptRate, f.latency, f.partition, dup
+}
+
+// chaosConn wraps a net.Conn with chaos behavior.
+type chaosConn struct {
+	conn net.Conn
+	f    *chaosFaults
+	// pending holds a copy of the last read so a duplication instruction
+	// can replay it on the following Read.
+	pending []byte
+	rng     *rand.Rand
 }
 
 func (c *chaosConn) Read(b []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if c.rng == nil {
+		return c.conn.Read(b)
+	}
 
-	if c.partition {
+	lossRate, corruptRate, latency, partition, duplicate := c.f.snapshot()
+
+	if partition {
 		return 0, nil
 	}
-
-	if c.latency > 0 {
-		time.Sleep(c.latency)
+	if latency > 0 {
+		time.Sleep(latency)
 	}
-
-	if c.rng.Float64() < c.lossRate {
+	// Serve a replayed copy first if one is queued.
+	if len(c.pending) > 0 {
+		n := copy(b, c.pending)
+		c.pending = c.pending[n:]
+		if len(c.pending) == 0 {
+			c.pending = nil
+		}
+		return n, nil
+	}
+	if c.rng.Float64() < lossRate {
 		return 0, nil
 	}
 
@@ -258,34 +328,36 @@ func (c *chaosConn) Read(b []byte) (int, error) {
 	}
 
 	// Corrupt data
-	if c.rng.Float64() < c.corruptRate && n > 0 {
+	if c.rng.Float64() < corruptRate && n > 0 {
 		idx := c.rng.Intn(n)
 		b[idx] ^= 0xFF
 	}
 
-	// Duplicate
-	if c.duplicate > 0 {
-		// In real implementation, would queue for next read
-		c.duplicate--
+	// Queue a duplicate of what was just read, to be replayed on the next
+	// Read. Previously the counter was decremented and nothing was queued,
+	// so the duplication scenario injected no duplication at all.
+	if duplicate && n > 0 {
+		c.pending = append([]byte(nil), b[:n]...)
 	}
 
 	return n, err
 }
 
 func (c *chaosConn) Write(b []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.partition {
-		return 0, nil
+	if c.rng == nil {
+		return c.conn.Write(b)
 	}
 
-	if c.rng.Float64() < c.lossRate {
+	lossRate, _, latency, partition, _ := c.f.snapshot()
+
+	if partition {
 		return 0, nil
 	}
-
-	if c.latency > 0 {
-		time.Sleep(c.latency)
+	if c.rng.Float64() < lossRate {
+		return 0, nil
+	}
+	if latency > 0 {
+		time.Sleep(latency)
 	}
 
 	return c.conn.Write(b)

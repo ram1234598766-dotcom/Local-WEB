@@ -313,15 +313,43 @@ func (a *NodeAPI) DNSRecords() ([]DNSRecordResponse, error) {
 	}
 	out := make([]DNSRecordResponse, 0, len(peers))
 	for _, p := range peers {
+		// A peer with no addresses has no A record to publish. Selecting
+		// Addrs[0] unconditionally would panic on any such peer.
+		if len(p.Addrs) == 0 {
+			continue
+		}
 		out = append(out, DNSRecordResponse{
-			Name:     p.Name + ".localweb",
-			Type:     "A",
-			Value:    p.Addrs[0],
-			TTL:      4500,
-			Verified: true,
+			Name:  p.Name + ".localweb",
+			Type:  "A",
+			Value: p.Addrs[0],
+			TTL:   4500,
+			// These records are synthesised from the peer store, not read out
+			// of a signed DNS zone, so they are not DNSSEC-verified.
+			Verified: false,
 		})
 	}
 	return out, nil
+}
+
+// ServiceHealth reports the liveness of each component the daemon actually
+// starts. The nine protocol services are listed explicitly and reported as
+// down unless the daemon registers them, because reporting them as healthy
+// while nothing is listening is worse than reporting nothing.
+func (a *NodeAPI) ServiceHealth() map[string]bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	health := map[string]bool{
+		"store":     a.store != nil,
+		"peerStore": a.peerStore != nil,
+		"discovery": a.discovery != nil,
+		"audit":     a.auditLog != nil,
+		"gui":       true,
+	}
+	for _, svc := range []string{"dns", "http", "email", "messaging", "files", "docs", "registry", "voice", "vpn"} {
+		health[svc] = false
+	}
+	return health
 }
 
 func (a *NodeAPI) HTTPSites() ([]HTTPSiteResponse, error) {

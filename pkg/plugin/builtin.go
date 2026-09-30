@@ -3,12 +3,17 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
+
+// echoAddr is the fixed address the echo plugin's HTTP server binds.
+const echoAddr = ":8081"
 
 // ExampleEchoPlugin is a simple example plugin that provides an echo service.
 type ExampleEchoPlugin struct {
@@ -62,16 +67,24 @@ func (p *ExampleEchoPlugin) init(ctx context.Context, host Host) error {
 func (p *ExampleEchoPlugin) start() error {
 	host := p.host
 	router := host.HTTPRouter()
+
+	// Bind before returning: a failure here has to reach the caller, otherwise
+	// the manager records the plugin as running while nothing is listening.
+	ln, err := net.Listen("tcp", echoAddr)
+	if err != nil {
+		return fmt.Errorf("echo plugin: bind %s: %w", echoAddr, err)
+	}
+
 	p.server = &http.Server{
-		Addr:    ":8081",
+		Addr:    ln.Addr().String(),
 		Handler: router,
 	}
 	go func() {
-		if err := p.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := p.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			host.Logger().Error().Err(err).Msg("echo server error")
 		}
 	}()
-	host.Logger().Info().Msg("echo plugin started on :8081")
+	host.Logger().Info().Str("addr", echoAddr).Msg("echo plugin started")
 	return nil
 }
 

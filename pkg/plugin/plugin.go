@@ -288,10 +288,13 @@ func (pm *PluginManager) RegisterPlugin(p Plugin, config json.RawMessage) error 
 
 // StartPlugin starts a registered plugin.
 func (pm *PluginManager) StartPlugin(name string) error {
+	// The status check, Plugin.Start and the status write form one critical
+	// section: releasing the lock in between lets two concurrent callers both
+	// see a stopped plugin and start it twice.
 	pm.mu.Lock()
-	instance, exists := pm.plugins[name]
-	pm.mu.Unlock()
+	defer pm.mu.Unlock()
 
+	instance, exists := pm.plugins[name]
 	if !exists {
 		return fmt.Errorf("plugin %s not found", name)
 	}
@@ -323,10 +326,12 @@ func (pm *PluginManager) StartPlugin(name string) error {
 
 // StopPlugin stops a running plugin.
 func (pm *PluginManager) StopPlugin(name string) error {
+	// Same critical section as StartPlugin: Plugin.Stop must not overlap with a
+	// status read or write from another lifecycle call.
 	pm.mu.Lock()
-	instance, exists := pm.plugins[name]
-	pm.mu.Unlock()
+	defer pm.mu.Unlock()
 
+	instance, exists := pm.plugins[name]
 	if !exists {
 		return fmt.Errorf("plugin %s not found", name)
 	}

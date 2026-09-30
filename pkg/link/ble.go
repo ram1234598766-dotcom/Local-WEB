@@ -264,9 +264,10 @@ func (b *BLE) buildAdvertData() []byte {
 	// Flags
 	data = append(data, 0x02, 0x01, 0x06) // LE General Discoverable + BR/EDR Not Supported
 
-	// Service UUID (128-bit)
-	svcUUID := make([]byte, 17)
-	svcUUID[0] = 16   // length
+	// Service UUID (128-bit). The length byte counts the type byte plus the
+	// 16 UUID bytes, so the element is 18 bytes in total.
+	svcUUID := make([]byte, 18)
+	svcUUID[0] = 17   // length
 	svcUUID[1] = 0x07 // Complete List of 128-bit Service UUIDs
 	copy(svcUUID[2:], LocalWEBServiceUUID[:])
 	data = append(data, svcUUID...)

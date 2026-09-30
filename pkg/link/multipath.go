@@ -77,7 +77,10 @@ type MultiPathConfig struct {
 	Links       []Link
 	Preferences []LinkMode
 	Configs     map[LinkMode]LinkConfig
-	Aggregation AggregationMode
+	// Aggregation selects the strategy; nil means unset and falls back to
+	// AggregationBandwidth. It is a pointer because AggregationFailover is 0,
+	// so a plain field cannot tell "unset" from "failover".
+	Aggregation *AggregationMode
 	OnPeer      func(PeerEvent)
 	MaxLinks    int // Maximum concurrent links per peer
 }
@@ -92,8 +95,9 @@ func NewMultiPathManager(cfg MultiPathConfig) *MultiPathManager {
 	if cfg.Configs == nil {
 		cfg.Configs = DefaultLinkConfigs()
 	}
-	if cfg.Aggregation == 0 {
-		cfg.Aggregation = AggregationBandwidth
+	aggregation := AggregationBandwidth
+	if cfg.Aggregation != nil {
+		aggregation = *cfg.Aggregation
 	}
 	if cfg.MaxLinks == 0 {
 		cfg.MaxLinks = 3
@@ -108,7 +112,7 @@ func NewMultiPathManager(cfg MultiPathConfig) *MultiPathManager {
 		ctx:         ctx,
 		cancel:      cancel,
 		onPeer:      cfg.OnPeer,
-		aggregation: cfg.Aggregation,
+		aggregation: aggregation,
 	}
 
 	return m
@@ -208,9 +212,16 @@ func (m *MultiPathManager) handleEvent(evt PeerEvent) {
 			conn.Latency = evt.Peer.Latency
 			conn.LastUpdate = time.Now()
 		} else if len(existing.connections) < 3 { // MaxLinks
+			// A sighting with no address cannot be dialled, so record the
+			// connection with an empty address rather than indexing a slice that
+			// may be empty.
+			peerAddr := ""
+			if len(evt.Peer.Addrs) > 0 {
+				peerAddr = evt.Peer.Addrs[0]
+			}
 			existing.connections[linkMode] = &LinkConnection{
 				Link:        m.linkForMode(linkMode),
-				PeerAddr:    evt.Peer.Addrs[0],
+				PeerAddr:    peerAddr,
 				Established: time.Now(),
 				Active:      true,
 				Latency:     evt.Peer.Latency,
@@ -233,9 +244,12 @@ func (m *MultiPathManager) handleEvent(evt PeerEvent) {
 			if conn, ok := pls.connections[evt.Peer.LinkMode]; ok {
 				conn.Active = false
 				pls.updatePrimary(m.aggregation)
-				pls.updateStats()
 			}
 			pls.mu.Unlock()
+
+			// updateStats takes pls.mu itself, so it must run outside the
+			// critical section above.
+			pls.updateStats()
 
 			// If no active connections, remove peer entirely
 			if len(pls.activeConnections()) == 0 {
@@ -288,6 +302,21 @@ func (pls *PeerLinkSet) updatePrimary(mode AggregationMode) {
 		return
 	}
 
+	// A connection can exist without a Link behind it when a discovery event
+	// names a mode no link was registered for, and such a connection cannot
+	// carry traffic, so it is not a candidate for primary.
+	candidates := make([]*LinkConnection, 0, len(conns))
+	for _, c := range conns {
+		if c.Link != nil {
+			candidates = append(candidates, c)
+		}
+	}
+	if len(candidates) == 0 {
+		// ModeNone rather than the zero value, which is wifi-station.
+		pls.primary = ModeNone
+		return
+	}
+
 	var best *LinkConnection
 	switch mode {
 	case AggregationFailover:
@@ -297,7 +326,7 @@ func (pls *PeerLinkSet) updatePrimary(mode AggregationMode) {
 				return
 			}
 		}
-		best = conns[0]
+		best = candidates[0]
 
 	case AggregationRoundRobin:
 		// Rotate primary
@@ -313,14 +342,14 @@ func (pls *PeerLinkSet) updatePrimary(mode AggregationMode) {
 				}
 			}
 		}
-		if best == nil {
-			best = conns[0]
+		if best == nil || best.Link == nil {
+			best = candidates[0]
 		}
 
 	case AggregationBandwidth:
 		// Highest bandwidth (estimated from latency)
-		best = conns[0]
-		for _, c := range conns[1:] {
+		best = candidates[0]
+		for _, c := range candidates[1:] {
 			if c.Latency < best.Latency {
 				best = c
 			}
@@ -328,15 +357,17 @@ func (pls *PeerLinkSet) updatePrimary(mode AggregationMode) {
 
 	case AggregationLatency:
 		// Lowest latency
-		best = conns[0]
-		for _, c := range conns[1:] {
+		best = candidates[0]
+		for _, c := range candidates[1:] {
 			if c.Latency < best.Latency {
 				best = c
 			}
 		}
 	}
 
-	if best != nil {
+	// Round-robin rotates over every recorded mode, so the successor can still
+	// be a connection without a Link behind it.
+	if best != nil && best.Link != nil {
 		pls.primary = best.Link.Mode()
 	}
 }
@@ -383,6 +414,11 @@ func (m *MultiPathManager) ConnectToPeer(ctx context.Context, peer *PeerInfo) (m
 		}
 		// Establish connection if not already connected
 		if conn.Conn == nil {
+			if conn.Link == nil {
+				// No Link is registered for this mode, so it cannot be dialled.
+				log.Warn().Str("link", mode.String()).Msg("no link registered for this mode")
+				continue
+			}
 			var err error
 			conn.Conn, err = conn.Link.Connect(ctx, conn.PeerAddr)
 			if err != nil {

@@ -126,10 +126,14 @@ func (db *PeerDatabase) GC(timeout time.Duration) int {
 	return before - len(db.peers)
 }
 
-// BestPeers returns the top N peers by score.
+// BestPeers returns the top N peers by score. A non-positive N returns nothing.
 func (db *PeerDatabase) BestPeers(n int) []*PeerInfo {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+
+	if n <= 0 {
+		return []*PeerInfo{}
+	}
 
 	all := make([]*PeerInfo, 0, len(db.peers))
 	for _, p := range db.peers {

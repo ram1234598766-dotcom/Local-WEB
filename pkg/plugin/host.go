@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
@@ -62,7 +64,10 @@ func NewNodeHost(
 		plugins:    make(map[string]Plugin),
 		config:     make(map[string]json.RawMessage),
 		eventBus:   make(chan PluginEvent, 64),
-		logger:     zerolog.DefaultContextLogger,
+		// The process-wide logger: zerolog.DefaultContextLogger is a nil
+		// *zerolog.Logger until something assigns it, and every level call on a
+		// nil one panics, which would take down Plugin.Init in every built-in.
+		logger: &log.Logger,
 	}
 }
 
@@ -287,7 +292,67 @@ func (rw *routerWrapper) HandleFunc(path string, handler func(http.ResponseWrite
 }
 
 func (rw *routerWrapper) Group(prefix string) HTTPRouter {
-	return &routerWrapper{mux: http.NewServeMux()}
+	return mountGroup(rw.mux, prefix)
+}
+
+// groupRouter is a sub-router mounted under a path prefix on its parent. Requests
+// arriving through the parent still carry the prefix, so it is stripped before the
+// sub-mux sees them; a request that arrives without it is passed through unchanged
+// so a group also serves its own routes when handed to a server directly.
+type groupRouter struct {
+	mux    *http.ServeMux
+	prefix string
+}
+
+// mountGroup builds a sub-router for prefix and mounts it on parent under that
+// prefix. Both the bare prefix and its subtree are registered so /api and
+// /api/x both reach the group.
+func mountGroup(parent *http.ServeMux, prefix string) HTTPRouter {
+	mount := strings.TrimSuffix(prefix, "/")
+	group := &groupRouter{mux: http.NewServeMux(), prefix: mount}
+	if mount == "" {
+		return group
+	}
+	parent.Handle(mount, group)
+	parent.Handle(mount+"/", group)
+	return group
+}
+
+func (gr *groupRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	stripped, ok := gr.strip(r.URL.Path)
+	if !ok {
+		gr.mux.ServeHTTP(w, r)
+		return
+	}
+	sub := r.Clone(r.Context())
+	sub.URL.Path = stripped
+	// RawPath only carries information when it differs from Path; clearing it
+	// makes EscapedPath re-derive from the stripped path.
+	sub.URL.RawPath = ""
+	gr.mux.ServeHTTP(w, sub)
+}
+
+// strip removes the group prefix from path, reporting whether it was present.
+func (gr *groupRouter) strip(path string) (string, bool) {
+	if path == gr.prefix {
+		return "/", true
+	}
+	if rest, ok := strings.CutPrefix(path, gr.prefix+"/"); ok {
+		return "/" + rest, true
+	}
+	return "", false
+}
+
+func (gr *groupRouter) Handle(path string, handler http.Handler) {
+	gr.mux.Handle(path, handler)
+}
+
+func (gr *groupRouter) HandleFunc(path string, handler func(http.ResponseWriter, *http.Request)) {
+	gr.mux.HandleFunc(path, handler)
+}
+
+func (gr *groupRouter) Group(prefix string) HTTPRouter {
+	return mountGroup(gr.mux, prefix)
 }
 
 type loggerWrapper struct {

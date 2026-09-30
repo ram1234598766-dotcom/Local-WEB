@@ -155,17 +155,7 @@ func (h *Handler) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleServicesHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"services": map[string]bool{
-			"dns":       true,
-			"http":      true,
-			"email":     true,
-			"messaging": true,
-			"files":     true,
-			"docs":      true,
-			"registry":  true,
-			"voice":     true,
-			"vpn":       true,
-		},
+		"services": h.api.ServiceHealth(),
 	})
 }
 

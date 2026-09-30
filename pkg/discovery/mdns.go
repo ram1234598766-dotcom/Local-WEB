@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -93,8 +94,13 @@ func (m *MDNSDiscovery) Advertise(info PeerInfo) error {
 	return err
 }
 
+// Stop closes the multicast socket and cancels the announce loop. It is safe to
+// call when Start was never reached or returned an error, and safe to call more
+// than once: the orchestrator tears down every mode unconditionally.
 func (m *MDNSDiscovery) Stop() error {
-	m.cancel()
+	if m.cancel != nil {
+		m.cancel()
+	}
 	if m.conn != nil {
 		m.conn.Close()
 	}
@@ -150,10 +156,12 @@ func (m *MDNSDiscovery) buildAnnounce(info PeerInfo) []byte {
 	binary.BigEndian.PutUint16(header[0:2], uint16(time.Now().UnixNano()%65535)) // Transaction ID
 	binary.BigEndian.PutUint16(header[2:4], 0x8400)                              // Flags: response, authoritative
 	binary.BigEndian.PutUint16(header[4:6], 0)                                   // Questions
-	binary.BigEndian.PutUint16(header[6:8], 3)                                   // Answers: SRV + A + TXT
+	binary.BigEndian.PutUint16(header[6:8], 0)                                   // Answers: patched below
 	binary.BigEndian.PutUint16(header[8:10], 0)                                  // Authority
 	binary.BigEndian.PutUint16(header[10:12], 0)                                 // Additional
 	pkt = append(pkt, header...)
+
+	answers := 0
 
 	// Answer 1: SRV record
 	srvName := encodeDNSName(serviceType)
@@ -163,18 +171,26 @@ func (m *MDNSDiscovery) buildAnnounce(info PeerInfo) []byte {
 	binary.BigEndian.PutUint16(srvData[4:6], 4443) // Port
 	srvData = append(srvData, encodeDNSName(info.Name+".local")...)
 	pkt = appendDNSAnswer(pkt, srvName, 33, mdnsTTL, srvData) // Type SRV
+	answers++
 
-	// Answer 2: A record
+	// Answer 2: A record. Only an IPv4 address produces one, so the count is
+	// incremented here rather than assumed above.
 	aName := encodeDNSName(info.Name + ".local")
-	ip := net.ParseIP(info.Addrs[0])
-	if ip4 := ip.To4(); ip4 != nil {
-		pkt = appendDNSAnswer(pkt, aName, 1, mdnsTTL, ip4) // Type A
+	if len(info.Addrs) > 0 {
+		ip := net.ParseIP(info.Addrs[0])
+		if ip4 := ip.To4(); ip4 != nil {
+			pkt = appendDNSAnswer(pkt, aName, 1, mdnsTTL, ip4) // Type A
+			answers++
+		}
 	}
 
 	// Answer 3: TXT record
 	txtName := encodeDNSName(info.Name + ".local")
 	txtData := buildTXTRecord(info)
 	pkt = appendDNSAnswer(pkt, txtName, 16, mdnsTTL, txtData) // Type TXT
+	answers++
+
+	binary.BigEndian.PutUint16(pkt[6:8], uint16(answers))
 
 	return pkt
 }
@@ -250,6 +266,14 @@ func (m *MDNSDiscovery) parseMDNSResponse(data []byte, src *net.UDPAddr) *PeerIn
 		// recClass := binary.BigEndian.Uint16(data[nameEnd+2 : nameEnd+4])
 		recTTL := binary.BigEndian.Uint32(data[nameEnd+4 : nameEnd+8])
 		rdLen := int(binary.BigEndian.Uint16(data[nameEnd+8 : nameEnd+10]))
+
+		// rdLen is attacker controlled: the buffer comes straight off the wire,
+		// so a truncated or hostile packet would slice out of range here. A bogus
+		// rdLen also makes the next record boundary unknowable, so stop instead
+		// of guessing.
+		if rdLen < 0 || nameEnd+10+rdLen > len(data) {
+			break
+		}
 		rdData := data[nameEnd+10 : nameEnd+10+rdLen]
 
 		offset = nameEnd + 10 + rdLen
@@ -266,7 +290,12 @@ func (m *MDNSDiscovery) parseMDNSResponse(data []byte, src *net.UDPAddr) *PeerIn
 				peer.Addrs = []string{fmt.Sprintf("%s:4443", ip.String())}
 			}
 		case 16: // TXT
-			peer.Services = parseTXTRecord(rdData)
+			// A response may split the advertisement over several TXT records,
+			// so union them rather than letting the last one win.
+			peer.Services = append(peer.Services, parseTXTRecord(rdData)...)
+			if idHex := parseTXTValue(rdData, "id"); idHex != "" {
+				peer.ID = peerIDFromHex(idHex)
+			}
 		case 28: // AAAA
 			if rdLen == 16 {
 				ip := net.IP(rdData)
@@ -329,7 +358,13 @@ func skipDNSName(data []byte, offset int) int {
 			return offset
 		}
 		if length&0xC0 == 0xC0 {
+			if offset >= len(data) {
+				return len(data)
+			}
 			return offset + 1 // Compression pointer
+		}
+		if length > len(data)-offset {
+			return len(data) // Truncated label: never step past the buffer
 		}
 		offset += length
 	}
@@ -350,11 +385,14 @@ func appendDNSAnswer(pkt []byte, name []byte, recType uint16, ttl uint32, data [
 
 func buildTXTRecord(info PeerInfo) []byte {
 	var data []byte
-	data = append(data, 13) // Length
-	data = append(data, []byte(fmt.Sprintf("id=%x", info.ID[:8]))...)
 
-	data = append(data, 4) // Length
-	data = append(data, []byte("ver=1")...)
+	idEntry := []byte(fmt.Sprintf("id=%x", info.ID[:8]))
+	data = append(data, byte(len(idEntry))) // Length must match the bytes below
+	data = append(data, idEntry...)
+
+	verEntry := []byte("ver=1")
+	data = append(data, byte(len(verEntry)))
+	data = append(data, verEntry...)
 
 	if len(info.Services) > 0 {
 		svcs := ""
@@ -394,6 +432,39 @@ func parseTXTRecord(data []byte) []ServiceInfo {
 	}
 
 	return services
+}
+
+// parseTXTValue returns the value of key inside a TXT record, or "" when the
+// key is absent or the record is malformed.
+func parseTXTValue(data []byte, key string) string {
+	prefix := key + "="
+	for offset := 0; offset < len(data); {
+		length := int(data[offset])
+		offset++
+		if offset+length > len(data) {
+			return ""
+		}
+		entry := string(data[offset : offset+length])
+		offset += length
+
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
+// peerIDFromHex decodes the hex identity prefix advertised in a TXT record. A
+// malformed or oversized value yields the zero identity rather than an error,
+// because the parser has no channel to report one on.
+func peerIDFromHex(s string) [32]byte {
+	var id [32]byte
+	raw, err := hex.DecodeString(s)
+	if err != nil || len(raw) == 0 || len(raw) > len(id) {
+		return id
+	}
+	copy(id[:], raw)
+	return id
 }
 
 func (m *MDNSDiscovery) getLocalAddr() string {
