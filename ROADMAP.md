@@ -255,5 +255,5 @@ See `CONTRIBUTING.md` for:
 
 ---
 
-*Last updated: $(date)*
-*Current commit: $(git rev-parse --short HEAD)*
+*Last updated: 2026-10-01*
+*Canonical roadmap: [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md) records measured state; this file holds the aspirational Phase 6-11 plan.*

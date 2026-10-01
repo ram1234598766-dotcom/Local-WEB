@@ -8,13 +8,27 @@
 *.so
 *.dylib
 
-# Windows installer build output. `make msi` / `make nsis` write here; the
-# .wixpdb is WiX's debug symbol file. Both are re-created by the build.
+# Linux/Android packages. These were previously committed (six copies across
+# dist/ and installers/windows/, plus a 0-byte one under pkg/) and bloated every
+# clone. `nfpm package` and goreleaser regenerate them from bin/, and CI builds
+# its own into dist/ and uploads them as workflow artifacts.
+*.deb
+*.rpm
+*.apk
+
+# Release output directory. Built by `make msi` / `make nsis`, and written by CI.
+# Staged documentation copies under dist/ were also committed by mistake.
+/dist/
+
+# WiX installer output. Normally lands under dist/, but listed explicitly so a
+# build to a different output directory still cannot commit an installer.
 *.msi
 *.wixpdb
 *.wixobj
-# staging directory used by scripts/build-msi.sh and build-nsis.sh
-/dist/.stage/
+
+# Third-party driver archives. Wintun is fetched and SHA-256 verified by
+# scripts/fetch-wintun.sh rather than committed.
+/installers/windows/wintun.zip
 
 # Test artifacts
 coverage.out

@@ -54,13 +54,10 @@ govulncheck ./...
   actually declares — if it doesn't match the real repo URL, `go get`/
   `go install` silently fails for anyone outside the original dev machine.
   Fix the mismatch (module path or docs, whichever is wrong).
-- **No `LICENSE` file** — the README states "MIT" three times but there is
-  no license file in the repo. A README claim is not a grant; add the file.
-- **No `.github/workflows/`** — zero CI currently runs on this repo. Nothing
-  here should be called "production-ready" without CI proving it stays that
-  way on every push.
-- **No `SECURITY.md`, no standalone `CONTRIBUTING.md`** — the README embeds
-  a short contributing note but there's no real doc for either.
+  - **Hygiene items, now resolved** — do not re-report these as gaps:
+    `LICENSE` (MIT) exists, `.github/workflows/ci.yml` runs build/vet/lint/test
+    on every push, and both `SECURITY.md` and `CONTRIBUTING.md` exist. Verify
+    before claiming otherwise; the findings below were written when they did not.
 
 ### Per-layer audit
 For each layer: check the stated properties, run or write the minimum test

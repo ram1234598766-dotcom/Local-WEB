@@ -146,25 +146,27 @@ Plus at the repo root: `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
 There are also two `ROADMAP.md` files with different content and neither
 references the other. Consolidate to one.
 
-### Committed build artifacts
+### Committed build artifacts — RESOLVED
 
-68.7 MB of build output is tracked in git across 14 files, which bloats every
-clone and every diff:
+68.7 MB of build output used to be tracked in git across 17 files. All of it is
+now removed and `.gitignore` covers `/dist/`, `*.deb`, `*.rpm` and `*.apk`:
 
-| Path | Size |
+| Removed | Why it was stale |
 |---|---|
-| `dist/localweb_1.0.0-1_amd64.deb` | 9.0 MB |
-| `dist/localweb-1.0.0-1.x86_64.rpm` | 9.3 MB |
-| `dist/localweb_1.0.0_p1_x86_64.apk` | 9.3 MB |
-| `installers/windows/` — three Linux packages, misplaced | 26.3 MB |
-| `installers/windows/wintun.zip` | 0.75 MB |
-| `dist/localweb-cli-linux-amd64` | 8.1 MB |
-| `dist/localweb-cli-darwin-arm64` | 7.9 MB |
-| `pkg/localweb_1.0.0-1_amd64.deb` | **0 bytes, tracked** — an empty build artifact inside the Go source tree |
+| `dist/localweb_1.0.0-1_amd64.deb`, `dist/localweb-1.0.0-1.x86_64.rpm`, `dist/localweb_1.0.0_p1_x86_64.apk` | `1.0.0` packages, rebuilt by CI and by `nfpm package` |
+| the same three again under `installers/windows/` | Linux packages committed inside the **Windows** installer directory |
+| `dist/localweb-cli-linux-amd64`, `dist/localweb-cli-darwin-arm64` | rebuilt by `make cross-compile` into `bin/`; CI builds its own copy |
+| `pkg/localweb_1.0.0-1_amd64.deb` | **0 bytes** — an empty artifact inside the Go source tree |
+| `installers/windows/wintun.zip` | superseded by `scripts/fetch-wintun.sh`, which downloads Wintun 0.14.1 and verifies its SHA-256 |
+| `installers/windows/wintun/wintun/` | a stray partial extraction: a duplicate `LICENSE.txt` (byte-identical to the `LICENSE` already kept), the upstream `README.md`, and `wintun.h` — none used by either installer |
+| `dist/README.md`, `dist/LICENSE`, `dist/CHANGELOG.md`, `dist/config/config.json` | unreferenced staging copies; `nfpm.yaml` and the build scripts read the root `README.md`, `LICENSE`, `CHANGELOG.md` and `config/config.json` |
 
-`.gitignore` excludes `*.exe` but not `*.deb`, `*.rpm`, `*.apk` or `dist/`.
-Linux `.deb`/`.rpm`/`.apk` packages are also committed inside the **Windows**
-installer directory. Phase 8 item 8.11 covers this.
+Verified after removal: `make msi` and `make nsis` both still build, and the
+built NSIS installer still contains all six PowerShell scripts, `wintun.dll`,
+`wintun.dll.sig`, `localweb.exe` and `localweb-cli.exe`.
+
+Two related version inconsistencies were also corrected: `wails.json` declared
+`1.0.0` while `nfpm.yaml` and the Makefile declare `1.0.1`.
 
 ### Documentation debt found while auditing
 

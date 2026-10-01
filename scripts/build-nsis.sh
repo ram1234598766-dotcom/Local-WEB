@@ -44,11 +44,10 @@ echo "==> windows binaries"
 ( cd "${REPO_ROOT}" && GOOS=windows GOARCH=amd64 go build -trimpath -o "${STAGE}/localweb-cli.exe" ./cmd/cli )
 
 echo "==> staging payload"
-cp -f "${REPO_ROOT}/installers/windows/README.md"     "${STAGE}/README.md"
-cp -f "${REPO_ROOT}/installers/windows/CHANGELOG.md"  "${STAGE}/CHANGELOG.md"
-cp -f "${REPO_ROOT}/installers/windows/LICENSE"       "${STAGE}/LICENSE"
+cp -f "${REPO_ROOT}/README.md"     "${STAGE}/README.md"
+cp -f "${REPO_ROOT}/CHANGELOG.md"  "${STAGE}/CHANGELOG.md"
+cp -f "${REPO_ROOT}/LICENSE"       "${STAGE}/LICENSE"
 cp -f "${REPO_ROOT}/installers/windows/localweb.nsi"  "${STAGE}/localweb.nsi"
-cp -f "${REPO_ROOT}/installers/windows/CHANGELOG.md"  "${STAGE}/CHANGELOG.md"
 
 # The nsi embeds the driver's signature, which is committed to the repository
 # (wintun.net does not publish a .sig, so it cannot be re-fetched).
