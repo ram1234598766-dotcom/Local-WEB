@@ -97,6 +97,7 @@ func NewHTTPHandler(store Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/register", h.handleRegister)
 	mux.HandleFunc("/lookup", h.handleLookup)
+	mux.HandleFunc("/peers", h.handleListPeers)
 	return mux
 }
 
@@ -218,6 +219,61 @@ func (c *RendezvousClient) Lookup(ctx context.Context, id [32]byte) (discovery.P
 		return discovery.PeerInfo{}, fmt.Errorf("decode: %w", err)
 	}
 	return peer, nil
+}
+
+// handleListPeers returns every peer currently held by the store.
+//
+// Lookup only answers for an id the caller already knows, which is no use to a
+// node trying to find anyone in the first place. Enumeration is what lets a
+// node discover that a peer exists across the internet, so the discovery loop
+// needs this endpoint. Expired entries are dropped rather than returned.
+func (h *HTTPHandler) handleListPeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Give expired entries a chance to be reaped before listing.
+	if gc, ok := h.store.(interface{ GC() int }); ok {
+		gc.GC()
+	}
+	peers := h.store.All()
+	if peers == nil {
+		peers = []discovery.PeerInfo{}
+	}
+	data, err := json.Marshal(peers)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+// maxPeerListBytes bounds the list response the client will read.
+const maxPeerListBytes = 4 << 20
+
+// ListPeers asks the rendezvous server which peers it currently knows about.
+//
+// This is the enumeration half of federation: without it a node can only confirm
+// peers it already has an id for, so it could never learn that anyone exists.
+func (c *RendezvousClient) ListPeers(ctx context.Context) ([]discovery.PeerInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/peers", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list peers: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list peers: %s", resp.Status)
+	}
+	var peers []discovery.PeerInfo
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxPeerListBytes)).Decode(&peers); err != nil {
+		return nil, fmt.Errorf("decode peer list: %w", err)
+	}
+	return peers, nil
 }
 
 func fmtHex(data []byte) string {
