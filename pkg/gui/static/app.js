@@ -134,7 +134,24 @@ class LocalWEBApp {
       el.classList.toggle('active', el.dataset.route === route);
     });
     const renderer = this.routes[route];
-    if (renderer) renderer();
+    if (renderer) {
+      renderer();
+      return;
+    }
+    // The document editor lives at #doc-editor-<id>, a per-document route that
+    // cannot be a key in this.routes. Without this branch a reload, a shared
+    // link, or browser back to an editor URL rendered nothing at all, because
+    // the lookup above found no renderer.
+    const editorPrefix = 'doc-editor-';
+    if (route.startsWith(editorPrefix)) {
+      const docId = route.slice(editorPrefix.length);
+      if (docId) {
+        document.querySelectorAll('.nav-item').forEach(el => {
+          el.classList.toggle('active', el.dataset.route === 'docs');
+        });
+        this.renderDocEditor(docId, '');
+      }
+    }
   }
 
   async fetchAPI(path) {
@@ -1320,7 +1337,11 @@ class LocalWEBApp {
       </div>
 
       <!-- DHT Search Modal -->
-      <div id="dht-search-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+      <!-- This modal's inline style used to declare display twice: a leading
+           display:none followed by display:flex, so the second won and the
+           full-screen overlay stayed open and swallowed every click in the app.
+           Only one display declaration now. -->
+      <div id="dht-search-modal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000;">
         <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 600px; width: 90%; box-shadow: var(--shadow-xl);">
           <h3 style="margin-bottom: 1rem;">DHT Global Search</h3>
           <p style="color: var(--color-text-muted); margin-bottom: 1rem;">Search packages across the entire DHT network</p>

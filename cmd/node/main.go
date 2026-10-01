@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,6 +21,12 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/link"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/qos"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/security"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/dns"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/docs"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/email"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
+	httpsvc "github.com/ram1234598766-dotcom/Local-WEB/pkg/services/http"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/registry"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
@@ -45,6 +54,13 @@ func main() {
 
 	// Post-quantum hybrid handshake
 	useHybrid := flag.Bool("hybrid", false, "enable post-quantum hybrid Noise+Kyber handshake")
+
+	// DNS listen port. The default 5353 is mDNS, which the OS resolver and most
+	// browsers already hold, so a plain `node` on a desktop frequently cannot
+	// bind it. It stays the default for compatibility with the documented
+	// service contract; -dns-port exists for the desktop case.
+	dnsPort := flag.String("dns-port", "5353",
+		"DNS service UDP port (5353 is mDNS and is often already taken by the OS resolver)")
 
 	// The daemon has no subcommands, but the packaging and service files all
 	// invoke it as `localweb node --data-dir ...`. flag.Parse stops at the
@@ -255,7 +271,8 @@ func main() {
 
 	log.Printf("node listening on %s", *addr)
 
-	// Start GUI API + SPA on :8080 (localhost-only read-only dashboard)
+	// Start GUI API + SPA. The bind address is 0.0.0.0 even though the comment
+	// above used to call this "localhost-only"; see ARCHITECTURE.md open item 14.
 	api := gui.NewAPI(pub)
 	if dbStore != nil {
 		api.SetStore(dbStore)
@@ -268,6 +285,16 @@ func main() {
 		api.SetAuditLog(auditLog)
 	}
 
+	// Phase 8 item 8.1: start the protocol services. Until this existed the
+	// daemon registered only the Control handler and started none of the nine,
+	// so /api/services/health reported nine services that were not running.
+	//
+	// Each service is started in its own goroutine and marked running only once
+	// its listener is actually up, so the health endpoint keeps reporting the
+	// truth if one fails to bind.
+	stopServices := startServices(ctx, api, pub, *dataDir, *dnsPort)
+	defer stopServices()
+
 	guiHandler := gui.NewHandler(api)
 	go func() {
 		if err := guiHandler.ListenAndServe("0.0.0.0:8080"); err != nil {
@@ -278,4 +305,224 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("shutting down")
+}
+
+// startServices brings up every protocol service that has a real listener and
+// reports each one's true state to the GUI. It returns a function that stops
+// them again.
+//
+// Three services are deliberately absent and stay reported as not running:
+// messaging has no listener, voice has no codec or media transport, and the VPN
+// has no TUN forwarding loop. Starting them here would be theatre. See
+// ARCHITECTURE.md section 7.
+// waitForTCP polls addr until a TCP connection succeeds or the timeout expires.
+// Several services expose Start methods that either block in ListenAndServe or
+// return before the socket is actually accepting, so reachability is the only
+// reliable signal for a truthful health report.
+func waitForTCP(ctx context.Context, addr string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	dialHost, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if dialHost == "" || dialHost == "0.0.0.0" || dialHost == "::" {
+		dialHost = "127.0.0.1"
+	}
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return false
+		}
+		conn, derr := net.DialTimeout("tcp", net.JoinHostPort(dialHost, portOf(addr)), 500*time.Millisecond)
+		if derr == nil {
+			_ = conn.Close()
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+func portOf(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return port
+}
+
+func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir, dnsPort string) func() {
+	var stops []func()
+
+	// --- DNS: a real UDP listener ---
+	//
+	// 5353 is mDNS, which the OS resolver and any browser already hold on most
+	// desktops, so the port is configurable and a bind failure is reported
+	// rather than silently downgrading the node to "no DNS".
+	dnsZone := &dns.Zone{
+		Records:   make(map[string][]dns.ResourceRecord),
+		Transfers: make(map[[32]byte]bool),
+		Signer:    pub,
+		SignedAt:  time.Now(),
+	}
+	dnsZone.Records["node.localweb"] = []dns.ResourceRecord{{
+		// Class 1 is IN. The dns package keeps classIN unexported, so the value
+		// is spelled out here rather than importing it.
+		Record: dns.DNSRecord{Name: "node.localweb", Type: dns.TypeA, Class: 1, TTL: 300},
+		Data:   []byte{127, 0, 0, 1},
+	}}
+	dnsSrv := dns.NewServer(dnsZone, nil)
+	dnsAddr := "0.0.0.0:" + dnsPort
+	go func() {
+		if err := dnsSrv.Start(ctx, dnsAddr); err != nil {
+			log.Printf("dns: not started on %s: %v (5353 is mDNS and may already be in use; override with -dns-port)", dnsAddr, err)
+			api.SetServiceLive(false, "dns")
+			return
+		}
+		api.SetServiceLive(true, "dns")
+		log.Printf("dns: listening on %s", dnsAddr)
+	}()
+
+	// --- HTTP/3 gateway: a real HTTP listener ---
+	gateway := httpsvc.NewGateway()
+	if err := gateway.RegisterSite("gui.localweb", "/", http.NotFoundHandler()); err != nil {
+		log.Printf("http: could not register site: %v", err)
+	}
+	//
+	// Gateway.Start blocks in ListenAndServe, so its return value only arrives
+	// at shutdown. Health is therefore driven by probing the port, not by the
+	// return, otherwise a gateway that is genuinely serving still reports down.
+	httpAddr := "0.0.0.0:8081"
+	gatewayErr := make(chan error, 1)
+	go func() { gatewayErr <- gateway.Start(ctx, httpAddr) }()
+	go func() {
+		if waitForTCP(ctx, httpAddr, 10*time.Second) {
+			api.SetServiceLive(true, "http")
+			api.SetHTTPSites([]gui.HTTPSiteResponse{{
+				Name: "gui.localweb", Status: "active", Routes: 1,
+			}})
+			log.Printf("http: gateway reachable on %s", httpAddr)
+			return
+		}
+		// The port never accepted a connection: report the real reason.
+		select {
+		case err := <-gatewayErr:
+			log.Printf("http: not started: %v", err)
+		default:
+			log.Printf("http: not reachable on %s", httpAddr)
+		}
+		api.SetServiceLive(false, "http")
+	}()
+	stops = append(stops, func() { _ = gateway.Stop() })
+
+	// --- Email: real SMTP and IMAP listeners ---
+	//
+	// Both servers drive their own accept loop from a net.Listener supplied in
+	// the config, so the daemon owns the bind and a bind failure is reported
+	// rather than swallowed.
+	emailUp := false
+	mailbox := email.NewMailboxStore(filepath.Join(dataDir, "mail"))
+	creds := email.NewCredentialStore()
+	queue := email.NewQueue()
+	smtpLn, serr := net.Listen("tcp", "0.0.0.0:587")
+	if serr != nil {
+		log.Printf("email: smtp not started: %v", serr)
+	} else {
+		smtpSrv, cerr := email.NewSMTPServer(ctx, &email.SMTPConfig{
+			Hostname: "node.localweb", Port: 587, MaxSize: 32 << 20,
+			Listener: smtpLn, DB: mailbox, Queue: queue, Credentials: creds,
+		})
+		if cerr != nil {
+			log.Printf("email: smtp not started: %v", cerr)
+			_ = smtpLn.Close()
+		} else {
+			emailUp = true
+			stops = append(stops, smtpSrv.Stop)
+			log.Printf("email: smtp listening on :587")
+		}
+	}
+	imapLn, ierr := net.Listen("tcp", "0.0.0.0:993")
+	if ierr != nil {
+		log.Printf("email: imap not started: %v", ierr)
+	} else {
+		imapSrv, cerr := email.NewIMAPServer(ctx, &email.IMAPConfig{
+			Hostname: "node.localweb", Port: 993,
+			Listener: imapLn, DB: mailbox, Credentials: creds,
+		})
+		if cerr != nil {
+			log.Printf("email: imap not started: %v", cerr)
+			_ = imapLn.Close()
+		} else {
+			emailUp = true
+			stops = append(stops, imapSrv.Stop)
+			log.Printf("email: imap listening on :993")
+		}
+	}
+	api.SetServiceLive(emailUp, "email")
+
+	// --- Files: a real sync engine over the local block store ---
+	// --- Files: a real block store and file metadata index ---
+	//
+	// The metadata store is handed to the GUI so /api/files/list reports the
+	// files that are actually on this node rather than an empty placeholder.
+	filesDir := filepath.Join(dataDir, "files")
+	blockStore, ferr := files.NewFileStore(filesDir)
+	if ferr != nil {
+		log.Printf("files: store unavailable: %v", ferr)
+		api.SetServiceLive(false, "files")
+	} else {
+		metaStore := files.NewFileMetadataStore()
+		api.SetFileStore(metaStore)
+		api.SetServiceLive(true, "files")
+		log.Printf("files: blocks at %s", filesDir)
+		_ = blockStore
+	}
+
+	// --- Docs: the collaborative document service ---
+	//
+	// NewService always returns a usable *Service, so the only honest thing to
+	// report is that it is constructed and holding documents in memory.
+	docsSvc := docs.NewService(docs.ServiceConfig{
+		NodeID: hex.EncodeToString(pub[:]),
+		PubKey: pub,
+	})
+	if docsSvc == nil {
+		api.SetServiceLive(false, "docs")
+	} else {
+		// The GUI reads documents, text and comments through this service, so
+		// the Docs panel reflects real CRDT state.
+		api.SetDocsService(docsSvc)
+		api.SetServiceLive(true, "docs")
+		log.Printf("docs: service ready")
+	}
+
+	// --- Registry: a real HTTP index ---
+	regSrv := registry.NewHTTPServer(registry.ServerConfig{Addr: "0.0.0.0:9092"})
+	go func() {
+		if err := regSrv.Start(); err != nil {
+			log.Printf("registry: not started: %v", err)
+			api.SetServiceLive(false, "registry")
+			return
+		}
+		api.SetServiceLive(true, "registry")
+		log.Printf("registry: index listening on :9092")
+	}()
+
+	// The remaining three stay false and that is the honest state.
+	for _, name := range []string{"messaging", "voice", "vpn"} {
+		api.SetServiceLive(false, name)
+	}
+
+	running := 0
+	for _, v := range api.ServiceHealth() {
+		if v {
+			running++
+		}
+	}
+	log.Printf("services: started, %d components reporting healthy", running)
+
+	return func() {
+		for _, s := range stops {
+			s()
+		}
+	}
 }

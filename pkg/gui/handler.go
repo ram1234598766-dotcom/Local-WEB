@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -56,6 +57,22 @@ func NewHandler(api *NodeAPI) *Handler {
 	mux.HandleFunc("/api/docs/documents", h.handleDocuments)
 	mux.HandleFunc("/api/registry/packages", h.handlePackages)
 
+	// Files and Registry reads. The SPA calls these on every Files/Registry
+	// render, so a missing route was a guaranteed 404 in the browser.
+	mux.HandleFunc("/api/files/list", h.handleFilesList)
+	mux.HandleFunc("/api/files/transfers", h.handleFilesTransfers)
+	mux.HandleFunc("/api/registry/installed", h.handleRegistryInstalled)
+
+	// Docs mutations. app.js calls these on save, autosave and comment submit;
+	// without routes each action 404'd while the UI still showed a success toast.
+	mux.HandleFunc("/api/docs/create", h.handleDocsCreate)
+	mux.HandleFunc("/api/docs/save/", h.handleDocsSave)
+	mux.HandleFunc("/api/docs/autosave/", h.handleDocsAutosave)
+	mux.HandleFunc("/api/docs/comments/", h.handleDocsComments)
+	mux.HandleFunc("/api/docs/content/", h.handleDocsContent)
+	mux.HandleFunc("/api/docs/documents/", h.handleDocsDocument)
+	mux.HandleFunc("/api/docs/presence/", h.handleDocsPresence)
+
 	// Onboarding wizard endpoints
 	mux.HandleFunc("/api/onboarding/status", h.handleOnboardingStatus)
 	mux.HandleFunc("/api/onboarding/qr", h.handleOnboardingQR)
@@ -68,6 +85,246 @@ func NewHandler(api *NodeAPI) *Handler {
 
 	h.mux = mux
 	return h
+}
+
+// handleFilesList reports the real contents of the file store.
+func (h *Handler) handleFilesList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := h.api.Files()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(list)
+}
+
+// handleFilesTransfers reports in-flight and recent transfers. An empty array is
+// the honest answer when no transfer is running.
+func (h *Handler) handleFilesTransfers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.api.Transfers())
+}
+
+// handleRegistryInstalled reports packages installed on this node.
+func (h *Handler) handleRegistryInstalled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.api.RegistryInstalled())
+}
+
+// docContentBody is the request shape app.js posts for save and autosave.
+type docContentBody struct {
+	Content string `json:"content"`
+}
+
+// docIDFromPath extracts the document id from a ".../<docID>" route.
+func docIDFromPath(prefix, path string) (string, bool) {
+	id := strings.TrimPrefix(path, prefix)
+	if id == "" || strings.Contains(id, "/") {
+		return "", false
+	}
+	return id, true
+}
+
+// decodeDocContent reads and bounds a content body from an untrusted request.
+func decodeDocContent(w http.ResponseWriter, r *http.Request) (string, bool) {
+	// http.MaxBytesReader caps the read before decoding, so an oversized body
+	// cannot be buffered in full.
+	r.Body = http.MaxBytesReader(w, r.Body, maxDocBytes+1024)
+	var body docContentBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return "", false
+	}
+	if len(body.Content) > maxDocBytes {
+		http.Error(w, "document too large", http.StatusRequestEntityTooLarge)
+		return "", false
+	}
+	return body.Content, true
+}
+
+func (h *Handler) handleDocsCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// app.js posts {name}; the docs service calls the same field Title. Accept
+	// both so the title the user typed actually reaches the document.
+	var body struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	title := body.Title
+	if title == "" {
+		title = body.Name
+	}
+	if body.ID == "" {
+		body.ID = fmt.Sprintf("doc-%d", time.Now().UnixNano())
+	}
+	id, err := h.api.CreateDoc(body.ID, title)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "title": title})
+}
+
+// handleDocsSave applies an explicit save through the CRDT.
+func (h *Handler) handleDocsSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	docID, ok := docIDFromPath("/api/docs/save/", r.URL.Path)
+	if !ok {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+	content, ok := decodeDocContent(w, r)
+	if !ok {
+		return
+	}
+	if err := h.api.SaveDoc(docID, content); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+}
+
+// handleDocsAutosave records autosaved content without failing the editor.
+func (h *Handler) handleDocsAutosave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	docID, ok := docIDFromPath("/api/docs/autosave/", r.URL.Path)
+	if !ok {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+	content, ok := decodeDocContent(w, r)
+	if !ok {
+		return
+	}
+	// Autosave is best-effort: a failure is reported but the editor keeps
+	// working, matching how app.js treats it.
+	if err := h.api.SaveDoc(docID, content); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "autosaved"})
+}
+
+// handleDocsComments serves the comment thread on GET and appends on POST.
+func (h *Handler) handleDocsComments(w http.ResponseWriter, r *http.Request) {
+	docID, ok := docIDFromPath("/api/docs/comments/", r.URL.Path)
+	if !ok {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(h.api.DocComments(docID))
+	case http.MethodPost:
+		var body struct {
+			Author string `json:"author"`
+			Text   string `json:"text"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxCommentLen+1024)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		comment, err := h.api.AddDocComment(docID, body.Author, body.Text)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(comment)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleDocsContent returns a document's live CRDT text.
+func (h *Handler) handleDocsContent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	docID, ok := docIDFromPath("/api/docs/content/", r.URL.Path)
+	if !ok {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+	content, found := h.api.DocContent(docID)
+	if !found {
+		http.Error(w, "document not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": docID, "content": content})
+}
+
+// handleDocsDocument serves a single document for the editor route. app.js
+// reads doc.content and doc.version from this payload.
+func (h *Handler) handleDocsDocument(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	docID, ok := docIDFromPath("/api/docs/documents/", r.URL.Path)
+	if !ok {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+	doc, found := h.api.Doc(docID)
+	if !found {
+		http.Error(w, "document not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
+// handleDocsPresence serves the live collaborator list for a document. The
+// response is always {"users": [...]} so the editor's presence.bar renders
+// rather than throwing on undefined.
+func (h *Handler) handleDocsPresence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	docID, ok := docIDFromPath("/api/docs/presence/", r.URL.Path)
+	if !ok {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.api.DocPresence(docID))
 }
 
 func (h *Handler) ListenAndServe(addr string) error {

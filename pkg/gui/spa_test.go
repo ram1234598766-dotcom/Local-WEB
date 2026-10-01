@@ -131,6 +131,62 @@ func TestEmbeddedSPAClassMethodBracesBalanced(t *testing.T) {
 	}
 }
 
+// A full-screen overlay element must not declare `display` twice in its inline
+// style. The DHT search modal shipped as "display: none; ... display: flex", and
+// because the later declaration wins the modal covered the entire viewport
+// permanently: computed display was flex, it intercepted every pointer event,
+// and the whole SPA became unclickable while still looking normal. This is
+// invisible to a syntax check and to every Go test.
+func TestEmbeddedSPANoDuplicateDisplayDeclarations(t *testing.T) {
+	src := string(appJS)
+
+	// Any inline style attribute, including one spanning a single line only:
+	// these overlays are written on one line.
+	styleAttr := regexp.MustCompile(`style="([^"]*)"`)
+	displayDecl := regexp.MustCompile(`display\s*:`)
+
+	for _, m := range styleAttr.FindAllStringSubmatch(src, -1) {
+		style := m[1]
+		if n := len(displayDecl.FindAllString(style, -1)); n > 1 {
+			line := 1 + strings.Count(src[:strings.Index(src, m[0])], "\n")
+			t.Errorf("line %d: inline style declares display %d times (%q); "+
+				"the last one wins, so a hidden overlay may render visible and block all clicks",
+				line, n, style)
+		}
+	}
+}
+
+// navigate() dispatches by looking the route up in this.routes, so any route
+// that is not a static key renders nothing. The document editor is reached at
+// #doc-editor-<id>, a per-document route. It worked only when openDocEditor
+// called renderDocEditor directly, so a reload, a shared link, or browser back
+// to an editor URL showed an empty page.
+func TestEmbeddedSPARouterHandlesDocEditorRoute(t *testing.T) {
+	src := string(appJS)
+
+	start := strings.Index(src, "  navigate(route) {")
+	if start < 0 {
+		t.Fatal("could not find navigate(route) in app.js")
+	}
+	// navigate() ends at the next method declared at the same indentation.
+	end := start + len("  navigate(route) {")
+	rest := src[end:]
+	if next := strings.Index(rest, "\n  async "); next >= 0 {
+		rest = rest[:next]
+	} else if next := strings.Index(rest, "\n  "); next >= 0 {
+		rest = rest[:next]
+	}
+	body := src[start : end+len(rest)]
+
+	if !strings.Contains(body, "doc-editor-") {
+		t.Error("navigate() has no branch for the #doc-editor-<id> route; reloading or " +
+			"sharing an editor URL renders an empty page")
+	}
+	if !strings.Contains(body, "renderDocEditor") {
+		t.Error("navigate() does not dispatch to renderDocEditor for editor routes")
+	}
+}
+
 func TestEmbeddedSPAPresent(t *testing.T) {
 	if len(appJS) == 0 {
 		t.Fatal("app.js is not embedded; the GUI would serve an empty script")
