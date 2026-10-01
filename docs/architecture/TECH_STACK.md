@@ -185,18 +185,18 @@ The rationale for the split is in `ARCHITECTURE.md` §3.
 
 ### 3.1 Measured coverage
 
-`make test-cover` → **64.5%** of statements across the unit suite
-(6,066/9,427 statements over 27 packages). Re-measured after the GUI HTTP fixes
+`make test-cover` → **64.4%** of statements across the unit suite
+(6,097/9,495 statements over 27 packages). Re-measured after the GUI HTTP fixes
 recorded in `ARCHITECTURE.md` §9.1 items 27–28.
 
 | Package | Coverage | Package | Coverage |
 |---|---|---|---|
-| `pkg/security` | 89.3% | `pkg/services/vpn` | 78.0% |
+| `pkg/security` | 89.6% | `pkg/services/vpn` | 78.0% |
 | `pkg/plugin` | 86.1% | `pkg/chaos` | 76.7% |
 | `pkg/qos` | 86.0% | `pkg/store` | 76.6% |
 | `pkg/discovery` | 86.0% | `pkg/crdt` | 75.6% |
 | `pkg/services/registry` | 83.4% | `pkg/services/email` | 65.3% |
-| `pkg/services/docs` | 82.1% | `pkg/link` | 64.6% |
+| `pkg/services/docs` | 82.1% | `pkg/link` | 64.2% |
 | `pkg/services/voice` | 77.0% | `pkg/services/http` | 64.1% |
 | | | `pkg/federation` | 56.6% |
 | | | `pkg/services/files` | 55.1% |
@@ -206,7 +206,7 @@ recorded in `ARCHITECTURE.md` §9.1 items 27–28.
 | | | `cmd/cli` | 47.3% |
 | | | `pkg/dht` | 46.6% |
 | | | `pkg/gui` | 41.5% |
-| | | `pkg/transport` | 40.7% |
+| | | `pkg/transport` | 45.6% |
 | | | `pkg/crypto` | 40.7% |
 | | | `pkg/services/messaging` | 26.3% |
 | | | `cmd/node` | 3.0% |
@@ -234,7 +234,7 @@ Counts are enumerated with `go test -list`, not parsed from `-v` output:
 
 | Suite | Count | Command |
 |---|---|---|
-| Unit | 789 | `make test-unit` |
+| Unit | 796 | `make test-unit` |
 | Integration | 71 | `make test-integration` |
 | Chaos | included above | `make test-chaos` |
 
@@ -308,8 +308,22 @@ two are not the same binary.
 `localweb-gui`, built from `cmd/gui/main.go`. The GUI is a server-side component
 of the daemon (`pkg/gui`, embedded via `go:embed`), not a separate process.
 
-`localweb-cli node` is a stub: `cmd/cli/main.go:194` `startNode` prints
-"Node started successfully" and returns without starting anything.
+`localweb-cli node` **used to** be a stub: `startNode` printed "Node started
+successfully" and returned without starting anything, discarding the private key
+as `_ = priv`. It now resolves the real daemon binary next to the CLI, execs it
+with the same flags, and when that binary is absent it says plainly that this
+command does not start a daemon and prints the exact command to run instead.
+Verified by running it: with `localweb-node` present it execs it and the daemon
+comes up on both QUIC and the GUI API.
+
+`localweb-node` gained a `-tls-verify` flag. It is **off by default and cannot
+simply be switched on**: the listener presents a self-signed certificate with no
+CA and no pinning, so a verifying client rejects every peer and the mesh stops
+connecting. `TestClientCannotVerifySelfSignedServer` demonstrates exactly that,
+and `TestSelfSignedDialSucceedsWhenVerificationDisabled` shows the insecure
+default is load-bearing. Peer identity is authenticated by Noise XX beneath TLS,
+which is the control that prevents impersonation. Closing Phase 8 item 8.6
+requires certificate pinning keyed to the node identity.
 
 ### 4.3 Configuration
 

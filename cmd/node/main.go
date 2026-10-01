@@ -16,6 +16,7 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/federation"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/gui"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/link"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/qos"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/security"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
@@ -184,11 +185,66 @@ func main() {
 	}()
 	defer disc.Stop()
 
-	server, err := transport.NewHybridServer(ctx, *addr, transportPub, transportPriv, *useHybrid)
+	// TLS certificate verification. This is off by default and cannot simply be
+	// turned on: the QUIC listener presents a self-signed certificate generated
+	// by transport.GenerateSelfSignedCert (no CA, no pinning), so a client that
+	// verifies would reject every peer. Peer identity is authenticated by the
+	// Noise XX layer beneath TLS, which is what actually prevents impersonation.
+	//
+	// The flag exists so the choice is explicit and reachable rather than an
+	// accident of a struct's zero value, and so a deployment that adds a real PKI
+	// can opt in. Phase 8 item 8.6 stays open until certificate pinning exists:
+	// see TestClientCannotVerifySelfSignedServer in pkg/transport.
+	tlsVerify := flag.Bool("tls-verify", false,
+		"verify peer TLS certificates (requires a real PKI or pinning; self-signed certs will be rejected)")
+
+	// QoS shaping. pkg/qos implements token buckets, priorities and an HTB
+	// hierarchy, but until this pass nothing outside its own tests constructed a
+	// QoSManager, so no traffic was actually shaped. Install it on the transport
+	// so every outbound service frame passes through a service class.
+	qosPolicy := flag.String("qos-policy", "priority",
+		"outbound QoS policy: priority, fifo, wfq or htb")
+	qosEnabled := flag.Bool("qos", true,
+		"shape outbound service traffic with pkg/qos")
+
+	var shaper transport.TrafficShaper
+	if *qosEnabled {
+		var policy qos.Policy
+		switch *qosPolicy {
+		case "fifo":
+			policy = qos.PolicyFIFO
+		case "wfq":
+			policy = qos.PolicyWFQ
+		case "htb":
+			policy = qos.PolicyHTB
+		default:
+			policy = qos.PolicyPriority
+		}
+		shaper = qos.NewQoSManager(policy)
+		log.Printf("qos: enabled (policy=%s)", *qosPolicy)
+	} else {
+		log.Printf("qos: disabled")
+	}
+
+	var serverOpts []transport.ServerOption
+	if *tlsVerify {
+		serverOpts = append(serverOpts, transport.WithEnforceTLSVerify(true))
+	}
+	if shaper != nil {
+		serverOpts = append(serverOpts, transport.WithTrafficShaper(shaper))
+	}
+
+	server, err := transport.NewHybridServer(ctx, *addr, transportPub, transportPriv, *useHybrid, serverOpts...)
 	if err != nil {
 		log.Fatalf("transport server: %v", err)
 	}
 	defer server.Stop()
+
+	if *tlsVerify {
+		log.Printf("tls: certificate verification ENABLED")
+	} else {
+		log.Printf("tls: certificate verification disabled (self-signed cert; peer identity is authenticated by Noise XX)")
+	}
 
 	server.RegisterHandler(transport.ServiceControl, func(ctx context.Context, stream transport.Stream) {
 		buf := make([]byte, 1024)

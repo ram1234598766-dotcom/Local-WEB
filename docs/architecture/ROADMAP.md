@@ -21,8 +21,8 @@ GUI-HTTP work described in `ARCHITECTURE.md` §9 and §9.1.**
 | Services | 9/9 exist as tested libraries; **0/9 started by the daemon** | `cmd/node/main.go` registers only `Control` |
 | Security | Noise XX + hybrid PQ verified; capability tokens are not Macaroons | `pkg/transport/hybrid_test.go`, `pkg/security/capability.go` |
 | Links | 3 partially functional (WiFi/adhoc/USB); BLE stubbed; acoustic and Ethernet absent | `pkg/link` 103 tests |
-| Tests | **789 unit + 71 integration**, enumerated with `go test -list` | `make test-unit`, `make test-integration` |
-| Coverage | **64.5%** (was 25.9%) | `make test-cover` |
+| Tests | **796 unit + 71 integration**, enumerated with `go test -list` | `make test-unit`, `make test-integration` |
+| Coverage | **64.4%** (was 25.9%) | `make test-cover` |
 | Quality gates | `go build`, `go vet`, `golangci-lint` (0 issues), `gofmt -s -l` all clean | verified |
 | Race detector | clean across the unit suite | `make test-race` |
 | Platforms built | 5 (linux/darwin/windows × amd64/arm64 minus windows/arm64) | `make cross-compile` |
@@ -46,15 +46,15 @@ not a missing feature. Adding Phase 9 UX on top would multiply the gap.
 | 8.3 | Serve the SPA's event stream as SSE (or upgrade the client to WS) | High | A peer connecting in the GUI produces a visible live event in an E2E test |
 | 8.4 | Persist the audit log across restarts | High | Restart a node, mutate a historical entry, and confirm the chain verification fails |
 | 8.5 | Capability tokens: Macaroon caveat chain with attenuation and DHT-distributed revocation | High | Delegate a token, exceed its scope, confirm rejection; verify offline with a third-party key |
-| 8.6 | Turn TLS certificate verification on by default | High | `InsecureSkipVerify` requires an explicit opt-out flag |
+| 8.6 | TLS certificate verification on by default | High | **Partly done, and blocked.** `-tls-verify` now exists and the default is stated in the startup log rather than being an accident of a zero value. It cannot be flipped to secure yet: the listener serves a self-signed cert with no CA and no pinning, so a verifying client rejects every peer and the mesh stops connecting. `TestClientCannotVerifySelfSignedServer` demonstrates exactly that. Closing this needs certificate pinning keyed to the node identity. |
 | 8.7 | RGA `Merge` as a true positional CRDT merge | High | Two replicas, same ops, different orders → identical state |
 | 8.8 | Config file loader matching `config/config.json` | Medium | `localweb --config` works and precedence is documented and tested |
 | 8.9 | DHT bucket refresh + split | Medium | Table quality holds after 1k joins/leaves |
 | 8.10 | Close the coverage gap on `pkg/services/messaging`, `pkg/gui`, `pkg/dht`, `pkg/services/dns` | Medium | Total ≥75% |
 | 8.11 | ~~Repair `nfpm.yaml` output paths; untrack the committed build artifacts~~ | **Done** | `nfpm.yaml` parses and every `src` resolves; `dist/` and `installers/` hold no binaries (68.7 MB removed) — see §5 |
 | 8.12 | Add a release workflow invoking goreleaser + cosign + syft | Medium | Tagging produces a signed release with an SBOM |
-| 8.13 | Fix the SPA's WebSocket/SSE mismatch and its 6 missing endpoints | Low | No console errors on any screen |
-| 8.14 | `cmd/cli node` subcommand, or remove it | Low | It must not claim to start a node it does not start |
+| 8.13 | Fix the SPA's WebSocket/SSE mismatch and its missing endpoints | Low | **Partly done.** The SPA used a WebSocket against an SSE-only handler and never connected; it now uses `EventSource`. Four `/api/docs/*` paths it calls are still unregistered. |
+| 8.14 | ~~`cmd/cli node` subcommand, or remove it~~ | **Done** | It printed "Node started successfully" without starting anything. It now execs the real `localweb-node` binary when present, and otherwise says plainly that it does not start a daemon. Verified by running both paths. |
 
 ### Definition of done for Phase 8
 
@@ -72,7 +72,18 @@ make ci                    # the gate CI runs
 
 Plus, for each of 8.1–8.5, a named test that fails against the current code.
 
-**Item 8.11 is complete.** Items 8.1–8.10 and 8.12–8.14 are open.
+**Items 8.11 and 8.14 are complete. 8.6 and 8.13 are partly complete.** Items
+8.1–8.5, 8.7–8.10 and 8.12 are open.
+
+---
+
+## 2a. Phase 6 leftovers
+
+| # | Item | State |
+|---|---|---|
+| 6.1 | Federation: two nodes across the internet can find each other | ❌ open. The daemon wires `RendezvousDiscoveryMode`, but `discoveryLoop` only re-registers and logs "polling for peers" — it never performs a lookup or emits a `PeerEvent` |
+| 6.3 | Multi-path aggregation | ⚠️ open. Failover works; round-robin, bandwidth and latency modes **duplicate** bytes to every active link rather than distributing them |
+| 6.6 | ~~QoS / bandwidth shaping~~ | **Done.** `pkg/qos` had zero callers outside its own tests, so nothing was shaped. `transport.TrafficShaper` now gates every outbound service frame and the daemon installs `qos.NewQoSManager` behind `-qos` / `-qos-policy`. Pinned by `TestSendToPassesFramesThroughShaper` and `TestSendToHonoursShaperRejection` |
 
 ---
 

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -214,18 +215,71 @@ func startNode(ctx context.Context, addr, name, dataDir string) {
 		log.Fatalf("port conflict: %v", err)
 	}
 
-	// Load or generate persistent identity — keys are NOT regenerated on every startup
-	pub, priv, err := crypto.LoadOrGenerateIdentity(dataDir)
+	// Load or generate the persistent identity so the node ID can be shown. This
+	// is the same identity the daemon would use; keys are never regenerated.
+	pub, _, err := crypto.LoadOrGenerateIdentity(dataDir)
 	if err != nil {
 		log.Fatalf("Could not load or generate identity: %v. Run 'localweb init' first.", err)
 	}
 	nodeID := crypto.NodeID(pub)
 	log.Printf("node ID: %x", nodeID[:8])
 
-	fmt.Printf("Starting node %s on %s\n", name, addr)
-	fmt.Printf("Node ID: %x\n", nodeID[:8])
-	_ = priv
-	fmt.Println("Node started successfully")
+	fmt.Printf("Node identity: %x\n", nodeID[:8])
+	fmt.Printf("Data dir     : %s\n", dataDir)
+	fmt.Printf("Listen addr  : %s\n\n", addr)
+
+	// The daemon is a separate program. This subcommand used to print
+	// "Node started successfully" and return without starting anything, which is
+	// the failure Phase 8 item 8.14 refers to. Rather than duplicating the
+	// daemon's startup sequence here, exec the real binary if it sits next to
+	// this one, and otherwise tell the user exactly what to run.
+	daemon := findDaemonBinary()
+	if daemon == "" {
+		fmt.Println("The node daemon ships as a separate binary, not as a 'localweb node' mode.")
+		fmt.Println("This command does NOT start a daemon.")
+		fmt.Println()
+		fmt.Println("Run one of:")
+		fmt.Printf("  localweb-node -addr %s -data-dir %s\n", addr, dataDir)
+		fmt.Println("or build it from source:")
+		fmt.Println("  make build-node")
+		return
+	}
+
+	fmt.Printf("Starting the daemon: %s\n\n", daemon)
+	args := []string{"-addr", addr, "-data-dir", dataDir}
+	if name != "" {
+		args = append(args, "-name", name)
+	}
+
+	cmd := exec.Command(daemon, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("daemon exited: %v", err)
+	}
+}
+
+// findDaemonBinary looks for the node binary alongside the running executable,
+// trying the platform's own name first and then the .exe suffix Windows needs.
+func findDaemonBinary() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(self)
+
+	candidates := []string{
+		filepath.Join(dir, "localweb-node"),
+		filepath.Join(dir, "localweb-node.exe"),
+		filepath.Join(dir, "localweb-windows-amd64.exe"),
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c
+		}
+	}
+	return ""
 }
 
 func nextFreePort(current string) string {

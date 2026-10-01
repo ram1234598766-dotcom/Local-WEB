@@ -40,6 +40,7 @@ type Server struct {
 	stats       ServerStats
 	wg          sync.WaitGroup
 	enforceTLS  bool
+	shaper      TrafficShaper
 	allowedSvcs map[ServiceID]bool
 }
 
@@ -521,15 +522,70 @@ func (s *Server) OpenStream(ctx context.Context, peerID [32]byte, svc ServiceID)
 	return conn.OpenStream(ctx, svc)
 }
 
+// TrafficShaper rate-limits outbound service traffic before it is written to the
+// wire. It is satisfied by *qos.QoSManager, which the daemon installs; the
+// interface keeps this package independent of the QoS policy package.
+type TrafficShaper interface {
+	Send(ctx context.Context, service string, peerID string, data []byte) error
+}
+
+// serviceName maps a ServiceID to the lowercase name used by QoS classes.
+func serviceName(svc ServiceID) string {
+	switch svc {
+	case ServiceControl:
+		return "control"
+	case ServiceDNS:
+		return "dns"
+	case ServiceHTTP:
+		return "http"
+	case ServiceMsg:
+		return "messaging"
+	case ServiceFS:
+		return "files"
+	case ServiceRelay:
+		return "relay"
+	case ServiceVoice:
+		return "voice"
+	case ServiceVPN:
+		return "vpn"
+	case ServiceDocs:
+		return "docs"
+	case ServiceReg:
+		return "registry"
+	default:
+		return fmt.Sprintf("svc-%c", byte(svc))
+	}
+}
+
+// WithTrafficShaper installs a rate limiter applied to every outbound service
+// frame. Without one, SendTo writes immediately.
+func WithTrafficShaper(s TrafficShaper) ServerOption {
+	return func(srv *Server) { srv.shaper = s }
+}
+
 // SendTo sends a framed message to a peer on a service.
+//
+// When a TrafficShaper is installed the frame passes through it first, so a
+// service that exceeds its token bucket is delayed or rejected rather than
+// competing with the others. This is where Phase 6 item 6.6 is satisfied:
+// before this, pkg/qos had no caller outside its own tests, so nothing was
+// actually shaped.
 func (s *Server) SendTo(ctx context.Context, peerID [32]byte, svc ServiceID, msgType MessageType, payload []byte) error {
+	frame := EncodeFrameBare(msgType, payload)
+
+	if s.shaper != nil {
+		peer := fmt.Sprintf("%x", peerID[:8])
+		if err := s.shaper.Send(ctx, serviceName(svc), peer, frame); err != nil {
+			return fmt.Errorf("qos %s/%s: %w", serviceName(svc), peer, err)
+		}
+	}
+
 	stream, err := s.OpenStream(ctx, peerID, svc)
 	if err != nil {
 		return err
 	}
 	defer stream.Close()
 
-	frame := EncodeFrameBare(msgType, payload)
 	if _, err := stream.Write(frame); err != nil {
 		return err
 	}

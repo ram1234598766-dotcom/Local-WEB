@@ -148,8 +148,11 @@ type HybridServer struct {
 	useHybrid bool
 }
 
-func NewHybridServer(ctx context.Context, addr string, pub, priv [32]byte, useHybrid bool) (*HybridServer, error) {
-	s, err := NewServer(ctx, addr, pub, priv)
+// NewHybridServer builds a QUIC server that optionally uses the hybrid
+// post-quantum handshake. ServerOption values are forwarded to NewServer, so
+// callers can configure TLS verification and any other server behaviour.
+func NewHybridServer(ctx context.Context, addr string, pub, priv [32]byte, useHybrid bool, opts ...ServerOption) (*HybridServer, error) {
+	s, err := NewServer(ctx, addr, pub, priv, opts...)
 	if err != nil {
 		return nil, err
 	}

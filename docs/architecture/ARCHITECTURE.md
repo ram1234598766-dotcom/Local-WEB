@@ -438,7 +438,7 @@ YAML at all. See `TECH_STACK.md` §1.3 and `ROADMAP.md` §5.
 ---
 
 *LocalWEB Architecture — grounded in `go build ./...`, `go vet ./...`,
-`golangci-lint run` (0 issues), `go test ./...` (789 tests),
+`golangci-lint run` (0 issues), `go test ./...` (796 tests),
 `go test -tags=integration ./test/integration/...` (71 tests), and a fresh
 `git clone` of `main` that builds both Windows installers with no pre-existing
 `wintun.dll`.*

@@ -23,7 +23,7 @@ four places. The corrected picture:
 - Dark/light theme: `matchMedia('(prefers-color-scheme: dark)')` sets a
   `data-theme` attribute, with a manual toggle.
 - `prefers-reduced-motion` honoured in `styles.css`.
-- 789 unit + 71 integration tests; `golangci-lint` 0 issues; coverage as
+- 796 unit + 71 integration tests; `golangci-lint` 0 issues; coverage as
   measured in `docs/architecture/TECH_STACK.md`.
 - The module is published and installable: `go list -m -versions
   github.com/ram1234598766-dotcom/Local-WEB` returns `v1.0.0 v1.0.1`.
