@@ -63,7 +63,10 @@ mkdir -p "${STAGE}/wintun" "${STAGE}/scripts" "${STAGE}/config"
 cp -f "${REPO_ROOT}/installers/windows/wintun/wintun.dll"    "${STAGE}/wintun/wintun.dll"
 cp -f "${SIG}"                                                 "${STAGE}/wintun/wintun.dll.sig"
 cp -f "${REPO_ROOT}/installers/windows/wintun/LICENSE"        "${STAGE}/wintun/LICENSE"
-cp -f "${REPO_ROOT}/installers/windows/scripts/"*.ps1         "${STAGE}/scripts/"
+# The .ps1 scripts live once, in installers/windows/. The nsi installs them to
+# $INSTDIR\scripts\, so stage them into a scripts/ subdirectory to satisfy
+# 'File "scripts\*.ps1"'.
+cp -f "${REPO_ROOT}/installers/windows/"*.ps1                "${STAGE}/scripts/"
 cp -f "${REPO_ROOT}/installers/windows/config/"*.json         "${STAGE}/config/"
 
 echo "==> makensis"

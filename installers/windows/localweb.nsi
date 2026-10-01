@@ -74,8 +74,11 @@ Function PreComponentPage
     ; Check if Wintun is already installed
     ReadRegStr $0 HKLM "SOFTWARE\Wintun" ""
     ${If} $0 == ""
-        ; Wintun not found, show notice
-        MessageBox MB_ICONINFORMATION "LocalWEB requires the Wintun driver for the VPN service.$\n$\nThe installer will download and install Wintun automatically.$\n$\nThis requires an internet connection." IDOK
+        ; Wintun is not present. The driver is bundled with this installer
+        ; (File "wintun\wintun.dll" in SEC_CORE) and registered by the
+        ; "Wintun Driver" section, so no download and no internet access are
+        ; needed at install time.
+        MessageBox MB_ICONINFORMATION "LocalWEB requires the Wintun driver for the VPN service.$\n$\nIt is included in this installer and will be installed automatically.$\n$\nNo internet connection is required." IDOK
     ${EndIf}
 FunctionEnd
 
