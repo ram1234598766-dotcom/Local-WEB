@@ -221,9 +221,11 @@ Get audit log entries (latest 100).
 
 ### `GET /api/audit-log/verify`
 
-Verify audit chain integrity.
+Verify audit chain integrity. Always `200` when an audit log is attached,
+including when the chain is broken — a detected tamper is a successful query with
+a negative answer, not a server fault.
 
-**Response:**
+**Response (chain intact):**
 ```json
 {
   "verified": true,
@@ -232,7 +234,7 @@ Verify audit chain integrity.
 }
 ```
 
-**If tampered:**
+**If tampered** — still `200 OK`:
 ```json
 {
   "verified": false,
@@ -240,6 +242,21 @@ Verify audit chain integrity.
   "integrity": "tampered"
 }
 ```
+
+**If no audit log is attached** — `500`, because integrity cannot be determined:
+```json
+{
+  "verified": false,
+  "timestamp": "2025-09-05T12:30:45Z",
+  "integrity": "unavailable"
+}
+```
+
+`integrity` is one of `verified`, `tampered`, `unavailable`.
+
+> Corrected in 1.0.1. The handler previously returned `500` for the tampered
+> case as well, and never returned the `integrity` field this section documented.
+> Both are fixed, and pinned by `TestAuditVerifyHandlerTamperedReturns200`.
 
 ---
 

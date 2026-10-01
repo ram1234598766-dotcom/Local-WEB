@@ -1,19 +1,57 @@
 # LocalWEB — Comprehensive Roadmap (Post-Phase 5)
 
-## Current State: Phase 5 Complete ✅ | Phase 6 Complete ✅
+## Current State: measured at `9e6e268`, not "complete"
 
-**What's shipped:**
-- Web GUI (SPA) on `localhost:8080` with 13 screens, all backed by real API endpoints
-- Topology visualization (SVG) with real peer data
-- Live audit-chain verification (Security screen)
-- All 9 service panels functional (Files, DNS, HTTP, Email, Messaging, Docs, Registry, Voice, VPN)
-- SSE real-time updates on `/api/events`
-- Dark/light theme, reduced-motion support, keyboard accessibility
-- **Phase 6: Production Hardening** — All 7 sub-phases complete
+This section previously claimed "Phase 5 Complete | Phase 6 Complete" and
+"all 7 sub-phases complete". Re-measured against the code, that was wrong in
+four places. The corrected picture:
 
-**Verified on:** Go 1.27 (local), Go 1.26 (WSL CI), `make lint` + `make test -race` all green
+**Shipped and verified:**
 
-**Last commit:** `375c935` — Phase 6.7 Module Publishing complete
+- Web GUI (SPA) served from the daemon on `:8080`, with **14** screens (not 13),
+  each with a `render*` method: Onboarding, Dashboard, Network, Files, DNS, HTTP,
+  Email, Messaging, Docs, Registry, Voice, VPN, Security, Settings. **The SPA did
+  not parse until this pass** - two stray template terminators and a missing
+  brace meant the browser rejected `app.js` outright, so no screen had ever
+  rendered. Verified with `node --check` and acorn, and guarded by
+  `TestEmbeddedSPANoStrayTemplateTerminators` and
+  `TestEmbeddedSPAClassMethodBracesBalanced`.
+- Topology visualisation as inline SVG built from real peer and DHT data
+  (`renderTopology(peers, dht.nodes)`).
+- Live audit-chain verification on the Security screen: `/api/audit-log/verify`
+  is registered and called by the SPA.
+- Dark/light theme: `matchMedia('(prefers-color-scheme: dark)')` sets a
+  `data-theme` attribute, with a manual toggle.
+- `prefers-reduced-motion` honoured in `styles.css`.
+- 789 unit + 71 integration tests; `golangci-lint` 0 issues; coverage as
+  measured in `docs/architecture/TECH_STACK.md`.
+- The module is published and installable: `go list -m -versions
+  github.com/ram1234598766-dotcom/Local-WEB` returns `v1.0.0 v1.0.1`.
+
+**Claimed but not true:**
+
+| Previous claim | Measured reality |
+|---|---|
+| "13 screens, **all backed by real API endpoints**" | **14 screens.** Four `/api/docs/*` paths the SPA calls — `create`, `save/{id}`, `autosave/{id}`, `comments/{id}` — are **not registered** by the handler, which serves `/api/docs/documents` instead. |
+| "**SSE real-time updates on `/api/events`**" | `BroadcastEvent` has **0 call sites**, so no event is ever emitted. The handler serves `/api/events` as SSE, but the client opens a **WebSocket** against it (`app.js:163`), which never upgrades, so the UI retries every 2 s forever. |
+| "**All 9 service panels functional**" | The panels render, but `cmd/node` starts **0 of the 9 services** and registers only the `Control` handler. Messaging has no listener, Voice has no codec, VPN has no forwarding loop. `/api/services/health` now reports this honestly. |
+| "keyboard accessibility" | Thin: 2 `keydown` handlers, 1 `tabindex`, and **0** `aria-*` attributes. |
+| "Phase 6: **all 7 sub-phases complete**" | Two are not: 6.6 QoS shaping (`pkg/qos` has **0 callers** outside its own package) and 6.3 multi-path (duplicates bytes to every link instead of distributing them). See the Phase 6 table below. |
+
+**Verified on:** two toolchains are in use — `go1.26.0 windows/amd64` (the
+PowerShell one, where `make lint` and `make test -race` were run) and
+`go1.26.4 linux/amd64` (WSL, used by the `scripts/*.sh` build scripts). The
+previous "Go 1.27 (local), Go 1.26 (WSL CI)" line matched neither.
+
+`govulncheck ./...` exits **3**: **24 vulnerabilities, all in the Go standard
+library** (`@go1.26`) across `archive/tar`, `crypto/tls`, `crypto/x509`,
+`encoding/asn1`, `html/template`, `net/http`, `net/textproto`, `net/url`, `net`
+and `os`. **Zero in project code or dependencies.** These are fixed by moving to a
+patched Go release, not by changing this repository — see §6.
+
+**Last commit:** see `git log -1 --oneline`. The previous "375c935 — Phase 6.7
+Module Publishing complete" pointed at a commit that is not the one this work
+landed in.
 
 ---
 
@@ -42,28 +80,51 @@ This ensures:
 - **Work:** Deploy rendezvous relay servers, add to discovery orchestrator
 - **Tests:** E2E test with two nodes behind different NATs
 - **Files:** `pkg/federation/`, `pkg/discovery/orchestrator.go`
-- **Status:** Implemented `RendezvousDiscoveryMode` with CLI flags `--rendezvous`, `--rendezvous-register`, `--rendezvous-poll`
+- **Status:** ❌ **Not complete.** The daemon wires `RendezvousDiscoveryMode` when
+  `--rendezvous` is given, but `discoveryLoop` only re-registers itself and then
+  logs `polling %s for peers` — it never calls a lookup and never emits a
+  `PeerEvent`. The in-code comment concedes this. **Two nodes behind different
+  NATs still cannot discover each other**, which is this phase's stated goal.
 
 ### 6.2 Post-Quantum Handshake (Hybrid X25519+Kyber) ✅
 - **Goal:** Security story survives quantum attack
 - **Work:** Integrate `pkg/crypto` hybrid into Noise XX layer
 - **Tests:** Handshake with both classical + PQ KEM, downgrade test
 - **Files:** `pkg/crypto/hybrid.go`, `pkg/transport/`
-- **Status:** Implemented `HybridServer` with `--hybrid` flag, HKDF key combination
+- **Status:** ✅ **Complete and verified.** `HybridServer` behind `--hybrid`, HKDF
+  key combination, transport-key derivation with context separation. This was
+  **broken until v1.0.1** — both peers encapsulated to their own PQ key, so the two
+  sides derived different session keys. Pinned by
+  `TestHybridServerHandshakeAgreesOnSessionKey` and
+  `TestDeriveTransportKeySeparatesContexts`. The hybrid key is *not* a QUIC record
+  key: quic-go owns the record layer. See `docs/architecture/ARCHITECTURE.md` §2.2.
 
 ### 6.3 Multi-Path Link Aggregation ✅
 - **Goal:** Use BLE + WiFi simultaneously for redundancy
 - **Work:** Modify `link.Manager` to maintain multiple active links, aggregate bandwidth
 - **Tests:** Simulated link failure, bandwidth measurement
 - **Files:** `pkg/link/multipath.go`, `pkg/link/manager.go`
-- **Status:** Implemented `MultiPathManager` with 4 aggregation modes (failover, round-robin, bandwidth, latency), concurrent connections, redundancy, dynamic primary selection
+- **Status:** ⚠️ **Partial.** `MultiPathManager` exists with 4 aggregation modes,
+  concurrent connections, redundancy and dynamic primary selection. But
+  `SendToPeer` (`multipath.go:441`) writes to the primary and then, in **every
+  mode except `AggregationFailover`, writes the same bytes to every other active
+  link**. So round-robin and bandwidth modes do not distribute traffic — they
+  duplicate it, multiplying bandwidth cost without adding throughput. Failover
+  itself works (`TestNewMultiPathManagerReachesFailoverThroughTheConstructor`).
+  Real distribution needs RLNC or MP-TCP.
 
 ### 6.4 Plugin/Extension Interface ✅
 - **Goal:** Third-party services without forking daemon
 - **Work:** Define `ServicePlugin` interface, registration API, capability tokens
 - **Tests:** Load external .so/.dll, register service, verify sandbox
 - **Files:** `pkg/plugin/`
-- **Status:** Implemented `PluginManager`, `Host` interface, `BuiltinPlugin` framework with example Echo/Metrics plugins, Go plugin loader stub
+- **Status:** ⚠️ **Interface complete, sandbox absent.** `PluginManager`, the `Host`
+  interface and the `BuiltinPlugin` framework with example Echo/Metrics plugins
+  are real and tested (58 tests). The Go `.so`/`.dll` loader is an explicit stub
+  returning "not implemented", so **third-party plugins cannot actually be
+  loaded** — only built-ins run. There is **no capability sandbox**: `Host` grants
+  unrestricted store, transport and security access to every plugin. The listed
+  test ("load external .so/.dll … verify sandbox") therefore does not exist.
 
 ### 6.5 Chaos/Fault Injection in CI ✅
 - **Goal:** Automate packet loss, partition, and churn simulation in CI
@@ -77,18 +138,27 @@ This ensures:
 - **Work:** Token bucket per service/peer, priority queues
 - **Tests:** Concurrent voice call + file transfer + VPN
 - **Files:** `pkg/qos/`
-- **Status:** Implemented `QoSManager` with token bucket rate limiting, 8 pre-configured service classes (voice, vpn, files, messaging, email, dns, http, registry, docs), HTB hierarchy support, context-aware QoS propagation, 12 tests passing
+- **Status:** ❌ **Implemented but never used.** `QoSManager` has token-bucket rate
+  limiting, 9 service classes, HTB hierarchy support and context-aware
+  propagation, with 12 passing tests at 86.0% coverage. But `pkg/qos` has **0
+  callers outside its own package** — `cmd/node` never constructs a `QoSManager`,
+  so no traffic is shaped at runtime. Voice, VPN and Files do not currently
+  compete for a shaped link because nothing shapes one.
 
 ### 6.7 Module Publishing ✅
 - **Goal:** `go get github.com/ram1234598766-dotcom/Local-WEB@v1.0.0` works
 - **Work:** Tag v1.0.0, publish to pkg.go.dev, godoc on all exported types
 - **Tests:** Fresh module download, build example app
-- **Status:** 
-  - Module path correct: github.com/ram1234598766-dotcom/Local-WEB
-  - LICENSE (MIT), CONTRIBUTING.md, SECURITY.md, README.md present
-  - All exported types have godoc comments
-  - govulncheck: 24 vulnerabilities in Go 1.26.0 standard library (fixed in Go 1.26.6+), no vulnerabilities in project code or dependencies
-  - Version v1.0.0 tag ready
+- **Status:** ✅ **Complete and independently verified.**
+  - Module path correct: `github.com/ram1234598766-dotcom/Local-WEB`
+  - `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `README.md` present
+  - Published: `go list -m -versions github.com/ram1234598766-dotcom/Local-WEB`
+    returns `v1.0.0 v1.0.1`, and `proxy.golang.org/…/@latest` serves `v1.0.1`
+  - Toolchains here are `go1.26.0` (Windows) and `go1.26.4` (WSL).
+    `govulncheck ./...` exits 3 with **24 standard-library vulnerabilities**
+    (`@go1.26`, ten packages) and **none in project code or dependencies**.
+    The previous "fixed in Go 1.26.6+" line is a claim about a toolchain this
+    repo does not run; neither installed toolchain is 1.26.6+.
 
 ---
 

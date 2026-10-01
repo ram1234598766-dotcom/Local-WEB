@@ -1,6 +1,6 @@
 // LocalWEB GUI — web SPA client
 // Talks to real backend API endpoints (no mocked data)
-// Connects to WebSocket for real-time peer updates
+// Subscribes to /api/events with EventSource (SSE) for real-time updates
 
 class LocalWEBApp {
   constructor() {
@@ -158,27 +158,51 @@ class LocalWEBApp {
   }
 
   connectWS() {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/api/events`;
-    this.ws = new WebSocket(wsUrl);
+    // The server serves /api/events as Server-Sent Events, not as a WebSocket.
+    // A WebSocket handshake against it never upgrades, so this used to fail and
+    // retry every 2s forever. EventSource is the native client for SSE and needs
+    // no dependency.
+    const esUrl = `${window.location.protocol}//${window.location.host}/api/events`;
+    this.ws = new EventSource(esUrl);
 
     this.ws.addEventListener('open', () => {
       this.state.connected = true;
       document.title = 'LocalWEB';
     });
 
-    this.ws.addEventListener('message', (event) => {
-      const data = JSON.parse(event.data.split('\n').pop());
-      this.dispatchEvent(data);
-    });
+    // The server names each event, so EventSource's default `onmessage` never
+    // fires. Subscribe to every documented type explicitly.
+    const EVENT_TYPES = [
+      'peer_connected',
+      'peer_disconnected',
+      'peer_updated',
+      'service_status',
+      'transfer_progress',
+      'message_received',
+      'doc_updated',
+      'call_state',
+      'vpn_state',
+    ];
 
-    this.ws.addEventListener('close', () => {
-      this.state.connected = false;
-      setTimeout(() => this.connectWS(), 2000);
-    });
+    const handle = (event) => {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (err) {
+        console.error('malformed SSE payload:', err);
+        return;
+      }
+      this.dispatchEvent(data);
+    };
+
+    EVENT_TYPES.forEach((type) => this.ws.addEventListener(type, handle));
+    // Anything the server sends without an event name still gets handled.
+    this.ws.addEventListener('message', handle);
 
     this.ws.addEventListener('error', (err) => {
-      console.error('WebSocket error:', err);
+      this.state.connected = false;
+      // EventSource reconnects on its own; only surface the error.
+      console.error('SSE error:', err);
     });
   }
 
@@ -1898,7 +1922,6 @@ class LocalWEBApp {
           </div>
         </div>
       `;
-    `;
 
     this.callState = {
       status: 'idle', // idle, connecting, active, ended
@@ -2061,6 +2084,7 @@ class LocalWEBApp {
       if (remoteAudio) remoteAudio.className = 'status-dot';
       if (remoteVideo) remoteVideo.className = 'status-dot';
     }
+  }
 
   endCall() {
     if (this.callState.timerInterval) {
@@ -2436,7 +2460,6 @@ class LocalWEBApp {
           <button class="btn btn-secondary" onclick="app.navigate('dashboard')">Dashboard</button>
         </div>
       `;
-    `;
   }
 
   renderVPN() {

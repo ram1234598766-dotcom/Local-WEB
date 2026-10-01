@@ -263,6 +263,36 @@ func (a *NodeAPI) AuditLogVerified() bool {
 	return a.auditLog.VerifyIntegrity() == nil
 }
 
+// AuditIntegrity reports the state of the audit chain as three distinct
+// outcomes rather than one bool. "No audit log" and "audit log has been
+// tampered with" are different facts and callers must be able to tell them
+// apart: the first means there is nothing to verify, the second means
+// verification succeeded and the answer is bad news.
+type AuditState string
+
+const (
+	// AuditStateUnavailable means no audit log is attached, so integrity
+	// cannot be determined at all.
+	AuditStateUnavailable AuditState = "unavailable"
+	// AuditStateVerified means the chain verified.
+	AuditStateVerified AuditState = "verified"
+	// AuditStateTampered means a chain exists and its hash chain is broken.
+	AuditStateTampered AuditState = "tampered"
+)
+
+// AuditIntegrity returns the audit chain state and whether a chain exists.
+func (a *NodeAPI) AuditIntegrity() (AuditState, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.auditLog == nil {
+		return AuditStateUnavailable, false
+	}
+	if a.auditLog.VerifyIntegrity() != nil {
+		return AuditStateTampered, true
+	}
+	return AuditStateVerified, true
+}
+
 func (a *NodeAPI) AuditLog() ([]AuditLogResponse, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

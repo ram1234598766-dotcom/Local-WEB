@@ -230,11 +230,43 @@ connect();
 
 ### Heartbeat
 
-The server sends a comment every 30s to keep connection alive:
+The server sends an SSE comment every 30s to keep the connection alive:
 ```
 : heartbeat
 
 ```
+
+`EventSource` ignores comment lines, so this is invisible to the application; it
+exists so the connection emits periodic bytes. An event stream that emits nothing
+is indistinguishable from a dead connection and is reaped by proxies and load
+balancers. Pinned by `TestEventsHandlerEmitsHeartbeat`.
+
+### Named events and `onmessage`
+
+The server labels each frame with an `event:` name, so `EventSource`'s default
+`onmessage` handler **does not fire** for them. Subscribe per type:
+
+```javascript
+const TYPES = [
+  'peer_connected', 'peer_disconnected', 'peer_updated', 'service_status',
+  'transfer_progress', 'message_received', 'doc_updated', 'call_state',
+  'vpn_state',
+];
+const es = new EventSource('/api/events');
+TYPES.forEach((t) => es.addEventListener(t, (e) => handle(JSON.parse(e.data))));
+```
+
+### Transport: this is SSE, not WebSocket
+
+`/api/events` is served by `http.ServeMux` as `text/event-stream`. There is **no
+WebSocket upgrade handler**, so `new WebSocket('/api/events')` never completes a
+handshake. The bundled SPA used to do exactly that and reconnected every 2s
+forever; it now uses `EventSource`. Do not open a WebSocket against this endpoint.
+
+> Corrected in 1.0.1. This section previously described the 30s heartbeat as
+> existing when the handler had no ticker, so a connected-but-silent stream was
+> the only observable behaviour. Both the missing heartbeat and the SPA's
+> WebSocket/SSE mismatch are fixed and tested.
 
 ---
 

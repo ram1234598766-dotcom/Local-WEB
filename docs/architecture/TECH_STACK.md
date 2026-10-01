@@ -1,8 +1,9 @@
 # LocalWEB — Technology Stack
 
-**Grounded in `go.mod`, `go list -deps ./...`, the `Makefile`, `.golangci.yml`
-and `.github/workflows/ci.yml` at commit `0d30e16`, plus a fresh `git clone` of
-`main` used to build both Windows installers from an empty tree.**
+**Grounded in `go.mod`, `go list -deps ./...`, the `Makefile`,
+`.golangci.yml` and `.github/workflows/ci.yml` as they stand on `main`, plus a
+fresh `git clone` of `main` used to build both Windows installers from an empty
+tree.**
 **Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26**
 
 > Tag legend, as in `ARCHITECTURE.md`: ✅ verified by a test · ⚠️ partial ·
@@ -184,27 +185,29 @@ The rationale for the split is in `ARCHITECTURE.md` §3.
 
 ### 3.1 Measured coverage
 
-`make test-cover` → **64.4%** of statements across the unit suite
-(6,046/9,410 statements over 27 packages). Measured at commit `0d30e16`.
+`make test-cover` → **64.5%** of statements across the unit suite
+(6,066/9,427 statements over 27 packages). Re-measured after the GUI HTTP fixes
+recorded in `ARCHITECTURE.md` §9.1 items 27–28.
 
 | Package | Coverage | Package | Coverage |
 |---|---|---|---|
-| `pkg/security` | 89.6% | `pkg/services/vpn` | 78.0% |
-| `pkg/discovery` | 86.2% | `pkg/chaos` | 76.7% |
-| `pkg/plugin` | 86.1% | `pkg/store` | 76.6% |
-| `pkg/qos` | 86.0% | `pkg/crdt` | 75.6% |
+| `pkg/security` | 89.3% | `pkg/services/vpn` | 78.0% |
+| `pkg/plugin` | 86.1% | `pkg/chaos` | 76.7% |
+| `pkg/qos` | 86.0% | `pkg/store` | 76.6% |
+| `pkg/discovery` | 86.0% | `pkg/crdt` | 75.6% |
 | `pkg/services/registry` | 83.4% | `pkg/services/email` | 65.3% |
-| `pkg/services/docs` | 82.1% | `pkg/link` | 64.2% |
+| `pkg/services/docs` | 82.1% | `pkg/link` | 64.6% |
 | `pkg/services/voice` | 77.0% | `pkg/services/http` | 64.1% |
 | | | `pkg/federation` | 56.6% |
 | | | `pkg/services/files` | 55.1% |
 | | | `pkg/proto` | 54.3% |
 | | | `pkg/services/dns` | 52.9% |
-| | | `pkg/nat` | 52.6% |
+| | | `pkg/nat` | 48.9% |
 | | | `cmd/cli` | 47.3% |
 | | | `pkg/dht` | 46.6% |
-| | | `pkg/crypto`, `pkg/transport` | 40.7% |
-| | | `pkg/gui` | 36.2% |
+| | | `pkg/gui` | 41.5% |
+| | | `pkg/transport` | 40.7% |
+| | | `pkg/crypto` | 40.7% |
 | | | `pkg/services/messaging` | 26.3% |
 | | | `cmd/node` | 3.0% |
 | | | `internal/version` | 0.0% (2 statements, no test file) |
@@ -231,7 +234,7 @@ Counts are enumerated with `go test -list`, not parsed from `-v` output:
 
 | Suite | Count | Command |
 |---|---|---|
-| Unit | 783 | `make test-unit` |
+| Unit | 789 | `make test-unit` |
 | Integration | 71 | `make test-integration` |
 | Chaos | included above | `make test-chaos` |
 
@@ -343,10 +346,10 @@ arguments now fail loudly rather than being ignored.
 |---|---|---|
 | `/healthz` | ✅ | `pkg/gui/handler.go:232` |
 | `/readyz` | ⚠️ | ready as soon as the process starts; checks only that a NodeID is set |
-| `/api/events` (SSE) | ⚠️ | real SSE, but `BroadcastEvent` has no caller, so nothing is ever emitted |
+| `/api/events` (SSE) | ⚠️ | real SSE, now with the 30s `: heartbeat` comment `WS_API.md` documents (`TestEventsHandlerEmitsHeartbeat`). `BroadcastEvent` still has **no caller**, so no event is ever emitted |
+| `/api/audit-log/verify` | ✅ | real hash-chain re-verification. **Fixed:** it returned `500` for a tampered chain and omitted the documented `integrity` field, because `AuditLogVerified()` conflated "no audit log" with "tampered". Now `200` + `integrity` for a broken chain and `500` only when there is no chain (`TestAuditVerifyHandlerTamperedReturns200`) |
 | `/api/status`, `/api/peers`, `/api/audit-log` | ✅ | backed by real state |
-| `/api/audit-log/verify` | ✅ | real hash-chain re-verification |
-| `/api/services/health` | ✅ | fixed this pass; previously returned all-9 `true` while none ran |
+| `/api/services/health` | ✅ | fixed; previously returned all-9 `true` while none ran |
 | `/metrics` (Prometheus) | ❌ | not registered |
 | `/debug/pprof` | ❌ | not imported, not registered |
 | OTLP tracing | ❌ | no OpenTelemetry dependency |
@@ -357,14 +360,28 @@ The previous revision listed **27 named Prometheus metrics**
 string exists inside an example plugin (`pkg/plugin/builtin.go:182-184`) but that
 plugin is never instantiated.
 
-Endpoints the shipped SPA calls that the handler does not register:
-`/api/files/list`, `/api/files/transfers`, `/api/registry/installed`,
-`/api/docs/create`, `/api/docs/save/{id}`, `/api/docs/autosave/{id}`.
+Endpoints the shipped SPA calls that the handler does not register. This list was
+wrong before; re-derived from the shipped `pkg/gui/static/` assets. The handler
+registers 23 routes; the SPA references four paths with no handler:
 
-The SPA's `connectWS()` (`pkg/gui/static/app.js:163`) opens a **WebSocket**
-against `/api/events`, which the server only serves as **SSE** over
-`http.ServeMux`. There is no upgrade handler, so the socket never connects and
-retries every 2 s.
+| SPA path | Handler has instead |
+|---|---|
+| `/api/docs/create` | — |
+| `/api/docs/save/{id}` | — |
+| `/api/docs/autosave/{id}` | `/api/docs/documents` |
+| `/api/docs/comments/{id}` | — |
+
+The previously listed `/api/files/list`, `/api/files/transfers` and
+`/api/registry/installed` are **not referenced by the SPA at all** and were
+removed from this list.
+
+**The SPA's transport mismatch is fixed.** `connectWS()` opened a **WebSocket**
+against `/api/events`, which the server serves only as **SSE** over
+`http.ServeMux` with no upgrade handler, so the socket never connected and the UI
+retried every 2 s forever. It now uses `EventSource` and subscribes to the nine
+documented event names, since a named `event:` frame does not fire the default
+`onmessage`. Still true: `BroadcastEvent` has no caller, so the stream carries
+only heartbeats until Phase 8 item 8.3 wires real events.
 
 ---
 

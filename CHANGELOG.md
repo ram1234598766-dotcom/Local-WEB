@@ -92,9 +92,21 @@ design; this release records defects found by audit and fixed against tests.
 ### Security
 - Post-Quantum Hybrid Key Exchange (X25519 + Kyber-1024)
 - Argon2id Proof of Work (memory-hard)
-- Ed25519-signed Capability Tokens (Macaroon-based)
+- Ed25519-signed Capability Tokens
 - Append-only SHA3-256 Audit Log (tamper-evident)
-- Formal TLA+ specifications for core protocols
+
+> **Corrected after release.** Two bullets in this section were inaccurate when
+> 1.0.0 shipped and have been fixed in place rather than silently rewritten:
+>
+> - The capability tokens were described as **Macaroon-based**. They are not.
+>   `pkg/security/capability.go:17` is a flat Ed25519-signed struct with no
+>   identifier, no caveat chain, no CBOR and no delegation; no Macaroon library is
+>   in `go.mod`. Revocation is in-memory and lost on restart. The honest claim is
+>   "signed capability tokens with expiry and in-memory revocation".
+> - **"Formal TLA+ specifications for core protocols" was false.** No `.tla` file
+>   exists in this repository and no model checker is configured. There is no
+>   formal verification of any protocol here; see Phase 10.1 in
+>   `docs/architecture/ROADMAP.md`, which is where starting it is tracked.
 
 ### Installers (Phase 6)
 - **Windows**: NSIS installer with Wintun driver, Windows Service option, SmartScreen documentation

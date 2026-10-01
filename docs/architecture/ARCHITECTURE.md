@@ -1,7 +1,9 @@
 # LocalWEB — System Architecture
 
-**Status: reflects the code at commit `0d30e16`, covering two correctness passes
-(described in §9) and the packaging/reproducibility pass in §9.1.**
+**Status: reflects `main`, covering two correctness passes (described in §9) plus
+the packaging and GUI-HTTP work in §9.1.** Figures are re-measured rather than
+remembered; where a defect was found against a specific earlier commit, that hash
+is named in place.
 **Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26 | Author: Mrityunjay K**
 
 > **How to read this document.** Every claim below is tagged with its evidence
@@ -119,7 +121,7 @@ previous documentation, which described all nine as running.
 | L7 | Tombstone GC | ❌ Not implemented | `ORSet.removes` and `RGANode.Deleted` grow unbounded |
 | L8 | Nine service packages | ✅ Verified as libraries | `pkg/services/*_test.go`; **not instantiated by the daemon** |
 | L8 | Service mesh (LB / breaker / retry / OTel) | ❌ Not implemented | no such code |
-| L9 | GUI: `/api/status`, `/api/peers`, `/api/audit-log` | ✅ Verified | `pkg/gui/` tests |
+| L9 | GUI: `/api/status`, `/api/peers`, `/api/audit-log` | ✅ Verified | `pkg/gui/` tests. The SPA itself **did not parse until this pass** — see §9.1 item 29 — so these endpoints had never actually been reached from a browser |
 | L9 | GUI: `/metrics`, `/debug/pprof` | ❌ Not implemented | `handler.go:33-58` registers neither |
 | L9 | Plugin manager + built-in plugins | ✅ Verified | `pkg/plugin/` 58 tests; nil-logger panic, double-`Start` race, ignored router prefix and swallowed bind error fixed in §9 items 25-26 |
 | L9 | Go `.so` plugin loading, WASM/WASI | ❌ Not implemented | `plugin.go:248` returns "not implemented"; no `wasm` directory |
@@ -371,6 +373,7 @@ Ranked. Each is a real gap, not a documentation nit.
 | 11 | No two-replica different-order convergence test for RGA. | Medium |
 | 12 | Circuit relay and hole punching are implemented but unreachable — no caller. | Medium |
 | 13 | Zero-RTT, datagram frames, congestion-control selection not implemented. | Low |
+| 14 | The GUI API is documented as "localhost-only read-only dashboard" but `cmd/node/main.go:217` binds `0.0.0.0:8080`, so every `/api/*` endpoint is reachable from the LAN. Whether that is intended is a product decision: a P2P tool may deliberately allow LAN access to the dashboard, but the comment and the bind address currently contradict each other. | Medium |
 
 ---
 
@@ -405,8 +408,10 @@ code with a test that fails against the previous behaviour.
 ### 9.1 Second correctness pass, and packaging
 
 The first pass (§9 items 1–20) was written against `df30121`. A second pass found
-five further defects, four of them reachable from another host. Each is pinned by
-a test that fails against the previous behaviour.
+**seven** further defects, four of them reachable from another host, then a
+documentation-completeness pass found four more — the last of which meant the
+GUI had never loaded at all. Each is pinned by a test that fails against the
+previous behaviour.
 
 | # | Defect | Effect | Fix | Test that pins it |
 |---|---|---|---|---|
@@ -416,6 +421,9 @@ a test that fails against the previous behaviour.
 | 24 | `MultipathManager.HandleEvent` panicked on a peer with no addresses | Crash on a legitimate peer state | Address-less peers skipped | `TestMultiPathHandleEventWithNoAddresses` |
 | 25 | `NodeHost` left `logger` as a nil `*zerolog.Logger`; `PluginManager.Start` could run twice concurrently | Any built-in plugin `Init` panicked; concurrent starts raced | Seeded from the process logger at construction (`host.go:67-70`); `Start` made idempotent | `TestPluginManagerStartPlugin`, `TestPluginManagerConcurrentStartRunsStartOnce`, `TestPluginManagerStartIsIdempotent` |
 | 26 | `NodeHost` ignored a router group's mount prefix and swallowed bind errors | Plugins served at the wrong path; a failed bind reported success | Prefix honoured; bind errors propagated | `TestNodeHostRouterGroupMountsUnderItsPrefix`, `TestNodeHostRouterGroupServesItsOwnRoutes`, `TestExampleEchoPluginStartReportsBindFailure` |
+| 27 | `AuditLogVerified()` returned one bool for two different facts, and `handleAuditVerify` mapped "not verified" to HTTP 500 | A **tampered** audit chain reported `500`, so every tamper detection looked like a server fault to monitoring; the documented `integrity` field was never returned | `AuditIntegrity()` distinguishes unavailable / verified / tampered; `200` + `integrity` for a broken chain, `500` only when no chain exists | `TestAuditVerifyHandler`, `TestAuditVerifyHandlerTamperedReturns200` |
+| 28 | `/api/events` wrote bytes only when an event arrived, and the SPA opened a **WebSocket** against the SSE-only handler | A connected stream was permanently silent and indistinguishable from a dead one, so proxies reaped it; the client's socket never upgraded and retried every 2 s forever | 30 s `: heartbeat` comment as documented; SPA switched to `EventSource` subscribing to the nine named event types | `TestEventsHandlerEmitsHeartbeat`, `TestEventsHandlerStreamsNamedEvents` |
+| 29 | **The shipped SPA did not parse.** Two stray `` `; `` lines opened template literals that swallowed the rest of the file, and `simulateRemotePeer()` was missing its closing brace | **The entire web GUI never loaded.** The browser rejected `app.js`, so none of the 14 screens had ever rendered, while all Go tests passed because the file is embedded verbatim and nothing parsed it | Both stray terminators removed; missing brace added | `TestEmbeddedSPANoStrayTemplateTerminators`, `TestEmbeddedSPAClassMethodBracesBalanced` |
 
 **Packaging, same pass.** `installers/` shipped a Linux `.deb`/`.rpm`/`.apk`
 inside the Windows directory and tracked a **0-byte** `.deb` inside `pkg/`. Both
@@ -430,7 +438,7 @@ YAML at all. See `TECH_STACK.md` §1.3 and `ROADMAP.md` §5.
 ---
 
 *LocalWEB Architecture — grounded in `go build ./...`, `go vet ./...`,
-`golangci-lint run` (0 issues), `go test ./...` (783 tests),
+`golangci-lint run` (0 issues), `go test ./...` (789 tests),
 `go test -tags=integration ./test/integration/...` (71 tests), and a fresh
 `git clone` of `main` that builds both Windows installers with no pre-existing
 `wintun.dll`.*

@@ -24,10 +24,19 @@ type Handler struct {
 	api    *NodeAPI
 	mux    *http.ServeMux
 	server *http.Server
+
+	// sseHeartbeat is how often an SSE comment is written to each /api/events
+	// connection. An event stream that emits nothing is indistinguishable from a
+	// dead connection to a browser and gets reaped by proxies, so the stream
+	// must produce periodic bytes. Documented in docs/api/WS_API.md as 30s.
+	sseHeartbeat time.Duration
 }
 
+// defaultSSEHeartbeat is the interval documented for /api/events.
+const defaultSSEHeartbeat = 30 * time.Second
+
 func NewHandler(api *NodeAPI) *Handler {
-	h := &Handler{api: api}
+	h := &Handler{api: api, sseHeartbeat: defaultSSEHeartbeat}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", h.handleIndex)
@@ -136,13 +145,28 @@ func (h *Handler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAuditVerify(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	verified := h.api.AuditLogVerified()
-	if !verified {
+	state, hasLog := h.api.AuditIntegrity()
+
+	// No audit log attached: the server cannot answer the question, which is a
+	// genuine server-side unavailability. But a chain that exists and fails
+	// verification is a successful query with a negative result, so it returns
+	// 200 with verified=false. Returning 500 for tampering would report a
+	// monitoring failure for what is actually a security finding.
+	if !hasLog {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"verified":  false,
+			"integrity": string(AuditStateUnavailable),
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"verified":  verified,
+		"verified":  state == AuditStateVerified,
+		"integrity": string(state),
 		"timestamp": time.Now().Format(time.RFC3339),
 	})
 }
@@ -305,6 +329,13 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := h.api.Subscribe()
 	defer h.api.Unsubscribe(ch)
 
+	interval := h.sseHeartbeat
+	if interval <= 0 {
+		interval = defaultSSEHeartbeat
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
 	notify := r.Context().Done()
 	for {
 		select {
@@ -317,6 +348,11 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Type, data)
+			flusher.Flush()
+		case <-ticker.C:
+			// An SSE comment: ignored by EventSource, but it keeps the
+			// connection warm and proves the stream is alive.
+			fmt.Fprint(w, ": heartbeat\n\n")
 			flusher.Flush()
 		case <-notify:
 			return

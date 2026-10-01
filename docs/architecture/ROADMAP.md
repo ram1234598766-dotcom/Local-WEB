@@ -1,7 +1,7 @@
 # LocalWEB — Roadmap
 
-**Grounded in the code at commit `0d30e16`, covering two correctness passes and
-the packaging pass described in `ARCHITECTURE.md` §9 and §9.1.**
+**Grounded in `main`, covering two correctness passes and the packaging and
+GUI-HTTP work described in `ARCHITECTURE.md` §9 and §9.1.**
 **Module: `github.com/ram1234598766-dotcom/Local-WEB`**
 
 > The previous revision of this roadmap reported "Phase 6 Complete" with a
@@ -21,8 +21,8 @@ the packaging pass described in `ARCHITECTURE.md` §9 and §9.1.**
 | Services | 9/9 exist as tested libraries; **0/9 started by the daemon** | `cmd/node/main.go` registers only `Control` |
 | Security | Noise XX + hybrid PQ verified; capability tokens are not Macaroons | `pkg/transport/hybrid_test.go`, `pkg/security/capability.go` |
 | Links | 3 partially functional (WiFi/adhoc/USB); BLE stubbed; acoustic and Ethernet absent | `pkg/link` 103 tests |
-| Tests | **783 unit + 71 integration**, enumerated with `go test -list` | `make test-unit`, `make test-integration` |
-| Coverage | **64.4%** (was 25.9%) | `make test-cover` |
+| Tests | **789 unit + 71 integration**, enumerated with `go test -list` | `make test-unit`, `make test-integration` |
+| Coverage | **64.5%** (was 25.9%) | `make test-cover` |
 | Quality gates | `go build`, `go vet`, `golangci-lint` (0 issues), `gofmt -s -l` all clean | verified |
 | Race detector | clean across the unit suite | `make test-race` |
 | Platforms built | 5 (linux/darwin/windows × amd64/arm64 minus windows/arm64) | `make cross-compile` |
@@ -178,16 +178,30 @@ Two related version inconsistencies were also corrected: `wails.json` declared
 
 Still open:
 
-- `CHANGELOG.md` claims "Formal TLA+ specifications for core protocols" shipped.
-  No `.tla` file exists in the repository.
-- `docs/api/REST_API.md` documents `/api/audit-log/verify` returning 200 with
-  `"integrity":"tampered"`; the handler returns HTTP 500.
-- `docs/api/WS_API.md` documents a 30 s SSE heartbeat; the handler has no ticker.
-- Root `ROADMAP.md` still carries "Phase 5 Complete / Phase 6 Complete" and
-  "all 7 sub-phases complete" claims that were never verified against a test.
+- `docs/api/REST_API.md` and `docs/api/WS_API.md` now match the code (see below),
+  but no test asserts that every documented endpoint exists and every documented
+  field is actually returned. The two mismatches found were found by reading, not
+  by tooling; a drift check would catch the next one.
 
 Now fixed:
 
+- `CHANGELOG.md` claimed "Formal TLA+ specifications for core protocols" shipped.
+  No `.tla` file exists and no model checker is configured, so the claim was
+  removed and a correction note added in place. The same section also called the
+  capability tokens "Macaroon-based"; they are a flat Ed25519-signed struct with
+  no caveat chain and no Macaroon library in `go.mod`.
+- `docs/api/REST_API.md` documented `/api/audit-log/verify` returning `200` with
+  an `integrity` field. The handler returned `500` on tampering and had no such
+  field, because `AuditLogVerified()` conflated "no audit log" with "tampered".
+  Now returns `200` with `integrity` for a broken chain and `500` only when there
+  is no chain to verify. Pinned by `TestAuditVerifyHandlerTamperedReturns200`,
+  which fails against the previous handler.
+- `docs/api/WS_API.md` documented a `: heartbeat` comment every 30 s that the
+  handler never sent, so a connected-but-silent stream was the only observable
+  behaviour. Implemented, pinned by `TestEventsHandlerEmitsHeartbeat`. The same
+  investigation found the SPA opened a **WebSocket** against that SSE-only
+  endpoint, so it never connected and retried every 2 s forever; it now uses
+  `EventSource`.
 - `AGENTS.md` said there was no `LICENSE`, no CI, no `SECURITY.md` and no
   `CONTRIBUTING.md`. All four exist; the claims are corrected.
 - Version split: `wails.json` declared `1.0.0` while `nfpm.yaml` and the Makefile
@@ -195,12 +209,19 @@ Now fixed:
   to `"dev"`, which is correct — CI overrides it with `-ldflags -X …Version=${{
   github.ref_name }}`. `CHANGELOG.md` had no `1.0.1` entry although v1.0.1
   shipped; one is now recorded.
-- Root `ROADMAP.md` ended in literal unexpanded `$(date)` and
-  `$(git rev-parse --short HEAD)` placeholders from a template committed before
-  generation.
+- Root `ROADMAP.md` claimed "Phase 5 Complete | Phase 6 Complete" and "all 7
+  sub-phases complete". Re-measured: 6.6 QoS has no callers, 6.3 multi-path
+  duplicates rather than distributes, and 6.1 federation never performs a peer
+  lookup. Each status line now carries its evidence. It also claimed "13 screens"
+  (there are 14), "all backed by real API endpoints" (four `/api/docs/*` paths are
+  not registered), and "SSE real-time updates" (`BroadcastEvent` has no callers).
+  Its stale `$(date)` placeholders were also expanded.
+- The **v1.0.0** release page now carries a prominent warning that its assets
+  contain the mDNS panic and points to v1.0.1. The binaries are unchanged so
+  their published checksums still verify.
 - `docs/architecture/ROADMAP.md` itself: the committed-artifact table, the
   coverage figures, the test counts, the `pkg/link` count and the number of tests
-  revived from `setup.go` (17, not 16) were all stale. Re-measured at `0d30e16`.
+  revived from `setup.go` (17, not 16) were all stale. All re-measured.
 
 ---
 
@@ -221,11 +242,12 @@ Now fixed:
 
 Phase 8 item 8.12 addresses this.
 
-**Outstanding on the last release.** The **v1.0.0** assets are still published
-and still contain the LAN-reachable mDNS panic fixed in v1.0.1
-(`ARCHITECTURE.md` §9 item 21). Until that release is marked superseded or its
-assets replaced, a user following the releases page can still install an
-affected build. This is the highest-priority item not tracked above.
+**Outstanding on the last release.** ✅ Resolved. The **v1.0.0** assets are still
+published and still contain the LAN-reachable mDNS panic fixed in v1.0.1
+(`ARCHITECTURE.md` §9 item 21). The release description now opens with a warning
+naming the defect and linking to v1.0.1; the binaries themselves are unchanged so
+their published checksums still verify. Replacing or deleting them would break
+those checksums, so the warning is the chosen mitigation.
 
 ---
 
