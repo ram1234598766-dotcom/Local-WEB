@@ -1,7 +1,8 @@
 # LocalWEB — Technology Stack
 
 **Grounded in `go.mod`, `go list -deps ./...`, the `Makefile`, `.golangci.yml`
-and `.github/workflows/ci.yml` at commit `df30121` + the correctness pass.**
+and `.github/workflows/ci.yml` at commit `0d30e16`, plus a fresh `git clone` of
+`main` used to build both Windows installers from an empty tree.**
 **Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26**
 
 > Tag legend, as in `ARCHITECTURE.md`: ✅ verified by a test · ⚠️ partial ·
@@ -43,6 +44,9 @@ Every target below exists and runs. `make help` prints this list.
 | `bench` | Benchmarks for crdt, dht, crypto, chaos, store, security |
 | `run-node`, `run-cli` | Run from source |
 | `quickstart` | `scripts/quickstart.sh` |
+| `deps-wintun` | Downloads Wintun 0.14.1 from wintun.net and verifies its SHA-256; idempotent |
+| `msi` | Stages the payload and runs WiX `candle` + `light` → `dist/localweb_1.0.1_x64_en-US.msi` |
+| `nsis` | Stages the payload and runs `makensis` → `dist/localweb-1.0.1-setup.exe` |
 | `ci` | The same gate CI runs |
 | `clean` | Removes `bin/` and `coverage.out` |
 
@@ -74,10 +78,31 @@ dev tool.
 | File | State |
 |---|---|
 | `Dockerfile` | Present, 2-stage Alpine, correct `-ldflags` version injection. **Not built by CI.** Its `CMD ["node", "--data-dir", …]` previously had the flag silently swallowed; the daemon now strips the leading verb. |
-| `nfpm.yaml` | Present but **cannot build as written**: it reads `dist/localweb-linux-amd64`, while `cross-compile` writes to `bin/`. Tracked in FINDINGS. |
+| `nfpm.yaml` | **Valid YAML and correct paths.** It was previously unusable twice over: `version` and `contents` were indented so the top-level mapping could not start, and it read `dist/` while `cross-compile` writes to `bin/`. Both fixed; every `src` path resolves. |
 | `.goreleaser.yml` | Present and valid for 5 targets. **Never invoked** — `release-dry` is the only target that touches goreleaser. Its macOS `certificate:` is an unfilled placeholder (`<Team ID>`) that will fail signing. |
-| `systemd/*.service` | Fixed this pass: `Type=simple` (the daemon has no sd_notify), `wintun` dependency removed from a Linux unit, six duplicated hardening keys collapsed, `ExecStart` no longer hides `--data-dir`. |
-| `installers/` | 57 files; the most complete part of the repo. Contains 26.3 MB of Linux `.deb`/`.rpm`/`.apk` packages committed inside the **Windows** directory, plus a 0-byte `.deb` tracked inside `pkg/`. |
+| `systemd/*.service` | Fixed: `Type=simple` (the daemon has no sd_notify), `wintun` dependency removed from a Linux unit, six duplicated hardening keys collapsed, `ExecStart` no longer hides `--data-dir`. |
+| `installers/` | 34 tracked files, **no binaries**. It previously held 26.3 MB of Linux `.deb`/`.rpm`/`.apk` inside the Windows directory, plus a 0-byte `.deb` tracked inside `pkg/`; all removed. |
+| `installers/windows/*.ps1` | Six scripts, one copy. `installers/windows/scripts/` held a duplicate set that drifted by 30 lines, which is how `install.ps1` kept a PowerShell 7-only `??` operator — a parse error under the Windows PowerShell 5.1 the installer invokes — while its twin had been fixed. |
+| `installers/windows/{README,LICENSE,CHANGELOG}.md` | Removed. Byte-identical duplicates of the root files; both build scripts now read the canonical root copies, which ships them into the installer. |
+
+**Reproducible Windows installers.** `wintun.dll` is a `*.dll`, so `.gitignore`
+excluded it, and both installers bundle it — a fresh clone could build neither.
+`make deps-wintun` now fetches it. The SHA-256 is checked on the archive
+(`07c25618…`, 750,540 bytes) *and* on the extracted amd64 driver
+(`e5da8447…`, 427,552 bytes), and the amd64 build is selected by size rather than
+path because the archive layout is not contractual. A mismatch is a hard failure
+that writes nothing, because this file is installed as a kernel driver.
+
+Verified by cloning `main` into an empty directory with no `wintun.dll`, no
+`bin/` and no `dist/`: `make msi` and `make nsis` both succeed, the NSIS payload
+carries all six scripts plus `wintun.dll`, `wintun.dll.sig`, `localweb.exe`,
+`localweb-cli.exe` and `config/config.json`, and the MSI reports
+`ProductVersion 1.0.1`.
+
+Toolchain notes: `scripts/windows-toolchain.sh` locates `candle`, `light` and
+`makensis` under either Git Bash or WSL, translates arguments only when the tool
+is a native Windows binary, and stages inside the repository because `/tmp` is
+invisible to a Windows executable under WSL.
 
 ---
 
@@ -159,32 +184,34 @@ The rationale for the split is in `ARCHITECTURE.md` §3.
 
 ### 3.1 Measured coverage
 
-`make test-cover` → **63.7%** of statements across the unit suite.
+`make test-cover` → **64.4%** of statements across the unit suite
+(6,046/9,410 statements over 27 packages). Measured at commit `0d30e16`.
 
 | Package | Coverage | Package | Coverage |
 |---|---|---|---|
 | `pkg/security` | 89.6% | `pkg/services/vpn` | 78.0% |
-| `pkg/discovery` | 86.0% | `pkg/chaos` | 76.7% |
+| `pkg/discovery` | 86.2% | `pkg/chaos` | 76.7% |
 | `pkg/plugin` | 86.1% | `pkg/store` | 76.6% |
 | `pkg/qos` | 86.0% | `pkg/crdt` | 75.6% |
-| `pkg/services/registry` | 83.4% | `pkg/link` | 64.6% |
-| `pkg/services/docs` | 82.1% | `pkg/services/email` | 65.3% |
+| `pkg/services/registry` | 83.4% | `pkg/services/email` | 65.3% |
+| `pkg/services/docs` | 82.1% | `pkg/link` | 64.2% |
 | `pkg/services/voice` | 77.0% | `pkg/services/http` | 64.1% |
 | | | `pkg/federation` | 56.6% |
 | | | `pkg/services/files` | 55.1% |
 | | | `pkg/proto` | 54.3% |
 | | | `pkg/services/dns` | 52.9% |
-| | | `pkg/nat` | 48.9% |
+| | | `pkg/nat` | 52.6% |
 | | | `cmd/cli` | 47.3% |
 | | | `pkg/dht` | 46.6% |
 | | | `pkg/crypto`, `pkg/transport` | 40.7% |
 | | | `pkg/gui` | 36.2% |
 | | | `pkg/services/messaging` | 26.3% |
 | | | `cmd/node` | 3.0% |
+| | | `internal/version` | 0.0% (2 statements, no test file) |
 
 **The previous revision claimed ≥90% unit / ≥80% integration.** Measured
-before this pass: **25.9%** total, and `pkg/link`, `pkg/discovery` and
-`pkg/plugin` had **no test files at all** (1,460 statements at 0%). Those three
+before the correctness passes: **25.9%** total, and `pkg/link`, `pkg/discovery`
+and `pkg/plugin` had **no test files at all** (1,460 statements at 0%). Those three
 now have 103, 79 and 58 tests respectively. The 90% target is still not met and
 is not claimed.
 
@@ -195,16 +222,18 @@ verification — and is the weakest service.
 
 ### 3.2 Test inventory
 
+Integration tests carry `//go:build integration`, so they never run implicitly.
+Before the correctness pass, `test/integration/setup.go` held 17 `Test*`
+functions in a **non-test file** and was therefore never compiled into the test
+binary; those 17 now run.
+
+Counts are enumerated with `go test -list`, not parsed from `-v` output:
+
 | Suite | Count | Command |
 |---|---|---|
-| Unit | 783 top-level | `make test-unit` |
-| Integration | 71 top-level | `make test-integration` |
+| Unit | 783 | `make test-unit` |
+| Integration | 71 | `make test-integration` |
 | Chaos | included above | `make test-chaos` |
-
-Integration tests carry `//go:build integration`, so they never run implicitly.
-Before this pass, `test/integration/setup.go` held 16 `Test*` functions in a
-**non-test file** and was therefore never compiled into the test binary; those
-16 now run.
 
 ### 3.3 Test matrix — what exists vs. what was claimed
 

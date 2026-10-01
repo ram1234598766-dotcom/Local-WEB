@@ -1,6 +1,7 @@
 # LocalWEB — System Architecture
 
-**Status: reflects the code as of commit `df30121` + the correctness pass described in §9.**
+**Status: reflects the code at commit `0d30e16`, covering two correctness passes
+(described in §9) and the packaging/reproducibility pass in §9.1.**
 **Module: `github.com/ram1234598766-dotcom/Local-WEB` | Go 1.26 | Author: Mrityunjay K**
 
 > **How to read this document.** Every claim below is tagged with its evidence
@@ -84,10 +85,11 @@ previous documentation, which described all nine as running.
 | L2 | Acoustic FSK | ❌ Not implemented | no `acoustic.go`; only the `ModeAcoustic` enum value exists |
 | L2 | Ethernet | ❌ Not implemented | no `ethernet.go` |
 | L2 | Link quality estimation (Kalman/EWMA) | ❌ Not implemented | no `quality.go`; only `manager.go:286` `computeScore` with fixed bonuses |
-| L2 | Multi-path: failover / weighted-latency | ✅ Verified | `pkg/link/multipath_test.go` `TestMultiPathHandleEventWithNoAddresses`, `TestNewMultiPathManagerReachesFailoverThroughTheConstructor` |
+| L2 | Multi-path: failover / weighted-latency | ✅ Verified | `pkg/link/multipath_test.go` `TestMultiPathHandleEventWithNoAddresses`, `TestNewMultiPathManagerReachesFailoverThroughTheConstructor`, `TestMultiPathPeerLostDoesNotDeadlock` |
 | L2 | Multi-path: round-robin / weighted-BW | ⚠️ Partial | `multipath.go:302-327` rotates a primary pointer; `SendToPeer` duplicates bytes to every link rather than distributing |
 | L2 | Multi-path: RLNC, MPTCP | ❌ Not implemented | no `rlnc` or `mptcp` symbol in the tree |
 | L3 | mDNS-SD discovery | ✅ Verified | `pkg/discovery/mdns_test.go` 40 tests incl. `TestBuildAnnounceRoundTripPreservesPeerID`, `TestParseMDNSResponseTruncatedRecordData` |
+| L3 | mDNS parser is safe on hostile input | ✅ Verified | was a **LAN-reachable panic**; see §9 item 21. `TestParseDNSNameTruncatedLabel`, `TestAppendDNSAnswerZeroLengthData`, `TestParseMDNSResponseTruncatedRecordData`, `TestBuildTXTRecordLengthPrefixMatchesPayload` |
 | L3 | TTL eviction / GC | ✅ Verified | `types_test.go` `TestPeerDatabaseGCBoundary`, `TestPeerDatabaseGCEvictsStalePeers` |
 | L3 | Score responds to its inputs | ✅ Verified | `discovery_test.go` `TestComputeScoreIsNotConstant` |
 | L3 | Rendezvous / federation | ⚠️ Partial | `pkg/federation` HTTP/1.1 JSON, not HTTP/3; the poll loop (`rendezvous_discovery.go:92-115`) only re-registers, never performs a lookup |
@@ -119,7 +121,7 @@ previous documentation, which described all nine as running.
 | L8 | Service mesh (LB / breaker / retry / OTel) | ❌ Not implemented | no such code |
 | L9 | GUI: `/api/status`, `/api/peers`, `/api/audit-log` | ✅ Verified | `pkg/gui/` tests |
 | L9 | GUI: `/metrics`, `/debug/pprof` | ❌ Not implemented | `handler.go:33-58` registers neither |
-| L9 | Plugin manager + built-in plugins | ✅ Verified | `pkg/plugin/` 58 tests |
+| L9 | Plugin manager + built-in plugins | ✅ Verified | `pkg/plugin/` 58 tests; nil-logger panic, double-`Start` race, ignored router prefix and swallowed bind error fixed in §9 items 25-26 |
 | L9 | Go `.so` plugin loading, WASM/WASI | ❌ Not implemented | `plugin.go:248` returns "not implemented"; no `wasm` directory |
 | L9 | Plugin capability sandbox | ❌ Not implemented | `Host` grants unrestricted store/transport/security |
 | — | Chaos: loss / latency / corruption / partition | ✅ Verified | `pkg/chaos/runner_test.go` `TestChaosFaultsAreReversible`, `TestChaosConnDuplicatesRead` |
@@ -344,7 +346,8 @@ not equal the one requested (`quic.go` `TestConnectIdentityMismatch`).
 | Tampering | Noise AEAD per message; SHA3-256 hash-chained audit log | ✅ `TestAuditLogTamperDetection` |
 | Repudiation | Ed25519 signatures; tamper-evident audit chain | ⚠️ audit log is in-memory only and lost on restart |
 | Info disclosure | All traffic over QUIC/TLS 1.3; Noise XX beneath it | ⚠️ TLS cert verification is disabled by default (`InsecureSkipVerify: !enforceTLS`, `quic.go:379`) |
-| DoS | PoW on DHT registration and Email; Argon2 cost clamped to hard caps | ✅ after this pass |
+| DoS | PoW on DHT registration and Email; Argon2 cost clamped to hard caps | ✅ after the first pass |
+| DoS | mDNS-SD parses **untrusted packets from any LAN host** | ✅ **was an unauthenticated remote panic.** Fixed in the second pass; see §9 item 21 and §9.1. The 1.0.0 release binaries are still affected. |
 | Elevation | Capability tokens with expiry and revocation | ⚠️ no caveats, no attenuation, no DHT-distributed revocation |
 
 ---
@@ -390,7 +393,7 @@ code with a test that fails against the previous behaviour.
 | 10 | `StopAll` stops running scenarios | `cr.running` was only ever deleted from, so `StopAll` iterated an empty set | Register the cancel func on start | `TestStopAllCancelsRunningScenario` |
 | 11 | "Services health" endpoint | Returned all 9 services `true` while the daemon started none | Reports real component state | — (covered by the endpoint change) |
 | 12 | `/api/dns/records` | Panicked on any peer with no addresses | Skip address-less peers; `Verified` now honest | — |
-| 13 | "500+ unit, 25+ integration tests" | 16 integration tests sat in `setup.go`, a **non-test file**, so they never executed | Renamed to `setup_test.go` + `//go:build integration` — 16 tests now run | `test/integration/setup_test.go` |
+| 13 | "500+ unit, 25+ integration tests" | 17 integration tests sat in `setup.go`, a **non-test file**, so they never executed | Renamed to `setup_test.go` + `//go:build integration` — 17 tests now run | `test/integration/setup_test.go` |
 | 14 | RGA insert-after-parent | `findNode` skipped the head sentinel, so every `Insert("head", …)` silently became an append | Head sentinel resolves | `TestCRDTPrependViaHeadSentinel` |
 | 15 | Node identity / transport key | Ed25519 bytes fed straight into the X25519 Noise layer | Convert via `Ed25519PublicToX25519` / `Ed25519PrivateToX25519` | `cmd/node/main_test.go` |
 | 16 | systemd `ExecStart=… node --data-dir …` | `flag.Parse()` stops at `node`, so `--data-dir` was **discarded** and the node used the default path | Daemon strips a leading verb; unknown positionals now fail loudly | `TestStripLeadingSubcommandDropsVerbBeforeFlags` |
@@ -399,8 +402,35 @@ code with a test that fails against the previous behaviour.
 | 19 | 9 pinned WebRTC/eBPF/netlink/wifi deps | All 9 absent from `go.mod` | Documented as absent | — |
 | 20 | "TLA+ Verified", `specs/*.tla` | No `.tla` file in the repo; no model checker configured | Removed; the spec is prose, and §1.2 notes what is *not* formally verified | — |
 
+### 9.1 Second correctness pass, and packaging
+
+The first pass (§9 items 1–20) was written against `df30121`. A second pass found
+five further defects, four of them reachable from another host. Each is pinned by
+a test that fails against the previous behaviour.
+
+| # | Defect | Effect | Fix | Test that pins it |
+|---|---|---|---|---|
+| 21 | **mDNS-SD parser indexed and sliced attacker-controlled lengths** | A malformed packet from any host on the LAN could panic the node — an unauthenticated denial of service. **This is the most serious defect found in this audit.** | Length and bounds checks before every index/slice; zero-length record data tolerated | `TestParseDNSNameTruncatedLabel`, `TestAppendDNSAnswerZeroLengthData`, `TestParseMDNSResponseTruncatedRecordData`, `TestBuildTXTRecordLengthPrefixMatchesPayload` |
+| 22 | Discovery orchestrator mutated peer state from the event handler and the poll loop with no synchronisation | Data race, reported by `-race` | Synchronised access | `TestOrchestratorHandleEventConcurrent`, `TestOrchestratorOnPeerConcurrentWithEventLoop` |
+| 23 | `LinkManager.AutoEscalate` and `MultipathManager` peer-loss paths could deadlock | Node hang on a topology change | Re-entrant locking removed | `TestManagerAutoEscalateDoesNotDeadlock`, `TestMultiPathPeerLostDoesNotDeadlock`, `TestManagerConcurrentHandleEvent` |
+| 24 | `MultipathManager.HandleEvent` panicked on a peer with no addresses | Crash on a legitimate peer state | Address-less peers skipped | `TestMultiPathHandleEventWithNoAddresses` |
+| 25 | `NodeHost` left `logger` as a nil `*zerolog.Logger`; `PluginManager.Start` could run twice concurrently | Any built-in plugin `Init` panicked; concurrent starts raced | Seeded from the process logger at construction (`host.go:67-70`); `Start` made idempotent | `TestPluginManagerStartPlugin`, `TestPluginManagerConcurrentStartRunsStartOnce`, `TestPluginManagerStartIsIdempotent` |
+| 26 | `NodeHost` ignored a router group's mount prefix and swallowed bind errors | Plugins served at the wrong path; a failed bind reported success | Prefix honoured; bind errors propagated | `TestNodeHostRouterGroupMountsUnderItsPrefix`, `TestNodeHostRouterGroupServesItsOwnRoutes`, `TestExampleEchoPluginStartReportsBindFailure` |
+
+**Packaging, same pass.** `installers/` shipped a Linux `.deb`/`.rpm`/`.apk`
+inside the Windows directory and tracked a **0-byte** `.deb` inside `pkg/`. Both
+inst installers also depended on `wintun.dll`, which `*.dll` in `.gitignore`
+excluded, so **neither installer could be built from a fresh clone** — the
+released artefacts came from a machine that happened to have the file on disk.
+`scripts/fetch-wintun.sh` now downloads Wintun 0.14.1 and verifies the SHA-256 of
+both the archive and the extracted amd64 driver, and `make msi` / `make nsis`
+build the installers from a clean tree. `nfpm.yaml` was additionally not valid
+YAML at all. See `TECH_STACK.md` §1.3 and `ROADMAP.md` §5.
+
 ---
 
 *LocalWEB Architecture — grounded in `go build ./...`, `go vet ./...`,
 `golangci-lint run` (0 issues), `go test ./...` (783 tests),
-`go test -tags=integration ./test/integration/...` (71 tests).*
+`go test -tags=integration ./test/integration/...` (71 tests), and a fresh
+`git clone` of `main` that builds both Windows installers with no pre-existing
+`wintun.dll`.*

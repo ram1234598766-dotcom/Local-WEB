@@ -1,7 +1,7 @@
 # LocalWEB — Roadmap
 
-**Grounded in the code at commit `df30121` + the correctness pass described in
-`ARCHITECTURE.md` §9.**
+**Grounded in the code at commit `0d30e16`, covering two correctness passes and
+the packaging pass described in `ARCHITECTURE.md` §9 and §9.1.**
 **Module: `github.com/ram1234598766-dotcom/Local-WEB`**
 
 > The previous revision of this roadmap reported "Phase 6 Complete" with a
@@ -21,8 +21,8 @@
 | Services | 9/9 exist as tested libraries; **0/9 started by the daemon** | `cmd/node/main.go` registers only `Control` |
 | Security | Noise XX + hybrid PQ verified; capability tokens are not Macaroons | `pkg/transport/hybrid_test.go`, `pkg/security/capability.go` |
 | Links | 3 partially functional (WiFi/adhoc/USB); BLE stubbed; acoustic and Ethernet absent | `pkg/link` 103 tests |
-| Tests | **783 unit + 71 integration** | `make test-unit`, `make test-integration` |
-| Coverage | **63.7%** (was 25.9%) | `make test-cover` |
+| Tests | **783 unit + 71 integration**, enumerated with `go test -list` | `make test-unit`, `make test-integration` |
+| Coverage | **64.4%** (was 25.9%) | `make test-cover` |
 | Quality gates | `go build`, `go vet`, `golangci-lint` (0 issues), `gofmt -s -l` all clean | verified |
 | Race detector | clean across the unit suite | `make test-race` |
 | Platforms built | 5 (linux/darwin/windows × amd64/arm64 minus windows/arm64) | `make cross-compile` |
@@ -51,7 +51,7 @@ not a missing feature. Adding Phase 9 UX on top would multiply the gap.
 | 8.8 | Config file loader matching `config/config.json` | Medium | `localweb --config` works and precedence is documented and tested |
 | 8.9 | DHT bucket refresh + split | Medium | Table quality holds after 1k joins/leaves |
 | 8.10 | Close the coverage gap on `pkg/services/messaging`, `pkg/gui`, `pkg/dht`, `pkg/services/dns` | Medium | Total ≥75% |
-| 8.11 | Repair `nfpm.yaml` output paths; untrack the committed build artifacts | Medium | `nfpm pack` succeeds; `dist/` and `installers/` hold no binaries |
+| 8.11 | ~~Repair `nfpm.yaml` output paths; untrack the committed build artifacts~~ | **Done** | `nfpm.yaml` parses and every `src` resolves; `dist/` and `installers/` hold no binaries (68.7 MB removed) — see §5 |
 | 8.12 | Add a release workflow invoking goreleaser + cosign + syft | Medium | Tagging produces a signed release with an SBOM |
 | 8.13 | Fix the SPA's WebSocket/SSE mismatch and its 6 missing endpoints | Low | No console errors on any screen |
 | 8.14 | `cmd/cli node` subcommand, or remove it | Low | It must not claim to start a node it does not start |
@@ -71,6 +71,8 @@ make ci                    # the gate CI runs
 ```
 
 Plus, for each of 8.1–8.5, a named test that fails against the current code.
+
+**Item 8.11 is complete.** Items 8.1–8.10 and 8.12–8.14 are open.
 
 ---
 
@@ -143,8 +145,12 @@ Plus at the repo root: `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
 | `docs/development/*` (5 files) | ⚠️ `CONTRIBUTING.md` exists at the root; the rest duplicate it |
 | `docs/specs/*.tla` | ❌ no — not until Phase 10.1 actually produces them |
 
-There are also two `ROADMAP.md` files with different content and neither
-references the other. Consolidate to one.
+There are also two `ROADMAP.md` files with different content. **Partly
+resolved:** the root `ROADMAP.md` now names this file as canonical and holds only
+the aspirational Phase 6–11 plan, so neither is orphaned and neither contradicts
+the other. They are still separate documents by design — measured state here,
+intent there. A full merge would either lose the Phase 9–11 planning or dilute
+this file with unverified completion claims.
 
 ### Committed build artifacts — RESOLVED
 
@@ -170,15 +176,31 @@ Two related version inconsistencies were also corrected: `wails.json` declared
 
 ### Documentation debt found while auditing
 
+Still open:
+
 - `CHANGELOG.md` claims "Formal TLA+ specifications for core protocols" shipped.
+  No `.tla` file exists in the repository.
 - `docs/api/REST_API.md` documents `/api/audit-log/verify` returning 200 with
   `"integrity":"tampered"`; the handler returns HTTP 500.
 - `docs/api/WS_API.md` documents a 30 s SSE heartbeat; the handler has no ticker.
-- `AGENTS.md` still says there is no `LICENSE`, no CI, no `SECURITY.md` and no
-  `CONTRIBUTING.md`. All four now exist.
-- Version split: `1.0.0` in every shipped artefact and in `wails.json` and
-  `CHANGELOG.md`; `3.0.0` in the previous revision of all three architecture
-  docs; `"dev"` as the compile-time default in `internal/version`. Pick one.
+- Root `ROADMAP.md` still carries "Phase 5 Complete / Phase 6 Complete" and
+  "all 7 sub-phases complete" claims that were never verified against a test.
+
+Now fixed:
+
+- `AGENTS.md` said there was no `LICENSE`, no CI, no `SECURITY.md` and no
+  `CONTRIBUTING.md`. All four exist; the claims are corrected.
+- Version split: `wails.json` declared `1.0.0` while `nfpm.yaml` and the Makefile
+  declared `1.0.1`; `wails.json` is now `1.0.1`. `internal/version` still defaults
+  to `"dev"`, which is correct — CI overrides it with `-ldflags -X …Version=${{
+  github.ref_name }}`. `CHANGELOG.md` had no `1.0.1` entry although v1.0.1
+  shipped; one is now recorded.
+- Root `ROADMAP.md` ended in literal unexpanded `$(date)` and
+  `$(git rev-parse --short HEAD)` placeholders from a template committed before
+  generation.
+- `docs/architecture/ROADMAP.md` itself: the committed-artifact table, the
+  coverage figures, the test counts, the `pkg/link` count and the number of tests
+  revived from `setup.go` (17, not 16) were all stale. Re-measured at `0d30e16`.
 
 ---
 
@@ -187,16 +209,23 @@ Two related version inconsistencies were also corrected: `wails.json` declared
 | Step | State |
 |---|---|
 | Cross-compile 5 targets | ✅ `make cross-compile` |
-| Checksums | ❌ not generated by any make target |
+| Windows MSI + EXE | ✅ `make msi`, `make nsis`, reproducible from a clean clone |
+| Checksums | ⚠️ generated by hand for the release; **no make target** produces them |
+| GitHub Release | ⚠️ v1.0.1 published manually with verified assets and checksums; **still no release workflow**, so this is not repeatable by CI |
 | SBOM | ❌ no Syft in the toolchain or CI |
 | Signing | ⚠️ `.goreleaser.yml` uses GPG; no key, no cosign, and the macOS certificate is an unfilled placeholder |
-| GitHub Release | ❌ no release workflow |
 | Docker images | ❌ `Dockerfile` exists, nothing builds or pushes it |
 | Homebrew / pkg.go.dev | ❌ not wired |
 | Tagged commit signing | ❌ no commit in the history is signed |
 | Trivy scan | ❌ not configured |
 
-Phase 8 items 8.11 and 8.12 address this.
+Phase 8 item 8.12 addresses this.
+
+**Outstanding on the last release.** The **v1.0.0** assets are still published
+and still contain the LAN-reachable mDNS panic fixed in v1.0.1
+(`ARCHITECTURE.md` §9 item 21). Until that release is marked superseded or its
+assets replaced, a user following the releases page can still install an
+affected build. This is the highest-priority item not tracked above.
 
 ---
 
