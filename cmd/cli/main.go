@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/spf13/cobra"
@@ -79,17 +82,103 @@ var idCmd = &cobra.Command{
 
 var peersCmd = &cobra.Command{
 	Use:   "peers",
-	Short: "List discovered peers",
+	Short: "List peers discovered by the running node",
 	Example: `  localweb peers
-  localweb peers --json`,
+  localweb peers --json
+  localweb peers --addr 127.0.0.1:8080`,
 	Run: func(cmd *cobra.Command, args []string) {
+		addr, _ := cmd.Flags().GetString("addr")
+		peers, err := fetchPeers(addr)
 		jsonOut, _ := cmd.Flags().GetBool("json")
+
 		if jsonOut {
-			fmt.Println(`{"peers": [], "connected": false, "error": "not connected to a running node"}`)
+			if err != nil {
+				fmt.Printf(`{"peers": [], "connected": false, "error": %q}`+"\n", err.Error())
+				return
+			}
+			out, merr := json.Marshal(peers)
+			if merr != nil {
+				fmt.Printf(`{"peers": [], "connected": true, "error": %q}`+"\n", merr.Error())
+				return
+			}
+			fmt.Printf(`{"peers": %s, "connected": true}`+"\n", out)
 			return
 		}
-		fmt.Println("Not connected to a running node.")
+
+		if err != nil {
+			// Previously this printed "Not connected to a running node."
+			// unconditionally, which was false whenever a node was up.
+			fmt.Printf("Could not reach the node's API at %s: %v\n", addr, err)
+			fmt.Println("Is the node running?  Start it with:  localweb node")
+			return
+		}
+
+		if len(peers) == 0 {
+			fmt.Println("No peers yet.")
+			fmt.Println("Peers appear automatically on the same network. If you expected one:")
+			fmt.Println("  - check both machines are on the same subnet")
+			fmt.Println("  - allow the node through the firewall")
+			return
+		}
+
+		fmt.Printf("%d peer(s):\n", len(peers))
+		for _, p := range peers {
+			name := p.Name
+			if name == "" {
+				name = "(unnamed)"
+			}
+			fmt.Printf("  %s  %s  score=%.2f  %s\n", p.ID, name, p.Score, p.Source)
+		}
 	},
+}
+
+// peerInfo mirrors the fields the GUI's /api/peers endpoint returns that the CLI
+// displays.
+type peerInfo struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Addrs   []string `json:"addrs"`
+	Score   float64  `json:"score"`
+	Latency string   `json:"latency"`
+	Source  string   `json:"source"`
+}
+
+// fetchPeers asks a running node for its peer list over the local GUI API.
+//
+// The address is an operator-supplied input, so it is parsed and validated
+// rather than pasted into a URL.
+func fetchPeers(addr string) ([]peerInfo, error) {
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address %q: expected host:port", addr)
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if port == "" {
+		return nil, fmt.Errorf("invalid address %q: missing port", addr)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	url := "http://" + net.JoinHostPort(host, port) + "/api/peers"
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("node API returned %s", resp.Status)
+	}
+
+	var peers []peerInfo
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&peers); err != nil {
+		return nil, fmt.Errorf("could not read peer list: %w", err)
+	}
+	return peers, nil
 }
 
 var useJSON bool
@@ -104,6 +193,11 @@ func init() {
 	rootCmd.AddCommand(peersCmd)
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringP("data-dir", "d", "", "path to store node identity and config")
+	// idCmd documented "--data-dir" in its own Example and read the flag in its
+	// Run body, but never registered it, so the documented invocation failed with
+	// "unknown flag: --data-dir".
+	idCmd.Flags().StringP("data-dir", "d", "", "path to store node identity and keys")
+	peersCmd.Flags().StringP("addr", "a", "127.0.0.1:8080", "address of the running node's GUI API")
 }
 
 func initHelpText() string {
@@ -173,7 +267,7 @@ func runInit(scanner *bufio.Reader, dataDir string) error {
 		"data_dir":   dataDir,
 		"node_id":    fmt.Sprintf("%x", nodeID[:8]),
 		"listen":     "0.0.0.0:4443",
-		"created_at": "now",
+		"created_at": time.Now().UTC().Format(time.RFC3339),
 	}
 
 	configPath := filepath.Join(dataDir, "config.json")
@@ -188,7 +282,11 @@ func runInit(scanner *bufio.Reader, dataDir string) error {
 	fmt.Printf("  Name:    %s\n", name)
 	fmt.Printf("  Data:    %s/\n", dataDir)
 	fmt.Println("")
-	fmt.Println("To start your node:  ./bin/localweb node --name " + name)
+	// The printed hint has to work from the directory the user is standing in,
+	// and --data-dir is the flag that actually selects the identity `init` just
+	// created. The previous "./bin/localweb" path exists only in a built repo.
+	fmt.Printf("Start your node with:\n  localweb node --name %s --data-dir %q\n", name, dataDir)
+	fmt.Println("Then, on another machine on the same network:  localweb peers")
 	return nil
 }
 
