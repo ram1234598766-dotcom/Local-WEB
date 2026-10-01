@@ -374,20 +374,29 @@ The previous revision listed **27 named Prometheus metrics**
 string exists inside an example plugin (`pkg/plugin/builtin.go:182-184`) but that
 plugin is never instantiated.
 
-Endpoints the shipped SPA calls that the handler does not register. This list was
-wrong before; re-derived from the shipped `pkg/gui/static/` assets. The handler
-registers 23 routes; the SPA references four paths with no handler:
+Endpoints the SPA calls that the handler does not register. **This list was wrong
+twice and is now derived from observed HTTP traffic, not from reading the source.**
+The handler registers 23 routes. Driving all 14 screens in a real browser against
+a running daemon produced 15 distinct `/api/` requests:
 
-| SPA path | Handler has instead |
-|---|---|
-| `/api/docs/create` | — |
-| `/api/docs/save/{id}` | — |
-| `/api/docs/autosave/{id}` | `/api/docs/documents` |
-| `/api/docs/comments/{id}` | — |
+| Result | Count | Paths |
+|---|---|---|
+| `200` | 12 | `/api/status`, `/api/peers`, `/api/dht/table`, `/api/audit-log`, `/api/audit-log/verify`, `/api/crdt/sync-status`, `/api/services/health`, `/api/dns/records`, `/api/http/sites`, `/api/email/messages`, `/api/messaging/messages`, `/api/docs/documents`, `/api/registry/packages` |
+| `404` | 3 | `/api/files/list`, `/api/files/transfers`, `/api/registry/installed` |
 
-The previously listed `/api/files/list`, `/api/files/transfers` and
-`/api/registry/installed` are **not referenced by the SPA at all** and were
-removed from this list.
+The three 404s are hit on **screen load**, so the Files and Registry screens render
+without data. Four more are missing but only fail on **user action**, so they do
+not appear in the traffic above: `/api/docs/create`, `/api/docs/save/{id}`,
+`/api/docs/autosave/{id}`, `/api/docs/comments/{id}` — creating or editing a
+document will 404.
+
+Two earlier versions of this list were wrong. The first was written by reading
+`app.js`; the second "correction" removed `/api/files/list`,
+`/api/files/transfers` and `/api/registry/installed` on the grounds that a regex
+over the source found no reference to them. That was wrong because `fetchAPI`
+prepends `/api`, so the literals in the source are `/files/list`,
+`/files/transfers` and `/registry/installed`. A browser proves what a regex
+cannot.
 
 **The SPA's transport mismatch is fixed.** `connectWS()` opened a **WebSocket**
 against `/api/events`, which the server serves only as **SSE** over
