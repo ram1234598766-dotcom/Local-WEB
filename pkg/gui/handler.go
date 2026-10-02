@@ -5,7 +5,9 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,6 +63,7 @@ func NewHandler(api *NodeAPI) *Handler {
 	// render, so a missing route was a guaranteed 404 in the browser.
 	mux.HandleFunc("/api/files/list", h.handleFilesList)
 	mux.HandleFunc("/api/files/transfers", h.handleFilesTransfers)
+	mux.HandleFunc("/api/files/upload", h.handleFilesUpload)
 	mux.HandleFunc("/api/registry/installed", h.handleRegistryInstalled)
 
 	// Docs mutations. app.js calls these on save, autosave and comment submit;
@@ -102,8 +105,62 @@ func (h *Handler) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(list)
 }
 
-// handleFilesTransfers reports in-flight and recent transfers. An empty array is
-// the honest answer when no transfer is running.
+// maxUploadBytes bounds a single upload. Without it a body of any declared
+// length is read into memory.
+const maxUploadBytes = 256 << 20
+
+// handleFilesUpload stores an uploaded file through the real file store.
+//
+// The SPA used to "upload" by advancing a counter on a timer and toasting a
+// success, having sent nothing: the file never reached disk and the message
+// was false. This is the endpoint that makes the toast mean something.
+func (h *Handler) handleFilesUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	// A path is not a name: this arrives from an untrusted query parameter and
+	// ends up as a map key and a stored filename.
+	name = filepath.Base(filepath.Clean("/" + name))
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(data) == 0 {
+		http.Error(w, "empty upload", http.StatusBadRequest)
+		return
+	}
+
+	created, err := h.api.StoreFile(r.Context(), name, data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":   created.CID.String(),
+		"name": created.Name,
+		"size": created.Size,
+		"cid":  created.CID.String(),
+	})
+}
+
+// handleFilesTransfers reports in-flight and completed transfers per peer.
 func (h *Handler) handleFilesTransfers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,10 @@ type NodeAPI struct {
 	// per-peer transfer state. It is nil until the daemon builds one, in which
 	// case Transfers reports an empty list instead of invented progress.
 	syncEngine files.SyncEngine
+
+	// registry is the live package registry. Nil until the daemon supplies one,
+	// in which case Packages reports an empty list rather than a hardcoded row.
+	registry registry.Registry
 
 	// docsSvc backs the Docs panel. The documents, comments and autosave
 	// endpoints all read and write through it, so the panel shows real CRDT
@@ -458,11 +463,75 @@ func (a *NodeAPI) SetHTTPSites(sites []HTTPSiteResponse) {
 }
 
 // SetFileStore records the real Files block store so /api/files/list can report
+// the files that are actually on this node.
 // actual file metadata instead of an empty or fabricated list.
 func (a *NodeAPI) SetFileStore(fs files.FileStore) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.fileStore = fs
+}
+
+// StoreFile writes an uploaded file into the real file store and returns its
+// stored metadata. It fails when no store is wired rather than reporting a
+// success that did not happen.
+func (a *NodeAPI) StoreFile(ctx context.Context, name string, data []byte) (*files.FileMeta, error) {
+	a.mu.RLock()
+	fs := a.fileStore
+	a.mu.RUnlock()
+	if fs == nil {
+		return nil, fmt.Errorf("this node has no file store, so nothing was saved")
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("refusing to store an empty file")
+	}
+
+	now := time.Now().UTC()
+	// The file's CID is the CID of its content, so the same bytes always
+	// produce the same id and a re-upload is recognisable as the same file.
+	c, err := files.CidFor(data)
+	if err != nil {
+		return nil, fmt.Errorf("identify file: %w", err)
+	}
+	meta := &files.FileMeta{
+		CID:      c,
+		Name:     name,
+		Size:     int64(len(data)),
+		MimeType: mimeForName(name),
+		Modified: now,
+		Created:  now,
+		Version:  1,
+	}
+	if err := fs.PutFile(ctx, meta, data); err != nil {
+		return nil, fmt.Errorf("store file: %w", err)
+	}
+	return meta, nil
+}
+
+// mimeForName guesses a content type from the extension, defaulting to a binary
+// stream rather than claiming to know.
+func mimeForName(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".txt", ".md":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".html":
+		return "text/html"
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "text/javascript"
+	case ".go":
+		return "text/x-go"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".pdf":
+		return "application/pdf"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // SetRegistryInstalled records the packages installed on this node.
@@ -879,10 +948,52 @@ func (a *NodeAPI) AddDocComment(docID, author, text string) (CommentResponse, er
 	return c, nil
 }
 
+// SetRegistry records the live package registry so the Registry and DHT panels
+// show packages that were really published, rather than a hardcoded row.
+func (a *NodeAPI) SetRegistry(r registry.Registry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.registry = r
+}
+
+// Packages returns what the registry actually holds.
+//
+// It used to return one hardcoded row for localweb-cli regardless of what the
+// node had published, so the panel always looked populated and never reflected
+// a real publish.
 func (a *NodeAPI) Packages() ([]PackageResponse, error) {
-	return []PackageResponse{
-		{Name: "localweb-cli", Version: "1.0.0", Author: "system", Installed: false},
-	}, nil
+	a.mu.RLock()
+	reg := a.registry
+	a.mu.RUnlock()
+
+	if reg == nil {
+		return []PackageResponse{}, nil
+	}
+	metas, err := reg.List()
+	if err != nil {
+		return nil, fmt.Errorf("list packages: %w", err)
+	}
+	out := make([]PackageResponse, 0, len(metas))
+	for _, m := range metas {
+		out = append(out, PackageResponse{
+			Name:      m.Name,
+			Version:   m.Version,
+			Author:    m.Author,
+			Installed: a.installedPackageIDs()[m.ID],
+		})
+	}
+	return out, nil
+}
+
+// installedPackageIDs indexes the installed set for a lookup per package.
+func (a *NodeAPI) installedPackageIDs() map[string]bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make(map[string]bool, len(a.registryInstalled))
+	for _, p := range a.registryInstalled {
+		out[p.ID] = true
+	}
+	return out
 }
 
 func (a *NodeAPI) Subscribe() chan SSEEvent {

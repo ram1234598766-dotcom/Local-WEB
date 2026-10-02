@@ -1518,18 +1518,21 @@ class LocalWEBApp {
     resultsDiv.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--color-text-muted);">Searching DHT…</div>';
 
     try {
-      // In real implementation, this would query the DHT
-      await new Promise(r => setTimeout(r, 2000));
-
-      // Simulated DHT results
-      const results = [
-        { name: 'awesome-tool', version: '2.1.0', author: 'user1', description: 'A great utility', source: 'DHT Node: peer-abc', downloads: 1250 },
-        { name: 'network-monitor', version: '1.5.3', author: 'user2', description: 'Network traffic analyzer', source: 'DHT Node: peer-def', downloads: 890 },
-        { name: 'file-encryptor', version: '3.0.1', author: 'user3', description: 'Encrypt files with PQ crypto', source: 'DHT Node: peer-ghi', downloads: 2100 },
-      ].filter(r => r.name.toLowerCase().includes(query.toLowerCase()));
+      // Ask the node's registry. This used to wait two seconds and then render
+      // three invented packages with invented download counts and invented
+      // "DHT Node: peer-abc" sources.
+      const res = await fetch('/api/registry/packages');
+      if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+      const all = await res.json();
+      const q = query.toLowerCase();
+      const results = (all || []).filter(r =>
+        (r.name || '').toLowerCase().includes(q) ||
+        (r.author || '').toLowerCase().includes(q)
+      );
 
       if (results.length === 0) {
-        document.getElementById('dht-search-results').innerHTML = '<p style="text-align: center; color: var(--color-text-muted); padding: 2rem;">No packages found</p>';
+        document.getElementById('dht-search-results').innerHTML =
+          '<p style="text-align: center; color: var(--color-text-muted); padding: 2rem;">No packages found on this node or its registry peers</p>';
         return;
       }
 
@@ -1538,12 +1541,12 @@ class LocalWEBApp {
           <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
             <div>
               <div style="font-weight: 600;">${p.name} <span style="font-weight: 400; font-size: 0.875rem; color: var(--color-text-muted);">v${p.version}</span></div>
-              <div style="font-size: 0.8125rem; color: var(--color-text-muted); margin-top: 0.25rem;">${p.description}</div>
-              <div style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.25rem;">By ${p.author} • ${p.downloads} downloads • ${p.source}</div>
+              <div style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.25rem;">by ${p.author || 'unknown'}</div>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="app.installPackage('${p.name}'); app.closeDhtSearchModal()">Install</button>
+            <button class="btn btn-primary btn-sm" onclick="app.closeDhtSearchModal()">Close</button>
           </div>
-        `).join('');
+        </div>
+      `).join('');
     } catch (e) {
       document.getElementById('dht-search-results').innerHTML = '<p style="color: var(--color-critical); text-align: center; padding: 2rem;">Search failed: ' + e.message + '</p>';
     }
@@ -1751,30 +1754,25 @@ class LocalWEBApp {
   async uploadFiles(files) {
     if (files.length === 0) return;
 
-    this.showToast(`Starting upload of ${files.length} file(s)…`, 'info');
+    this.showToast(`Uploading ${files.length} file(s)`, 'info');
 
     for (const file of files) {
       try {
-        // For demo, we'll show the upload in the transfer list
-        // In real implementation, this would use the Files service BitSwap protocol
-        const transferId = 'transfer-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-
-        // Add to active transfers UI immediately
-        this.addTransferToUI({
-          id: transferId,
-          name: file.name,
-          total_size: file.size,
-          bytes_transferred: 0,
-          status: 'active',
-          speed_bps: 0,
-          elapsed_ms: 0,
-          peer_name: 'auto',
-          can_pause: true,
-          can_cancel: true,
+        // The file actually goes into the node's file store. This used to
+        // advance a counter on a timer and report success without sending
+        // anything, so the toast was false.
+        const res = await fetch('/api/files/upload?name=' + encodeURIComponent(file.name), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: file,
         });
-
-        // Simulate upload progress
-        await this.simulateUpload(transferId, file);
+        if (!res.ok) {
+          const why = await res.text().catch(() => res.statusText);
+          throw new Error(why || res.statusText);
+        }
+        const saved = await res.json();
+        this.showToast(`${file.name} stored (${saved.size} bytes)`, 'success');
+        this.renderFiles();
       } catch (e) {
         this.showToast(`Failed to upload ${file.name}: ${e.message}`, 'error');
       }
@@ -1782,32 +1780,7 @@ class LocalWEBApp {
   }
 
   addTransferToUI(transfer) {
-    // This will be called to add a transfer to the active transfers list
-    // For now, just refresh the files page
-    this.renderFiles();
-  }
-
-  async simulateUpload(transferId, file) {
-    const chunkSize = 1024 * 1024; // 1MB chunks
-    let uploaded = 0;
-    const startTime = Date.now();
-
-    while (uploaded < file.size) {
-      await new Promise(r => setTimeout(r, 100)); // Simulate network delay
-
-      const chunk = Math.min(chunkSize, file.size - uploaded);
-      uploaded += chunk;
-
-      // In real implementation, this would update via SSE
-      // For demo, we'll just update the UI periodically
-      if (uploaded % (chunkSize * 5) === 0 || uploaded >= file.size) {
-        // Trigger UI update
-        this.renderFiles();
-      }
-    }
-
-    // Mark as completed
-    this.showToast(`${file.name} uploaded successfully`, 'success');
+    // Transfers are reported by /api/files/transfers from the real sync engine.
     this.renderFiles();
   }
 
@@ -2021,28 +1994,16 @@ class LocalWEBApp {
     this.callState.remotePeerId = peerId;
     this.updateCallUI();
 
-    try {
-      // In real implementation, this would use the Voice service to establish WebRTC connection
-      // via the signaling server (QUIC stream)
-      this.showToast('Establishing connection…', 'info');
-
-      // Simulate connection
-      await new Promise(r => setTimeout(r, 1500));
-
-      // Simulate remote peer joining
-      this.simulateRemotePeer();
-
-      this.callState.status = 'active';
-      this.callState.callStartTime = Date.now();
-      this.startCallTimer();
-      this.updateCallUI();
-
-      this.showToast('Call connected', 'success');
-    } catch (e) {
-      this.callState.status = 'idle';
-      this.updateCallUI();
-      this.showToast('Call failed: ' + e.message, 'error');
-    }
+    // There is no call service behind this yet: the voice service has a real
+    // WebRTC transport and a real Opus decoder but no encoder, and the daemon
+    // does not start it. Reporting "Call connected" after a timer would be a
+    // lie, so the button says what is actually true instead.
+    this.showToast(
+      'Calls are not available: the voice service has no encoder and is not started by the node',
+      'warning'
+    );
+    this.callState.status = 'idle';
+    this.updateCallUI();
   }
 
   simulateRemotePeer() {
@@ -3172,70 +3133,29 @@ class LocalWEBApp {
     this.vpnState.dnsTestRunning = true;
 
     try {
-      // Simulate DNS leak test
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Simulated results
-      const testServers = [
-        { ip: '1.1.1.1', provider: 'Cloudflare', location: 'US', leaked: false },
-        { ip: '8.8.8.8', provider: 'Google', location: 'US', leaked: false },
-        { ip: '9.9.9.9', provider: 'Quad9', location: 'CH', leaked: false },
-        { ip: '208.67.222.222', provider: 'OpenDNS', location: 'US', leaked: false },
-      ];
-
-      // Simulate a leak if VPN is not connected
-      const leaked = this.vpnState.status !== 'connected' && Math.random() > 0.5;
-      if (leaked) {
-        testServers[0].leaked = true;
-        testServers[0].provider = 'ISP DNS (Leaked!)';
-      }
-
+      // This used to invent four resolver rows, then pick a random one to mark
+      // as leaked: `Math.random() > 0.5`. A security panel that reports a
+      // fabricated leak half the time is worse than one that reports nothing.
+      // A real test needs the node to query each resolver for a canary domain
+      // and report which one answered, and no endpoint does that yet.
       statusDiv.style.display = 'none';
       resultsDiv.style.display = 'block';
-
-      // DNS servers list
-      serversDiv.innerHTML = testServers.map(s => `
-        <div style="padding: 0.75rem; background: var(--color-bg); border-radius: 0.375rem; display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 500;">${s.provider}</div>
-            <div style="font-size: 0.75rem; color: var(--color-text-muted);">${s.ip} • ${s.location}</div>
-          </div>
-          <span style="padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.6875rem; font-weight: 600; ${s.leaked ? 'background: var(--color-critical-light); color: var(--color-critical);' : 'background: var(--color-success-light); color: var(--color-success);'}">
-            ${s.leaked ? 'LEAKED' : 'SECURE'}
-          </span>
-        </div>
-      `).join('');
-
-      // Leak list
+      serversDiv.innerHTML =
+        '<div style="padding: 0.75rem; background: var(--color-bg); border-radius: 0.375rem;">' +
+        '<div style="font-weight: 500;">Not tested</div>' +
+        '<div style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.25rem;">' +
+        'This node cannot determine which resolvers answer its queries, so no leak verdict is shown.' +
+        '</div></div>';
       listDiv.innerHTML = `
-        <div style="padding: 1rem; background: ${leaked ? 'var(--color-critical-light)' : 'var(--color-success-light)'}; border: 1px solid ${leaked ? 'var(--color-critical)' : 'var(--color-success)'}; border-radius: 0.5rem;">
-          <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <span style="font-size: 2rem;">${leaked ? '⚠' : '✓'}</span>
-            <div>
-              <div style="font-weight: 600; ${leaked ? 'color: var(--color-critical);' : 'color: var(--color-success);'}">
-                ${leaked ? 'DNS Leak Detected!' : 'No DNS Leaks Found'}
-              </div>
-              <div style="font-size: 0.8125rem; color: var(--color-text-muted);">
-                ${leaked ? 'Your DNS queries are visible to your ISP. VPN may not be routing DNS correctly.' : 'All DNS queries are routed through the VPN tunnel.'}
-              </div>
-            </div>
+        <div style="padding: 1rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: 0.5rem;">
+          <div style="font-weight: 600;">DNS leak test unavailable</div>
+          <div style="font-size: 0.8125rem; color: var(--color-text-muted);">
+            Reporting a leak or a clean result without querying a resolver would be a guess.
           </div>
-        `;
-
-      // Recommendations
-      const recommendations = [];
-      if (leaked) {
-        recommendations.push('Enable "Block DNS when VPN is down" in Kill Switch settings');
-        recommendations.push('Configure your VPN to push DNS servers (e.g., 1.1.1.1, 9.9.9.9)');
-        recommendations.push('Disable WebRTC in browser to prevent local IP leaks');
-        recommendations.push('Use "DNS over HTTPS" (DoH) in browser settings');
-      } else {
-        recommendations.push('DNS is properly routed through VPN ✓');
-        recommendations.push('Kill switch is active ✓');
-        recommendations.push('Consider enabling DNS over HTTPS for additional privacy');
-      }
-
-      document.getElementById('dns-recommendations').innerHTML = recommendations.map(r => `<li>${r}</li>`).join('');
+        </div>
+      `;
+      document.getElementById('dns-recommendations').innerHTML =
+        '<li>Run the node with a resolver probe endpoint to get a real verdict.</li>';
 
     } catch (e) {
       this.showToast('DNS test failed: ' + e.message, 'error');
@@ -3248,40 +3168,56 @@ class LocalWEBApp {
 
   // Peer Selection
   showPeerSelector() {
-    // In real implementation, this would show a modal with available peers
-    const peers = [
-      { id: 'peer-1', name: 'MacBook Pro', addrs: ['192.168.1.50:4443'], score: 0.95 },
-      { id: 'peer-2', name: 'iPhone', addrs: ['192.168.1.51:4443'], score: 0.87 },
-      { id: 'peer-3', name: 'Linux Server', addrs: ['10.0.0.5:4443'], score: 0.92 },
-    ];
+    // Real peers only. This listed three invented machines with invented
+    // addresses and scores, so the Network panel could show a topology that
+    // did not exist.
+    this.showPeerSelectorAsync();
+  }
+
+  async showPeerSelectorAsync() {
+    let peers = [];
+    try {
+      peers = await this.fetchAPI('/peers') || [];
+    } catch (e) {
+      this.showToast('Could not read the peer list: ' + e.message, 'error');
+      return;
+    }
 
     const modal = document.createElement('div');
     modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
-    modal.innerHTML = `
-      <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 500px; width: 90%; box-shadow: var(--shadow-xl);">
-        <h3 style="margin-bottom: 1rem;">Select VPN Peer</h3>
-        <p style="color: var(--color-text-muted); margin-bottom: 1rem;">Choose a peer to use as VPN exit node</p>
-        <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 300px; overflow-y: auto;">
-          ${peers.map(p => `
-            <label class="peer-option" onclick="this.querySelector('input').checked=true; document.body.removeChild(this.closest('.modal'))">
-              <input type="radio" name="vpn-peer" value="${p.id}" ${this.vpnState.selectedPeer === p.id ? 'checked' : ''}>
-              <div style="display: flex; justify-content: space-between;">
-                <div>
-                  <div style="font-weight: 500;">${p.name}</div>
-                  <div style="font-size: 0.75rem; color: var(--color-text-muted);">${p.addrs[0]}</div>
+    if (!peers.length) {
+      modal.innerHTML = `
+        <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 500px; width: 90%; box-shadow: var(--shadow-xl);">
+          <h3 style="margin-bottom: 0.5rem;">Select VPN Peer</h3>
+          <p style="color: var(--color-text-muted);">No peers are connected to this node yet.</p>
+          <div style="display: flex; justify-content: flex-end; margin-top: 1rem;">
+            <button class="btn btn-secondary" onclick="document.body.removeChild(this.closest('\'.modal''))">Close</button>
+          </div>
+        </div>`;
+    } else {
+      modal.innerHTML = `
+        <div style="background: var(--color-bg); border-radius: 0.5rem; padding: 1.5rem; max-width: 500px; width: 90%; box-shadow: var(--shadow-xl);">
+          <h3 style="margin-bottom: 1rem;">Select VPN Peer</h3>
+          <p style="color: var(--color-text-muted); margin-bottom: 1rem;">Choose a connected peer to use as VPN exit node</p>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 300px; overflow-y: auto;">
+            ${peers.map((p, i) => `
+              <label class="peer-option" onclick="this.querySelector('input').checked=true; document.body.removeChild(this.closest('\'.modal''))">
+                <input type="radio" name="vpn-peer" value="${p.id ?? p.ID ?? i}" ${this.vpnState.selectedPeer === (p.id ?? p.ID ?? i) ? 'checked' : ''}>
+                <div style="display: flex; justify-content: space-between;">
+                  <div>
+                    <div style="font-weight: 500;">${(p.name ?? p.Name ?? p.id ?? p.ID ?? 'peer')}</div>
+                    <div style="font-size: 0.75rem; color: var(--color-text-muted);">${(p.addr ?? p.Addr ?? '')}</div>
+                  </div>
+                  <div style="font-size: 0.75rem; color: var(--color-primary);">${(p.state ?? p.State ?? '')}</div>
                 </div>
-                <div style="font-size: 0.75rem; color: var(--color-primary);">Score: ${p.score}</div>
-              </div>
-            </label>
-          `).join('')}
-        </div>
-        <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
-          <button class="btn btn-secondary" onclick="document.body.removeChild(this.closest('.modal'))">Cancel</button>
-          <button class="btn btn-primary" onclick="app.selectVpnPeer(this.closest('.modal'))">Connect</button>
-        </div>
-      </div>
-    `;
-    modal.className = 'modal';
+              </label>
+            `).join('')}
+          </div>
+          <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+            <button class="btn btn-secondary" onclick="document.body.removeChild(this.closest('\'.modal''))">Cancel</button>
+          </div>
+        </div>`;
+    }
     document.body.appendChild(modal);
   }
 

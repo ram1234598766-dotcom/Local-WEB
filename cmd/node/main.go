@@ -608,6 +608,9 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 	dhtNode, dhtSrv := newDHTForNode(ctx, srv, pub, &stops)
 	memReg := registry.NewMemoryRegistry()
 	memReg.RegisterDistributor(registry.NewDHTDistributor(dhtNode, pub))
+	// The GUI reads the same registry, so the Registry panel reflects real
+	// publishes instead of a hardcoded row.
+	api.SetRegistry(memReg)
 
 	regSrv := registry.NewHTTPServer(registry.ServerConfig{
 		Addr:     ports.registry,

@@ -293,11 +293,11 @@ after that first fetch. The shipped binaries contain no network dependency.
 | **HTTP** | HTTP/1.1 over QUIC | 8080 | Per-site routing, health |
 | **Email** | SMTP + IMAP | 587/993 | Maildir, PoW antispam |
 | **Messaging** | Pub/sub over QUIC | 9090 | Signed, offline queue |
-| **Files** | Bitswap-like | 9091 | BlockStore + Merkle DAG sync |
+| **Files** | Bitswap-like over QUIC + WebRTC | 9091 | BlockStore + Merkle DAG sync; two nodes exchange blocks on their own |
 | **Docs** | RGA over messaging | 9092 | Real-time cursors/selections |
 | **Registry** | HTTP + DHT | 9093 | LWPKG (tar.gz + Ed25519 sig) |
-| **Voice** | WebRTC (ICE, Opus/VP9) | 9093 | Call state machine |
-| **VPN** | TUN + QUIC | 9094 | Route dist, split tunnel |
+| **Voice** | WebRTC (ICE, Opus) | 9093 | Call state machine. Transport + Opus **decoder** real; **no encoder** yet, so it cannot send audio |
+| **VPN** | TUN + QUIC | 9094 | Route dist, split tunnel. Forwarding loop real and tested; no transport-side carrier yet |
 
 ---
 

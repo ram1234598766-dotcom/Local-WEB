@@ -363,7 +363,7 @@ Ranked. Each is a real gap, not a documentation nit.
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | **Resolved: six of the nine services now start.** `cmd/node` builds and starts dns, the HTTP gateway, SMTP/IMAP, the Files store, Docs and the registry index, and reports each one's real reachability through `/api/services/health`. `messaging`, `voice` and `vpn` stay down because they have no listener, no codec and no TUN loop respectively. | Fixed |
+| 1 | **Resolved: six of the nine services now start.** `cmd/node` builds and starts dns, the HTTP gateway, SMTP/IMAP, the Files store, Docs and the registry index, and reports each one's real reachability through `/api/services/health`. `messaging`, `voice` and `vpn` stay down, each for its own honest reason: messaging has no listener, voice has a real WebRTC transport and a real Opus decoder but no encoder, and the vpn forwarding loop exists and is tested but has no transport-side carrier. | Fixed |
 | 2 | `/metrics` and `/debug/pprof` do not exist; 0 of the 27 previously documented Prometheus metrics are registered. | Critical (observability) |
 | 3 | TLS certificate verification is off by default. Peer identity is authenticated by Noise XX, so this is defence-in-depth rather than the primary control, but it should be opt-out rather than opt-in. | High |
 | 4 | **Resolved: RGA `Merge` is positional and convergent.** It appended every unknown node at the tail and discarded each node's causal predecessor, so replicas that applied the same operations in different orders never agreed. | Fixed |
