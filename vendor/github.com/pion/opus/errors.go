@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
+// SPDX-License-Identifier: MIT
+
+package opus
+
+import "errors"
+
+var (
+	errTooShortForTableOfContentsHeader = errors.New("packet is too short to contain table of contents header")
+
+	errUnsupportedFrameCode = errors.New("unsupported frame code")
+
+	errUnsupportedConfigurationMode = errors.New("unsupported configuration mode")
+
+	errInvalidSampleRate = errors.New("invalid sample rate")
+
+	errInvalidChannelCount = errors.New("invalid channel count")
+
+	errOutBufferTooSmall = errors.New("out isn't large enough")
+
+	errMalformedPacket = errors.New("malformed packet")
+)
