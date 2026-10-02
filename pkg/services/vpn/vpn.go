@@ -38,6 +38,18 @@ type Interface interface {
 	Close() error
 }
 
+// ErrNoTUNPlatform reports that no TUN device could be opened, and carries the
+// reason rather than flattening it into a string.
+//
+// The failure modes are not interchangeable and reporting the wrong one sends an
+// operator down the wrong path. On Linux and macOS a failure usually means missing
+// CAP_NET_ADMIN, fixed by granting a capability or running as root. On a platform
+// with no implementation at all it is fixed by neither, because no privilege makes
+// code appear. Windows distinguishes these further, naming the missing driver or
+// the elevation that adapter creation requires.
+var ErrNoTUNPlatform = errors.New("no TUN/TAP device could be opened; the vpn carrier works " +
+	"but there is no device to carry packets through")
+
 // DefaultMTU is the largest IP packet the tunnel forwards. Anything larger is
 // dropped rather than truncated, because a truncated packet is worse than a
 // missing one: it reaches the far side looking valid.
