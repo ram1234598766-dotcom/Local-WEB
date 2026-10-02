@@ -2050,18 +2050,32 @@ class LocalWEBApp {
   async startCall(peerId = null) {
     if (this.callState.status === 'active') return;
 
-    this.callState.status = 'connecting';
-    this.callState.remotePeerId = peerId;
-    this.updateCallUI();
+    // Ask the node what it can actually do. The answer is a real service state
+    // and a real encoder check, not a sentence hardcoded here: the previous
+    // version asserted "no encoder and not started", which stopped being true
+    // once the daemon started the service and an encoder became buildable.
+    let status;
+    try {
+      status = await this.fetchAPI('/voice/status');
+    } catch (e) {
+      this.showToast('Could not reach the node to ask about call capability', 'warning');
+      return;
+    }
 
-    // There is no call service behind this yet: the voice service has a real
-    // WebRTC transport and a real Opus decoder but no encoder, and the daemon
-    // does not start it. Reporting "Call connected" after a timer would be a
-    // lie, so the button says what is actually true instead.
-    this.showToast(
-      'Calls are not available: the voice service has no encoder and is not started by the node',
-      'warning'
-    );
+    if (!status || !status.service_live || !status.can_send_audio) {
+      this.callState.status = 'idle';
+      this.updateCallUI();
+      this.showToast(status && status.reason
+        ? status.reason + (status.encoder_hint ? ' (' + status.encoder_hint + ')' : '')
+        : 'Calls are not available on this node', 'warning');
+      return;
+    }
+
+    // The service is live and this build can encode, but placing a call still
+    // needs a signalling channel, which the dashboard does not have. Saying
+    // "connected" here would be the lie this path exists to avoid.
+    this.showToast('The voice service is running and this build can send audio, ' +
+      'but the dashboard has no signalling channel to place a call with', 'warning');
     this.callState.status = 'idle';
     this.updateCallUI();
   }

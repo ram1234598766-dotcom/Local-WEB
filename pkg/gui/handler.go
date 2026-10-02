@@ -52,6 +52,7 @@ func NewHandler(api *NodeAPI) *Handler {
 	mux.HandleFunc("/api/audit-log/verify", h.handleAuditVerify)
 	mux.HandleFunc("/api/crdt/sync-status", h.handleSyncStatus)
 	mux.HandleFunc("/api/services/health", h.handleServicesHealth)
+	mux.HandleFunc("/api/voice/status", h.handleVoiceStatus)
 	mux.HandleFunc("/api/dns/records", h.handleDNSRecords)
 	mux.HandleFunc("/api/http/sites", h.handleHTTPSites)
 	mux.HandleFunc("/api/email/messages", h.handleEmailMessages)
@@ -531,6 +532,21 @@ func (h *Handler) handleServicesHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"services": h.api.ServiceHealth(),
 	})
+}
+
+// handleVoiceStatus reports what the voice service can actually do.
+//
+// The Voice panel used to be told "no encoder and not started" in a hardcoded
+// string. Both of those were fixed, so the sentence became false in the other
+// direction. This reports the real state, including whether this build can send
+// audio and video, so the UI never has to guess.
+func (h *Handler) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.api.VoiceStatus())
 }
 
 func (h *Handler) handleDNSRecords(w http.ResponseWriter, r *http.Request) {

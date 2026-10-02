@@ -29,6 +29,7 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
 	httpsvc "github.com/ram1234598766-dotcom/Local-WEB/pkg/services/http"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/registry"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/voice"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/vpn"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
@@ -323,7 +324,7 @@ func main() {
 	// Each service is started in its own goroutine and marked running only once
 	// its listener is actually up, so the health endpoint keeps reporting the
 	// truth if one fails to bind.
-	stopServices := startServices(ctx, api, pub, *dataDir, server.Server, servicePorts{
+	stopServices := startServices(ctx, api, pub, priv, *dataDir, server.Server, servicePorts{
 		dns:       *dnsPort,
 		http:      *httpAddr,
 		smtp:      *smtpAddr,
@@ -547,7 +548,7 @@ func splitList(v string) []string {
 	return out
 }
 
-func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir string, srv *transport.Server, ports servicePorts) func() {
+func startServices(ctx context.Context, api *gui.NodeAPI, pub, priv [32]byte, dataDir string, srv *transport.Server, ports servicePorts) func() {
 	var stops []func()
 
 	// --- DNS: a real UDP listener ---
@@ -712,6 +713,23 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		log.Printf("docs: service ready")
 	}
 
+	// --- Voice: peer-to-peer calls over the existing transport ---
+	//
+	// The service was complete and never constructed. It registers a handler for
+	// transport.ServiceVoice, so without this a peer that opened a voice stream got
+	// no handler at all and the Voice panel reported nothing because there was
+	// genuinely nothing behind it.
+	voiceSrv := voice.NewVoiceServer(srv, false, priv)
+	if voiceSrv == nil {
+		api.SetServiceLive(false, "voice")
+	} else {
+		api.SetVoiceService(voiceSrv)
+		api.SetServiceLive(true, "voice")
+		log.Printf("voice: service ready, opus encoder=%v vp8/vp9 encoder=%v "+
+			"(both need -tags libopus / -tags libvpx to send)",
+			voice.OpusEncoderLinked(), voice.VPXEncoderLinked())
+	}
+
 	// --- Registry: a real HTTP index over a real DHT ---
 	//
 	// The index previously ran on a bare MemoryRegistry with no network behind
@@ -761,10 +779,9 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		log.Printf("vpn: no tun device (needs root or CAP_NET_ADMIN), service not started")
 	}
 
-	// The remaining two stay false and that is the honest state.
-	for _, name := range []string{"messaging", "voice"} {
-		api.SetServiceLive(false, name)
-	}
+	// Messaging is still the honest false: NewMessagingSignaling needs a channel
+	// implementation this daemon does not provide, so there is nothing to report.
+	api.SetServiceLive(false, "messaging")
 
 	running := 0
 	for _, v := range api.ServiceHealth() {
@@ -780,4 +797,3 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		}
 	}
 }
-

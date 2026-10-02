@@ -60,6 +60,17 @@ func (p *VideoPacket) MimeType() string {
 	return VP8MimeType
 }
 
+// OpusEncoderLinked reports whether this build can encode Opus.
+//
+// A default build links the pure-Go decoder only, so it can take part in a call as
+// a receiver but cannot send audio. Callers that report capability to an operator
+// or a UI need to distinguish "no encoder" from "no microphone", because only the
+// first is fixable by rebuilding.
+func OpusEncoderLinked() bool { return opusEncoderAvailable() }
+
+// VPXEncoderLinked reports whether this build can encode VP8 and VP9 video.
+func VPXEncoderLinked() bool { return vpxEncoderAvailable() }
+
 // String implements fmt.Stringer.
 func (p *VideoPacket) String() string {
 	var b strings.Builder

@@ -18,6 +18,7 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/docs"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/registry"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/voice"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 )
 
@@ -66,6 +67,11 @@ type NodeAPI struct {
 	// API with explicit in-memory semantics rather than being invented per read.
 	docAutosave map[string]string
 	docComments map[string][]CommentResponse
+
+	// voiceSrv backs the Voice panel with the voice service's real call and track
+	// state. It is nil until the daemon constructs the service, in which case the
+	// panel reports that rather than a fabricated call.
+	voiceSrv *voice.VoiceServer
 }
 
 type SSEEvent struct {
@@ -734,6 +740,85 @@ func (a *NodeAPI) SetDocsService(svc *docs.Service) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.docsSvc = svc
+}
+
+// SetVoiceService supplies the voice service so the Voice panel can report real
+// calls rather than a hardcoded one.
+func (a *NodeAPI) SetVoiceService(svc *voice.VoiceServer) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.voiceSrv = svc
+}
+
+// VoiceStatusResponse is what the Voice panel is allowed to claim.
+//
+// The dashboard previously refused to start calls with a hardcoded sentence about
+// the voice service having no encoder and not being started. Both halves of that
+// were fixed, so a static sentence became a new lie. This reports the real
+// capability instead: whether the service is registered, whether the build can
+// send audio and video, and what is actually blocking a call.
+type VoiceStatusResponse struct {
+	// ServiceLive is true when the daemon constructed the voice service, so the
+	// ServiceVoice stream handler is registered.
+	ServiceLive bool `json:"service_live"`
+	// OpusEncoder and VPXEncoder report what this binary can send. Receiving needs
+	// neither, because the pure-Go Opus decoder is always linked.
+	OpusEncoder bool `json:"opus_encoder"`
+	VPXEncoder  bool `json:"vpx_encoder"`
+	// CanSendAudio and CanSendVideo are the two facts a user actually acts on.
+	CanSendAudio bool `json:"can_send_audio"`
+	CanSendVideo bool `json:"can_send_video"`
+	// Calls is the real call list from the voice service.
+	Calls []VoiceCallResponse `json:"calls"`
+	// Reason is empty when a call could be placed, and otherwise says what stops
+	// it, so the UI does not have to invent its own explanation.
+	Reason string `json:"reason,omitempty"`
+	// EncoderHint is the build flag that would turn on the missing encoder.
+	EncoderHint string `json:"encoder_hint,omitempty"`
+}
+
+// VoiceCallResponse is one call as the dashboard shows it.
+type VoiceCallResponse struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+// VoiceStatus reports the voice service's real state.
+func (a *NodeAPI) VoiceStatus() VoiceStatusResponse {
+	a.mu.RLock()
+	svc := a.voiceSrv
+	a.mu.RUnlock()
+
+	resp := VoiceStatusResponse{
+		ServiceLive: svc != nil,
+		OpusEncoder: voice.OpusEncoderLinked(),
+		VPXEncoder:  voice.VPXEncoderLinked(),
+		Calls:       []VoiceCallResponse{},
+	}
+	resp.CanSendAudio = resp.OpusEncoder
+	resp.CanSendVideo = resp.VPXEncoder
+
+	if svc != nil {
+		for _, c := range svc.ActiveCalls() {
+			id := c.ID()
+			resp.Calls = append(resp.Calls, VoiceCallResponse{
+				ID:    hex.EncodeToString(id[:]),
+				State: c.State().String(),
+			})
+		}
+	}
+
+	switch {
+	case !resp.ServiceLive:
+		resp.Reason = "the voice service is not running, so a peer opening a voice stream gets no handler"
+	case !resp.CanSendAudio:
+		// Receiving still works: the decoder is pure Go and always present. Saying
+		// the service is unavailable would be as wrong as the old claim that it had
+		// no encoder at all.
+		resp.Reason = "this build has no audio encoder, so this node can receive a call but not send audio"
+		resp.EncoderHint = "rebuild with -tags libopus (needs libopus)"
+	}
+	return resp
 }
 
 // Documents lists the documents held by the Docs service.
