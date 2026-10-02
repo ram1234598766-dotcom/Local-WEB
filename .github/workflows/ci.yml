@@ -151,12 +151,48 @@ jobs:
           go-package: ./...
 
   # ============================================================
+  # OFFLINE BUILD (no module proxy, no network)
+  # ============================================================
+  # "Works offline" decays quietly: one added CDN <link> and the dashboard
+  # stops rendering on a plane while every other job stays green. This job
+  # builds with GOPROXY=off so any module fetch is a hard failure, and runs
+  # scripts/check-offline.sh to assert the shipped product references nothing
+  # on the public internet.
+  offline:
+    name: Offline Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build with the module proxy disabled
+        env:
+          GOPROXY: "off"
+          GOFLAGS: "-mod=vendor"
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Test with the module proxy disabled
+        env:
+          GOPROXY: "off"
+          GOFLAGS: "-mod=vendor"
+        run: go test ./...
+
+      - name: Assert no external references
+        run: bash scripts/check-offline.sh
+
+  # ============================================================
   # BUILD BINARIES (cross-compile for all platforms)
   # ============================================================
   build:
     name: Cross-compile Binaries
     runs-on: ubuntu-latest
-    needs: [lint, test, govulncheck]
+    needs: [lint, test, govulncheck, offline]
     strategy:
       matrix:
         include:
@@ -199,7 +235,7 @@ jobs:
   build-macos:
     name: Cross-compile macOS Binaries
     runs-on: macos-latest
-    needs: [lint, test, govulncheck]
+    needs: [lint, test, govulncheck, offline]
     strategy:
       matrix:
         include:

@@ -8,6 +8,11 @@
 Makefile text eol=lf
 *.mk text eol=lf
 
+# Go source must stay LF. gofmt compares bytes, so a CRLF checkout makes
+# `gofmt -l` flag every file on a Windows clone even though the content is
+# unchanged. That turns the format check into a machine-dependent failure.
+*.go text eol=lf
+
 # PowerShell is executed only by Windows, where CRLF is native.
 *.ps1 text eol=crlf
 

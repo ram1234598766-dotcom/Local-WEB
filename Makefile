@@ -148,6 +148,19 @@ tidy:
 deps:
 	$(GO) mod download
 
+# Offline build and verification.
+#
+# vendor/ holds every Go dependency, so the build needs no module proxy and no
+# network. GOFLAGS pins -mod=vendor and GOPROXY=off makes any attempt to reach
+# the network a hard failure rather than a silent download, so this target is a
+# real check and not a formality. scripts/check-offline.sh additionally asserts
+# that the shipped SPA references no external origin.
+verify-offline:
+	@GOPROXY=off GOFLAGS=-mod=vendor $(GO) build ./...
+	@GOPROXY=off GOFLAGS=-mod=vendor $(GO) vet ./...
+	@bash scripts/check-offline.sh
+	@echo "offline: build, vet and static reference checks all passed with GOPROXY=off"
+
 # Dry run only. goreleaser v2 also produces the real release, so it is not
 # invoked by any target here.
 release-dry:

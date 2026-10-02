@@ -230,6 +230,36 @@ Your node ID prints on startup and is stored in `~/.localweb/identity.json`.
 
 ---
 
+## ✈️ Works Offline
+
+A node needs no internet connection to run. The dashboard, DNS, HTTP, email,
+files, docs and the registry are all served by the node itself, the web UI
+loads no remote font, script or stylesheet, and there is no telemetry.
+
+Discovery on your local network is mDNS, not the internet. Federation — finding
+peers across the internet — is off unless you pass `-rendezvous <url>`, so a
+default node never contacts anything off-subnet.
+
+Building is offline too. Every Go dependency is committed under `vendor/`, so no
+module proxy is needed:
+
+```bash
+make verify-offline   # builds, vets and tests with GOPROXY=off
+```
+
+`scripts/check-offline.sh` is the guard that keeps this true. It fails if the
+embedded UI gains a reference to another origin, if runtime code hardcodes a
+public endpoint, or if `vendor/` goes missing. It runs in CI as the "Offline
+Build" job, where a module fetch is a hard failure.
+
+One exception, on the build machine only: the Windows installers package the
+Wintun TUN driver, and `make deps-wintun` downloads it once from
+`wintun.net`, verifying the archive and DLL checksums. The script skips the
+download when a verified copy is already present, so packaging works offline
+after that first fetch. The shipped binaries contain no network dependency.
+
+---
+
 ## ✨ Key Features
 
 | Category | Feature |
