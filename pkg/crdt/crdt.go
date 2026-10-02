@@ -9,6 +9,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,6 +151,16 @@ type RGANode struct {
 	Deleted   bool
 	Next      *RGANode
 	Prev      *RGANode
+
+	// OriginID is the node this one was causally inserted after, and it never
+	// changes.
+	//
+	// Prev cannot serve this purpose: splicing a node in after the sibling
+	// ahead of it makes that sibling its structural predecessor, so a later
+	// insert would mistake a concurrent sibling for a descendant and order the
+	// text differently depending on arrival. OriginID keeps the causal edge, so
+	// "is this node a child of X" stays answerable after splicing.
+	OriginID string
 }
 
 type RGA struct {
@@ -180,19 +192,79 @@ func (r *RGA) Insert(afterID, value string) {
 		afterNode = r.tail.Prev
 	}
 
-	node := &RGANode{
+	r.insertOrdered(afterNode, &RGANode{
 		ID:        id,
 		Value:     value,
 		Timestamp: r.clock,
 		Author:    r.nodeID,
-		Next:      afterNode.Next,
-		Prev:      afterNode,
-	}
-	if afterNode.Next != nil {
-		afterNode.Next.Prev = node
-	}
-	afterNode.Next = node
+		OriginID:  afterNode.ID,
+	})
 	r.length++
+}
+
+// beforeNode reports whether a should sort ahead of b in an RGA sibling run.
+//
+// Siblings are the nodes inserted after the same predecessor, including the
+// subtrees that hang off them. Ordering them by (Timestamp, Author) rather than
+// by arrival is what makes the sequence a function of the operation set: two
+// replicas that received the same concurrent inserts in opposite orders still
+// produce identical text.
+func beforeNode(a, b *RGANode) bool {
+	if a.Timestamp != b.Timestamp {
+		return a.Timestamp < b.Timestamp
+	}
+	return a.Author < b.Author
+}
+
+// insertOrdered splices node into r among afterNode's causal children, in the
+// position its (Timestamp, Author) gives it, and links it in both directions.
+//
+// Only concurrent siblings are skipped, and each is skipped together with its
+// entire subtree. Comparing against every later node instead would displace a
+// node's own causal child, since a child necessarily has a higher timestamp than
+// its parent, and the two replicas would then disagree about the text.
+//
+// Sibling membership is read from OriginID, not from Prev: Prev is whoever
+// happens to sit immediately ahead in the list, which for a sibling is another
+// sibling rather than the shared parent.
+//
+// This is the single place a node enters the list, so a local insert and a
+// merged insert cannot disagree about where a node belongs.
+func (r *RGA) insertOrdered(afterNode, node *RGANode) {
+	insertAfter := afterNode
+	curr := afterNode.Next
+
+	for curr != nil && curr != r.tail {
+		// Only nodes causally inserted after afterNode are candidates. Reaching
+		// anything else means the run of siblings to compare is finished.
+		if curr.OriginID != afterNode.ID {
+			break
+		}
+		// This sibling sorts at or after the new node, so the new node goes
+		// ahead of it.
+		if !beforeNode(curr, node) {
+			break
+		}
+
+		// Skip this sibling's whole subtree: keep going while the next node is
+		// not itself a child of afterNode, since that makes it a descendant.
+		for curr.Next != nil && curr.Next != r.tail && curr.Next.OriginID != afterNode.ID {
+			curr = curr.Next
+		}
+		// The splice point is the last node of the skipped subtree, not the
+		// sibling itself: a new sibling belongs after everything that sibling
+		// brought with it, so splicing at the sibling would place it between a
+		// node and its own descendants.
+		insertAfter = curr
+		curr = curr.Next
+	}
+
+	node.Prev = insertAfter
+	node.Next = insertAfter.Next
+	insertAfter.Next = node
+	if node.Next != nil {
+		node.Next.Prev = node
+	}
 }
 
 func (r *RGA) Delete(nodeID string) {
@@ -293,6 +365,13 @@ func (r *RGA) Unmarshal(data []byte) error {
 	r.length = 0
 	prev := r.head
 	for _, n := range nodes {
+		// Payloads written before OriginID existed carry no causal edge. The
+		// serialised list is in document order, so the previous node is the best
+		// available origin and keeps such a payload usable for merge.
+		origin := n.OriginID
+		if origin == "" {
+			origin = prev.ID
+		}
 		node := &RGANode{
 			ID:        n.ID,
 			Value:     n.Value,
@@ -300,6 +379,7 @@ func (r *RGA) Unmarshal(data []byte) error {
 			Author:    n.Author,
 			Deleted:   n.Deleted,
 			Prev:      prev,
+			OriginID:  origin,
 		}
 		prev.Next = node
 		node.Next = r.tail
@@ -312,52 +392,139 @@ func (r *RGA) Unmarshal(data []byte) error {
 	return nil
 }
 
+// Merge folds the operations r is missing from other into r.
+//
+// It previously appended every unknown node at the tail in (Timestamp, Author)
+// order, ignoring the predecessor each node was actually inserted after. That is
+// the one thing an RGA must not lose: a node's position is defined by what it
+// followed, not by when it was learned. With tail-append, two replicas that
+// applied the same operations in different orders ended up with different text
+// and no amount of further merging could reconcile them.
+//
+// Nodes are now placed after their recorded predecessor, and concurrent
+// siblings are ordered by (Timestamp, Author) so the result depends only on the
+// set of operations, not on arrival order.
 func (r *RGA) Merge(other *RGA) {
+	if other == nil || other == r {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	other.mu.RLock()
 	defer other.mu.RUnlock()
-	// Simplified merge: append missing nodes in causal order
-	otherNodes := make(map[string]*RGANode)
-	curr := other.head.Next
-	for curr != nil && curr != other.tail {
-		otherNodes[curr.ID] = curr
-		curr = curr.Next
+
+	// Index what this replica already has, so a node is never inserted twice and
+	// a tombstone arriving for a node already present can still be applied.
+	local := r.indexIDs()
+
+	type pending struct {
+		node   RGANode
+		prevID string
 	}
-	curr = r.head.Next
-	for curr != nil && curr != r.tail {
-		delete(otherNodes, curr.ID)
-		curr = curr.Next
-	}
-	var toInsert []*RGANode
-	for _, n := range otherNodes {
-		cp := *n
-		toInsert = append(toInsert, &cp)
-	}
-	sort.Slice(toInsert, func(i, j int) bool {
-		if toInsert[i].Timestamp != toInsert[j].Timestamp {
-			return toInsert[i].Timestamp < toInsert[j].Timestamp
+	var missing []pending
+
+	for curr := other.head.Next; curr != nil && curr != other.tail; curr = curr.Next {
+		if local[curr.ID] {
+			// The node is known here but other has it tombstoned: a delete must
+			// propagate, otherwise one replica shows text the other has erased.
+			if curr.Deleted && !r.isDeleted(curr.ID) {
+				r.applyDeleteLocked(curr.ID)
+			}
+			continue
 		}
-		return toInsert[i].Author < toInsert[j].Author
-	})
-	insertAfter := r.tail.Prev
-	for _, n := range toInsert {
-		node := &RGANode{
-			ID:        n.ID,
-			Value:     n.Value,
-			Timestamp: n.Timestamp,
-			Author:    n.Author,
-			Deleted:   n.Deleted,
-			Prev:      insertAfter,
-			Next:      r.tail,
+		prevID := r.head.ID
+		if curr.Prev != nil && curr.Prev.ID != "" {
+			prevID = curr.Prev.ID
 		}
-		insertAfter.Next = node
-		r.tail.Prev = node
-		insertAfter = node
-		if !n.Deleted {
+		cp := *curr
+		cp.Prev = nil
+		cp.Next = nil
+		missing = append(missing, pending{node: cp, prevID: prevID})
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	// A node can arrive before the node it was inserted after, so keep sweeping
+	// the unplaceable ones until a pass makes no progress.
+	placed := make(map[string]bool, len(missing))
+	remaining := missing
+	for {
+		var deferred []pending
+		progress := false
+		for _, p := range remaining {
+			if placed[p.node.ID] {
+				continue
+			}
+			after := r.findNode(p.prevID)
+			if after == nil {
+				// Predecessor has not been seen. Leave it for a later merge
+				// rather than guessing a position, which would diverge.
+				deferred = append(deferred, p)
+				continue
+			}
+			node := p.node
+			// The causal edge is the node's recorded origin, not wherever it ends
+			// up being spliced.
+			node.OriginID = p.prevID
+			r.insertOrdered(after, &node)
+			// Length counts every node in the list, tombstoned ones included,
+			// which is what Delete and Insert both assume. String is the live
+			// text.
 			r.length++
+			placed[p.node.ID] = true
+			progress = true
+		}
+		if len(deferred) == 0 {
+			return
+		}
+		if !progress {
+			// Nothing more can be anchored. Report the orphans rather than
+			// appending them somewhere arbitrary.
+			for _, p := range deferred {
+				log.Warn().
+					Str("node", p.node.ID).
+					Str("missing_predecessor", p.prevID).
+					Msg("rga: cannot merge node whose predecessor has never been seen")
+			}
+			return
+		}
+		remaining = deferred
+	}
+}
+
+// indexIDs returns the ids of every node in the list, including the sentinels.
+// The caller must hold at least the read lock.
+func (r *RGA) indexIDs() map[string]bool {
+	ids := make(map[string]bool)
+	for curr := r.head; curr != nil; curr = curr.Next {
+		ids[curr.ID] = true
+		if curr == r.tail {
+			break
 		}
 	}
+	return ids
+}
+
+// isDeleted reports whether a node is tombstoned. The caller must hold the lock.
+func (r *RGA) isDeleted(id string) bool {
+	n := r.findNode(id)
+	return n != nil && n.Deleted
+}
+
+// applyDeleteLocked tombstones a node.
+//
+// Length deliberately does not change: it counts every node in the list,
+// tombstoned ones included, which is the contract Insert and Delete already
+// follow. String is the live text.
+//
+// The caller must hold the write lock.
+func (r *RGA) applyDeleteLocked(id string) {
+	n := r.findNode(id)
+	if n == nil || n.Deleted {
+		return
+	}
+	n.Deleted = true
 }
 
 // findNode locates a node by ID, including the head sentinel.
@@ -538,6 +705,11 @@ func decodeEntries(data []byte) ([]struct {
 	return entries, removes, nil
 }
 
+// encodeRGAList serialises the node list.
+//
+// The origin is written last and as an optional trailing field, so a payload
+// produced before OriginID existed still decodes: the reader stops when the
+// bytes run out and fills the origin from document order.
 func encodeRGAList(nodes []RGANode) ([]byte, error) {
 	var buf bytes.Buffer
 	binary.Write(&buf, binary.BigEndian, uint16(len(nodes)))
@@ -554,6 +726,10 @@ func encodeRGAList(nodes []RGANode) ([]byte, error) {
 			deleted = 1
 		}
 		buf.WriteByte(deleted)
+		if n.OriginID != "" {
+			binary.Write(&buf, binary.BigEndian, uint16(len(n.OriginID)))
+			buf.WriteString(n.OriginID)
+		}
 	}
 	return buf.Bytes(), nil
 }
@@ -593,12 +769,28 @@ func decodeRGAList(data []byte) ([]RGANode, error) {
 			return nil, err
 		}
 		deleted, _ := buf.ReadByte()
+		// The origin is optional and trailing: a payload written before it
+		// existed simply runs out of bytes here, and the caller fills it in from
+		// document order.
+		origin := ""
+		if buf.Len() > 0 {
+			var originLen uint16
+			if err := binary.Read(buf, binary.BigEndian, &originLen); err == nil {
+				if originLen > 0 {
+					ob := make([]byte, originLen)
+					if _, err := buf.Read(ob); err == nil {
+						origin = string(ob)
+					}
+				}
+			}
+		}
 		nodes = append(nodes, RGANode{
 			ID:        string(id),
 			Value:     string(val),
 			Timestamp: ts,
 			Author:    string(auth),
 			Deleted:   deleted == 1,
+			OriginID:  origin,
 		})
 	}
 	return nodes, nil

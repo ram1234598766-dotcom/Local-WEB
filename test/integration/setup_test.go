@@ -317,9 +317,16 @@ func contains(items []string, want string) bool {
 	return false
 }
 
-// RGA semantics are insert-after-parent, not insert-at-index. Inserting five
-// characters each relative to "head" therefore places the newest one first:
-// o, l, l, e, H.
+// RGA semantics are insert-after-parent, not insert-at-index. Several inserts
+// at the same parent are ordered by (Timestamp, Author), so five characters
+// typed in sequence from one author land in that sequence: H, e, l, l, o.
+//
+// This used to assert the opposite - "olleH" - on the reasoning that an insert
+// after the head therefore prepends. That ordering is not merely a different
+// preference, it is not convergent: a replica that inserted "o" before "H" and
+// one that inserted "H" before "o" would both be "correct" locally and could
+// never agree afterwards. Ordering siblings deterministically is the property
+// the RGA exists to provide.
 func TestCRDTRGA(t *testing.T) {
 	rga := crdt.NewRGA("client1")
 
@@ -333,7 +340,7 @@ func TestCRDTRGA(t *testing.T) {
 		t.Fatalf("expected length 5, got %d", rga.Length())
 	}
 
-	want := "olleH"
+	want := "Hello"
 	for i, expected := range want {
 		v, err := rga.Get(i)
 		if err != nil {
@@ -345,24 +352,29 @@ func TestCRDTRGA(t *testing.T) {
 	}
 }
 
-// Inserting relative to the head sentinel must prepend rather than silently
-// append: findNode used to skip the sentinel, so every "head" insert became an
-// append and the document could never be built in the intended order.
+// Inserting relative to the head sentinel must be honoured, not silently turned
+// into an append: findNode used to skip the sentinel, so every "head" insert
+// landed at the end and a document could never be built from the start.
+//
+// The ordering within one position is now decided by (Timestamp, Author), so
+// this checks that a "head" insert still lands in the head's run rather than at
+// the tail, and that an insert relative to a real node still follows that node.
 func TestCRDTPrependViaHeadSentinel(t *testing.T) {
 	rga := crdt.NewRGA("client1")
 	rga.Insert("head", "a")
 	rga.Insert("head", "b")
-	if got := rga.String(); got != "ba" {
-		t.Fatalf("expected inserting after head to prepend, got %q", got)
+	if got := rga.String(); got != "ab" {
+		t.Fatalf("expected both head inserts in the head's run, got %q", got)
 	}
 
-	// Inserting relative to a real node must place the new value after it.
+	// Inserting relative to a real node must place the new value after it, and
+	// ahead of any sibling that sorts after it.
 	first := rga.HeadNextID()
 	if first == "" {
 		t.Fatal("expected a node id after head")
 	}
 	rga.Insert(first, "z")
-	if got := rga.String(); got != "bza" {
+	if got := rga.String(); got != "azb" {
 		t.Fatalf("expected insert after a node to place the value after it, got %q", got)
 	}
 }
