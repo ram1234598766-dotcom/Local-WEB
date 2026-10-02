@@ -228,6 +228,38 @@ make cross-compile  # Build for all platforms
 
 Your node ID prints on startup and is stored in `~/.localweb/identity.json`.
 
+### Native audio and video encoders (optional)
+
+A default build can **receive** voice calls — the Opus decoder is pure Go and
+always linked — but it cannot **send**, because there is no pure-Go Opus, VP8 or
+VP9 encoder. Rather than send raw PCM under an Opus payload type and let a browser
+decode noise, a default build reports `ErrNoOpusEncoder`.
+
+To get real encoders, build against the native libraries:
+
+```bash
+# Debian/Ubuntu
+sudo apt install libopus-dev libvpx-dev
+
+# macOS
+brew install opus vpx
+
+# Windows (vcpkg)
+vcpkg install opus libvpx
+
+go build -tags libopus,libvpx ./cmd/node
+```
+
+The tags are opt-in deliberately: CI builds with `CGO_ENABLED=1` on ubuntu and
+macOS, where neither native library is installed, so gating on cgo alone would
+break both. Check what a given binary actually has:
+
+```bash
+curl -s localhost:8080/api/voice/status | jq
+# { "service_live": true, "opus_encoder": true, "vp8_encoder": true,
+#   "can_send_audio": true, "can_send_video": true, "calls": [] }
+```
+
 ---
 
 ## ✈️ Works Offline

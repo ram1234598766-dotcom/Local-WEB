@@ -147,9 +147,13 @@ in `go.mod` or `go.sum`, and none is imported anywhere:**
 
 `golang.org/x/sync` was also listed; it is in neither `go.mod` nor `go.sum`.
 
-**Consequence:** Voice has a real transport and a real Opus decoder but no encoder, so it cannot yet send audio;
-QoS has no eBPF acceleration; the VPN forwarding loop exists but has no transport-side carrier and has never
-been run against a privileged device; WiFi Direct depends on host tooling. These are recorded as gaps in `ARCHITECTURE.md`.
+**Consequence:** Voice has a real transport and a real pure-Go Opus **decoder**, so receiving always works. Sending
+audio needs an Opus encoder behind `-tags libopus` (cgo against libopus) and sending video needs a VP8/VP9 encoder
+behind `-tags libvpx` (cgo against libvpx); neither native library is present in a default build, and `GET
+/api/voice/status` reports which of them a given binary actually links. QoS has no eBPF acceleration; the VPN
+forwarding loop exists and now has a transport-side `StreamCarrier` over `transport.ServiceVPN`, but it has never
+been run against a privileged device and Windows has no Wintun implementation, so `openTUN` returns
+`ErrNoTUNPlatform` there. WiFi Direct depends on host tooling. These are recorded as gaps in `ARCHITECTURE.md`.
 
 ### 2.3 Cryptography in use
 
@@ -449,10 +453,10 @@ not the documented `0x00`–`0x09`.
 | Email | TCP :587/:993 (`-smtp-addr`, `-imap-addr`) | ✅ | real SMTP/IMAP; PoW enforced only when an `X-PoW` header is present, so it is bypassable by omission |
 | Files | block store + metadata index | ✅ | store is real and backs `/api/files/list`; `Sync()` still never contacts the peer and `GetFile` still returns a nil data slice |
 | Docs | in-process CRDT | ✅ | `RGA.Merge` now converges: nodes are placed at their causal position with siblings ordered by `(Timestamp, Author)` |
-| Registry | HTTP :9092 + DHT | ? | publish propagates to the DHT and a package published on one node resolves on another. The DHT speaks TCP, a separate plane from the QUIC service transport, and the node is bootstrapped with no peer addresses |
+| Registry | HTTP :9092 + DHT | ? | publish propagates to the DHT and a package published on one node resolves on another. The DHT speaks TCP, a separate plane from the QUIC service transport, and by default it joins no network at all: `-dht-bootstrap` supplies seed peers, and `-dht-advertise` supplies the address peers should dial when a wildcard bind is not dialable |
 | Messaging | **no listener** | ❌ | in-memory store; signatures created but never verified. Nothing to start |
-| Voice | QUIC + WebRTC (pion) | ? | real ICE/DTLS/SRTP transport and a real pure-Go Opus **decoder**; **no encoder**, so `SendPCM` returns `ErrNoOpusEncoder`. No VP8/VP9 module exists. The daemon still does not start the voice service |
-| VPN | TUN on Linux/Darwin | ? | a real forwarding loop runs both directions against the `Interface` abstraction and is tested end to end with a fake device. No transport-side carrier exists yet and no real TUN device was opened in tests |
+| Voice | QUIC + WebRTC (pion) | ? | real ICE/DTLS/SRTP transport and a real pure-Go Opus **decoder**, so receiving works in every build. Sending audio needs `-tags libopus`, sending video needs `-tags libvpx`; on a default build `SendPCM` returns `ErrNoOpusEncoder` rather than mislabelling raw PCM. The daemon constructs the service and registers the `transport.ServiceVoice` handler |
+| VPN | TUN on Linux/Darwin | ? | a real forwarding loop runs both directions against the `Interface` abstraction and is tested end to end with a fake device, and `StreamCarrier` carries it over `transport.ServiceVPN` with every byte verified in both directions. No real TUN device was opened in tests, and Windows has no implementation: `openTUN` returns `ErrNoTUNPlatform` and the daemon reports that rather than blaming privileges |
 
 A live node reports `dns`, `docs`, `email`, `files`, `gui`, `http` and `registry`
 healthy and `messaging`, `voice`, `vpn` not. Health is driven by probing

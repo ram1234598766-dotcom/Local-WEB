@@ -220,6 +220,27 @@ localweb-cli vpn status                     # Connection status
 | `--config` | Config file path (default: `~/.localweb/config.json`) |
 | `--help` | Show help for command |
 
+## Node flags (`localweb node`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dht-addr` | `0.0.0.0:9094` | DHT listen address. A wildcard is fine for listening, but see `--dht-advertise` |
+| `--dht-advertise` | *(outbound IP)* | The address peers are told to dial. Required behind NAT, where nothing local can work out your public address. Publishing the bound address instead would advertise `0.0.0.0`, which no remote peer can connect to |
+| `--dht-bootstrap` | *(none)* | Comma-separated seed peers. **With none, this node serves but reaches no other node** |
+| `--gui-addr` | `127.0.0.1:8080` | Dashboard address. The dashboard is unauthenticated and can write files and restore backups, so it binds loopback; pass `0.0.0.0:8080` to expose it deliberately |
+
+Joining a DHT network with two nodes on different machines:
+
+```bash
+# node A — listen on everything and tell peers the address they can reach
+localweb node --dht-addr 0.0.0.0:9094 --dht-advertise 203.0.113.7:9094
+
+# node B — join A
+localweb node --dht-bootstrap 203.0.113.7:9094
+```
+
+The DHT speaks TCP on its own port, separate from the QUIC service transport.
+
 ---
 
 ## Exit Codes

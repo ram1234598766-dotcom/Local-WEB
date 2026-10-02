@@ -363,7 +363,7 @@ Ranked. Each is a real gap, not a documentation nit.
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | **Resolved: six of the nine services now start.** `cmd/node` builds and starts dns, the HTTP gateway, SMTP/IMAP, the Files store, Docs and the registry index, and reports each one's real reachability through `/api/services/health`. `messaging`, `voice` and `vpn` stay down, each for its own honest reason: messaging has no listener, voice has a real WebRTC transport and a real Opus decoder but no encoder, and the vpn forwarding loop exists and is tested but has no transport-side carrier. | Fixed |
+| 1 | **Resolved: seven of the nine services now start.** `cmd/node` builds and starts dns, the HTTP gateway, SMTP/IMAP, the Files store, Docs, the registry index and voice, and reports each one's real reachability through `/api/services/health`. `messaging` and `vpn` stay down, each for its own honest reason: messaging has no channel implementation, and `vpn` can only open a TUN device where the OS allows it, which on Windows it cannot because there is no Wintun implementation in the tree. | Fixed |
 | 2 | `/metrics` and `/debug/pprof` do not exist; 0 of the 27 previously documented Prometheus metrics are registered. | Critical (observability) |
 | 3 | TLS certificate verification is off by default. Peer identity is authenticated by Noise XX, so this is defence-in-depth rather than the primary control, but it should be opt-out rather than opt-in. | High |
 | 4 | **Resolved: RGA `Merge` is positional and convergent.** It appended every unknown node at the tail and discarded each node's causal predecessor, so replicas that applied the same operations in different orders never agreed. | Fixed |
@@ -376,7 +376,7 @@ Ranked. Each is a real gap, not a documentation nit.
 | 11 | No two-replica different-order convergence test for RGA. | Medium |
 | 12 | Circuit relay and hole punching are implemented but unreachable — no caller. | Medium |
 | 13 | Zero-RTT, datagram frames, congestion-control selection not implemented. | Low |
-| 14 | The GUI API is documented as "localhost-only read-only dashboard" but `cmd/node/main.go:217` binds `0.0.0.0:8080`, so every `/api/*` endpoint is reachable from the LAN. Whether that is intended is a product decision: a P2P tool may deliberately allow LAN access to the dashboard, but the comment and the bind address currently contradict each other. | Medium |
+| 14 | The GUI API was documented as a "localhost-only read-only dashboard" while `cmd/node` bound `0.0.0.0:8080`, exposing every `/api/*` endpoint to the LAN. The dashboard has no authentication and is not read-only: it uploads files, creates and saves documents, and restores backups. The default is now `127.0.0.1:8080`, the README says the dashboard is unauthenticated and can write, and `defaultGUIAddr` is held to being loopback by a test. Exposing it is now a deliberate `-gui-addr 0.0.0.0:8080`. | Fixed |
 
 ---
 
