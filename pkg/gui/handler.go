@@ -8,10 +8,13 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/voice"
 )
 
 //go:embed static/index.html
@@ -53,6 +56,8 @@ func NewHandler(api *NodeAPI) *Handler {
 	mux.HandleFunc("/api/crdt/sync-status", h.handleSyncStatus)
 	mux.HandleFunc("/api/services/health", h.handleServicesHealth)
 	mux.HandleFunc("/api/voice/status", h.handleVoiceStatus)
+	mux.HandleFunc("/api/voice/call", h.handleVoiceCall)
+	mux.HandleFunc("/api/voice/signal", h.handleVoiceSignal)
 	mux.HandleFunc("/api/dns/records", h.handleDNSRecords)
 	mux.HandleFunc("/api/http/sites", h.handleHTTPSites)
 	mux.HandleFunc("/api/email/messages", h.handleEmailMessages)
@@ -547,6 +552,115 @@ func (h *Handler) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h.api.VoiceStatus())
+}
+
+// isNodeIDHex reports whether s is exactly 64 hex characters, which is how a
+// 32-byte node identity is rendered.
+func isNodeIDHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// handleVoiceCall publishes a signed call offer through the voice service.
+//
+// The body is bounded because it is untrusted input on an endpoint that reaches
+// the signalling transport.
+func (h *Handler) handleVoiceCall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		PeerID      string `json:"peer_id"`
+		EnableVideo bool   `json:"enable_video"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(body.PeerID) > 128 {
+		http.Error(w, "peer_id too long", http.StatusBadRequest)
+		return
+	}
+	// Validated here rather than in the API so a malformed request is a client
+	// error. Letting it through to PlaceCall would turn bad input into a 503,
+	// which tells an operator their node is broken when it is fine.
+	if !isNodeIDHex(body.PeerID) {
+		http.Error(w, "peer_id must be 64 hex characters", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	resp, err := h.api.PlaceCall(ctx, body.PeerID, body.EnableVideo)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleVoiceSignal waits for one signalling message of a type from a peer.
+//
+// The wait is bounded by wait_ms so this cannot be used to hold a goroutine open
+// indefinitely; a caller polls it.
+func (h *Handler) handleVoiceSignal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	peer := r.URL.Query().Get("peer_id")
+	sigType := r.URL.Query().Get("type")
+	if peer == "" || sigType == "" {
+		http.Error(w, "peer_id and type are required", http.StatusBadRequest)
+		return
+	}
+	if len(peer) > 128 || len(sigType) > 32 {
+		http.Error(w, "query parameter too long", http.StatusBadRequest)
+		return
+	}
+	if !isNodeIDHex(peer) {
+		http.Error(w, "peer_id must be 64 hex characters", http.StatusBadRequest)
+		return
+	}
+	// Reject an unknown signal type before waiting on it, so a typo does not
+	// become a 30-second poll that finds nothing.
+	if _, err := voice.ParseSignalType(sigType); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	wait := 5 * time.Second
+	if v := r.URL.Query().Get("wait_ms"); v != "" {
+		ms, err := strconv.Atoi(v)
+		if err != nil || ms < 0 || ms > 30000 {
+			http.Error(w, "wait_ms must be 0..30000", http.StatusBadRequest)
+			return
+		}
+		wait = time.Duration(ms) * time.Millisecond
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), wait)
+	defer cancel()
+
+	resp, err := h.api.AwaitSignal(ctx, peer, sigType, wait)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) handleDNSRecords(w http.ResponseWriter, r *http.Request) {

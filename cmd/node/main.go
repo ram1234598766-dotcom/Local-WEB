@@ -28,6 +28,7 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/email"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
 	httpsvc "github.com/ram1234598766-dotcom/Local-WEB/pkg/services/http"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/messaging"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/registry"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/voice"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/vpn"
@@ -720,6 +721,11 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub, priv [32]byte, da
 	// no handler at all and the Voice panel reported nothing because there was
 	// genuinely nothing behind it.
 	voiceSrv := voice.NewVoiceServer(srv, false, priv)
+	// The signalling transport is what makes a call placeable. Without it the
+	// service could register a stream handler but had no way to exchange an
+	// offer, so VoiceServer.StartCall had no real caller.
+	signalStore := messaging.NewMemoryStore()
+	voiceSrv.SetSignalingChannel(voice.NewStoreChannel(signalStore))
 	if voiceSrv == nil {
 		api.SetServiceLive(false, "voice")
 	} else {

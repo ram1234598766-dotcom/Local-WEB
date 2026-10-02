@@ -162,6 +162,22 @@ class LocalWEBApp {
     return resp.json();
   }
 
+  // postJSON sends a JSON body to an API endpoint. The server's error text is
+  // used for the message because these endpoints explain what is wrong, and
+  // "API /voice/call: 503" tells an operator nothing.
+  async postJSON(path, body) {
+    const resp = await fetch('/api' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const detail = (await resp.text().catch(() => '')).trim();
+      throw new Error(detail || `API ${path}: ${resp.status}`);
+    }
+    return resp.json();
+  }
+
   async refresh() {
     try {
       const status = await this.fetchAPI('/status');
@@ -2049,11 +2065,13 @@ class LocalWEBApp {
 
   async startCall(peerId = null) {
     if (this.callState.status === 'active') return;
+    if (!peerId) {
+      this.showToast('Pick a peer to call first', 'warning');
+      return;
+    }
 
-    // Ask the node what it can actually do. The answer is a real service state
-    // and a real encoder check, not a sentence hardcoded here: the previous
-    // version asserted "no encoder and not started", which stopped being true
-    // once the daemon started the service and an encoder became buildable.
+    // Ask the node what it can actually do, then act on the answer rather than on
+    // a sentence hardcoded here.
     let status;
     try {
       status = await this.fetchAPI('/voice/status');
@@ -2062,22 +2080,61 @@ class LocalWEBApp {
       return;
     }
 
-    if (!status || !status.service_live || !status.can_send_audio) {
-      this.callState.status = 'idle';
-      this.updateCallUI();
-      this.showToast(status && status.reason
-        ? status.reason + (status.encoder_hint ? ' (' + status.encoder_hint + ')' : '')
-        : 'Calls are not available on this node', 'warning');
+    if (!status || !status.service_live) {
+      this.showToast((status && status.reason) || 'The voice service is not running', 'warning');
+      return;
+    }
+    if (!status.signaling) {
+      this.showToast('The voice service is running but has no signalling channel, ' +
+        'so it cannot place a call', 'warning');
       return;
     }
 
-    // The service is live and this build can encode, but placing a call still
-    // needs a signalling channel, which the dashboard does not have. Saying
-    // "connected" here would be the lie this path exists to avoid.
-    this.showToast('The voice service is running and this build can send audio, ' +
-      'but the dashboard has no signalling channel to place a call with', 'warning');
+    // Place the call. This publishes a signed offer on the shared signalling
+    // channel; it does not connect media, and the response says so.
+    let placed;
+    try {
+      placed = await this.postJSON('/voice/call', {
+        peer_id: peerId,
+        enable_video: !!status.can_send_video,
+      });
+    } catch (e) {
+      this.showToast('Could not place the call: ' + e.message, 'warning');
+      return;
+    }
+
+    this.callState.status = 'connecting';
+    this.callState.remotePeerId = peerId;
+    this.callState.callId = placed.call_id;
+    this.updateCallUI();
+
+    this.showToast(
+      `Offer sent on ${placed.channel}. Waiting for an answer — media does not connect yet, ` +
+      'so the call will not reach "connected".',
+      'info'
+    );
+
+    // Poll for the answer. The node holds the wait open for us, so this is one
+    // request rather than a tight loop.
+    try {
+      const reply = await this.fetchAPI(
+        '/api/voice/signal?peer_id=' + encodeURIComponent(peerId) +
+        '&type=answer&wait_ms=20000'
+      );
+      if (reply && reply.found) {
+        this.showToast('The peer answered call ' + reply.call_id.slice(0, 8) +
+          '. Media still does not flow: SDP exchange is not wired up yet.', 'info');
+        this.callState.status = 'idle';
+        this.updateCallUI();
+        return;
+      }
+    } catch (e) {
+      // Fall through to the timeout message below.
+    }
+
     this.callState.status = 'idle';
     this.updateCallUI();
+    this.showToast('No answer within 20s. The offer is still on the signalling channel.', 'warning');
   }
 
 

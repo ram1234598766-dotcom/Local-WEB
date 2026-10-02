@@ -15,11 +15,42 @@ var (
 	ErrSignalingClosed = errors.New("signaling channel closed")
 )
 
+// Signaled is one message read back out of a signaling channel.
+type Signaled struct {
+	// ID is the store's cursor for this message. Passing it back as the "after"
+	// argument resumes immediately after it, which is what stops a poller from
+	// re-reading the same signal forever.
+	ID          string
+	Sender      [32]byte
+	ContentType uint8
+	Content     []byte
+}
+
 // SignalingChannel abstracts the messaging transport used for call signals.
+//
+// It has a read side because a receiver has to get the signal's content out, not
+// just be told that something arrived. Subscribe's notification channel cannot
+// carry a payload, so without History a receiver can only poll blindly.
 type SignalingChannel interface {
 	Publish(ctx context.Context, channelID string, sender [32]byte, contentType uint8, content []byte) error
 	Subscribe(channelID string) (<-chan struct{}, error)
+	// History returns messages published to a channel strictly after the message
+	// ID afterID, oldest first. An empty afterID means the start of the channel.
+	History(channelID, afterID string, limit int) ([]Signaled, error)
 }
+
+// signalingPollInterval is how often WaitForSignal re-reads the channel.
+//
+// The store exposes a cursor read rather than a push of decoded signals, so this
+// is a poll. The interval is short because a call handshake is latency-sensitive,
+// and each poll advances a cursor rather than rescanning, so a missed tick costs a
+// little latency and nothing else.
+const signalingPollInterval = 25 * time.Millisecond
+
+// signalingHistoryLimit bounds one poll's read. A handshake is a handful of
+// messages, so a small limit is generous; the cap exists so a channel that has
+// been used for something else cannot make one poll unbounded.
+const signalingHistoryLimit = 64
 
 // MessagingSignaling adapts the LocalWEB messaging service for voice signals.
 type MessagingSignaling struct {
@@ -42,28 +73,75 @@ func (s *MessagingSignaling) SendSignal(ctx context.Context, sender [32]byte, ms
 	return s.store.Publish(ctx, s.channel, sender, 1, payload)
 }
 
-// WaitForSignal subscribes to the channel and returns the first matching signal
-// from the given peer, or a context cancellation.
+// WaitForSignal returns the next signal of sigType sent by peer.
+//
+// This used to be an endless loop: it subscribed, threw the notification channel
+// away, ignored peer and sigType, and re-read nothing, so it could only ever
+// return ctx.Err(). No call could be answered, and nothing called it.
+//
+// It waits for signals published from now on rather than replaying the channel,
+// because a handshake answers a live offer: answering one that was published
+// minutes ago would try to negotiate with a caller that has given up. A caller
+// that needs to resume mid-handshake uses WaitForSignalFrom.
 func (s *MessagingSignaling) WaitForSignal(ctx context.Context, peer [32]byte, sigType SignalType) (*SignalMessage, error) {
-	_, err := s.store.Subscribe(s.channel)
-	if err != nil {
-		return nil, err
+	msg, _, err := s.WaitForSignalFrom(ctx, peer, sigType, "")
+	return msg, err
+}
+
+// WaitForSignalFrom is WaitForSignal with an explicit cursor, returning the
+// cursor it stopped at so the caller can resume after reconnecting.
+//
+// It returns ctx.Err() only when the context ends without a matching signal.
+func (s *MessagingSignaling) WaitForSignalFrom(ctx context.Context, peer [32]byte, sigType SignalType, afterID string) (*SignalMessage, string, error) {
+	// An empty cursor means "from the start of the channel". Taking the tail first
+	// is what makes WaitForSignal wait for new signals rather than replaying.
+	if afterID == "" {
+		existing, err := s.store.History(s.channel, "", signalingHistoryLimit)
+		if err != nil {
+			return nil, "", err
+		}
+		if n := len(existing); n > 0 {
+			afterID = existing[n-1].ID
+		}
 	}
 
-	// Poll with backoff for signals; in production this would be event-driven.
-	ticker := time.NewTicker(50 * time.Millisecond)
+	if _, err := s.store.Subscribe(s.channel); err != nil {
+		return nil, afterID, err
+	}
+
+	ticker := time.NewTicker(signalingPollInterval)
 	defer ticker.Stop()
 
+	cursor := afterID
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, cursor, ctx.Err()
 		case <-ticker.C:
-			// Re-read history to find the signal.
-			// The real messaging service exposes History through Store;
-			// this polling is a bridge until the store exposes a push path.
-			_ = peer
-			_ = sigType
+		}
+
+		batch, err := s.store.History(s.channel, cursor, signalingHistoryLimit)
+		if err != nil {
+			return nil, cursor, err
+		}
+		for _, raw := range batch {
+			// The cursor advances past every message examined, including ones
+			// filtered out, so a poller never re-reads the same history.
+			cursor = raw.ID
+
+			if raw.Sender != peer {
+				continue
+			}
+			var msg SignalMessage
+			if err := json.Unmarshal(raw.Content, &msg); err != nil {
+				// A malformed payload must not stall the handshake: skip it and keep
+				// going rather than failing every future wait on this channel.
+				continue
+			}
+			if msg.Type != sigType {
+				continue
+			}
+			return &msg, cursor, nil
 		}
 	}
 }

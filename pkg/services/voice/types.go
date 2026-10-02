@@ -1,7 +1,9 @@
 package voice
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -170,6 +172,51 @@ const (
 	SignalTypeBye
 	SignalTypeGroupInvite
 )
+
+// ErrUnknownSignalType is returned when a signal type name is not one of the
+// defined types.
+var ErrUnknownSignalType = errors.New("unknown signal type")
+
+// String implements fmt.Stringer.
+func (s SignalType) String() string {
+	switch s {
+	case SignalTypeOffer:
+		return "offer"
+	case SignalTypeAnswer:
+		return "answer"
+	case SignalTypeICECandidate:
+		return "ice"
+	case SignalTypeBye:
+		return "bye"
+	case SignalTypeGroupInvite:
+		return "group-invite"
+	default:
+		return fmt.Sprintf("signal(%d)", uint8(s))
+	}
+}
+
+// ParseSignalType converts a signal type name back to its value.
+//
+// It exists because the name crosses a boundary: it arrives in an HTTP request.
+// An unrecognised value is an error rather than a zero, because a zero SignalType
+// is not a valid signal and silently matching nothing would make a broken request
+// look like a call that is merely unanswered.
+func ParseSignalType(name string) (SignalType, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "offer":
+		return SignalTypeOffer, nil
+	case "answer":
+		return SignalTypeAnswer, nil
+	case "ice", "ice-candidate", "ice_candidate":
+		return SignalTypeICECandidate, nil
+	case "bye":
+		return SignalTypeBye, nil
+	case "group-invite", "group_invite":
+		return SignalTypeGroupInvite, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", ErrUnknownSignalType, name)
+	}
+}
 
 // SignalMessage is a signaling payload exchanged via messaging.
 type SignalMessage struct {

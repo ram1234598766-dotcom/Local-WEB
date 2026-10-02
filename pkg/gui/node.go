@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"golang.org/x/crypto/sha3"
 	"path/filepath"
@@ -761,6 +762,10 @@ type VoiceStatusResponse struct {
 	// ServiceLive is true when the daemon constructed the voice service, so the
 	// ServiceVoice stream handler is registered.
 	ServiceLive bool `json:"service_live"`
+	// Signaling is true when a signalling transport is configured, which is what
+	// makes a call placeable. Without it the service can carry media but cannot
+	// exchange an offer.
+	Signaling bool `json:"signaling"`
 	// OpusEncoder and VPXEncoder report what this binary can send. Receiving needs
 	// neither, because the pure-Go Opus decoder is always linked.
 	OpusEncoder bool `json:"opus_encoder"`
@@ -783,6 +788,151 @@ type VoiceCallResponse struct {
 	State string `json:"state"`
 }
 
+// PlaceCallResponse is what a placed call reports back.
+type PlaceCallResponse struct {
+	CallID string `json:"call_id"`
+	// Channel is the signalling channel the offer was published on, which is what
+	// the peer reads to find it.
+	Channel string `json:"channel"`
+	// State is what actually happened. "offer_sent" is not "connected": nothing
+	// yet exchanges SDP or media, and saying otherwise would be the lie this
+	// endpoint exists to avoid.
+	State string `json:"state"`
+	// Tracks are the local track descriptions carried in the signed offer.
+	Tracks []voice.TrackInfo `json:"tracks"`
+}
+
+// PlaceCall publishes a signed call offer through the voice service.
+//
+// It creates the call and sends an offer, and reports "offer_sent". It does not
+// connect media: there is no SDP exchange wired into the signalling path yet, so
+// a caller that needs a working session has to drive WebRTC directly.
+func (a *NodeAPI) PlaceCall(ctx context.Context, peerHex string, enableVideo bool) (PlaceCallResponse, error) {
+	a.mu.RLock()
+	svc := a.voiceSrv
+	a.mu.RUnlock()
+
+	if svc == nil {
+		return PlaceCallResponse{}, fmt.Errorf("the voice service is not running")
+	}
+	if svc.SignalingChannel() == nil {
+		return PlaceCallResponse{}, voice.ErrNoSignalingChannel
+	}
+
+	peerBytes, err := hex.DecodeString(peerHex)
+	if err != nil || len(peerBytes) != 32 {
+		return PlaceCallResponse{}, fmt.Errorf("peer_id must be 64 hex characters, got %d characters", len(peerHex))
+	}
+	var peer [32]byte
+	copy(peer[:], peerBytes)
+
+	tracks := []voice.TrackInfo{{
+		ID:        "audio-1",
+		Kind:      voice.TrackKindAudio,
+		Direction: voice.TrackDirectionSendRecv,
+		Codec:     voice.CodecOpus,
+		MimeType:  "audio/opus",
+	}}
+	if enableVideo {
+		codec := voice.CodecVP8
+		mime := voice.VP8MimeType
+		if voice.VPXEncoderLinked() {
+			codec = voice.CodecVP9
+			mime = voice.VP9MimeType
+		}
+		tracks = append(tracks, voice.TrackInfo{
+			ID:        "video-1",
+			Kind:      voice.TrackKindVideo,
+			Direction: voice.TrackDirectionSendRecv,
+			Codec:     codec,
+			MimeType:  mime,
+		})
+	}
+
+	// The channel name is derived from the peer, so both sides land on the same
+	// channel without having agreed on a name first.
+	channel := "call:" + peerHex
+
+	sig, err := svc.PlaceCall(ctx, voice.CallConfig{
+		Callee:     voice.PeerID(peer),
+		ChannelID:  channel,
+		AudioCodec: voice.CodecOpus,
+		VideoCodec: func() voice.CodecID {
+			if enableVideo {
+				return tracks[1].Codec
+			}
+			return 0
+		}(),
+		EnableVideo: enableVideo,
+	}, tracks)
+	if err != nil {
+		return PlaceCallResponse{}, err
+	}
+
+	callID := sig.CallID()
+	return PlaceCallResponse{
+		CallID:  hex.EncodeToString(callID[:]),
+		Channel: channel,
+		State:   "offer_sent",
+		Tracks:  tracks,
+	}, nil
+}
+
+// AwaitSignalResponse is one signalling message read back.
+type AwaitSignalResponse struct {
+	Found   bool   `json:"found"`
+	CallID  string `json:"call_id,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Sender  string `json:"sender,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// AwaitSignal waits for a signalling message of a type from a peer.
+//
+// wait_ms bounds the wait so the endpoint cannot be used to pin a goroutine
+// indefinitely; the caller polls it the way the dashboard polls its other
+// long-lived state.
+func (a *NodeAPI) AwaitSignal(ctx context.Context, peerHex, sigType string, wait time.Duration) (AwaitSignalResponse, error) {
+	a.mu.RLock()
+	svc := a.voiceSrv
+	a.mu.RUnlock()
+
+	if svc == nil {
+		return AwaitSignalResponse{}, fmt.Errorf("the voice service is not running")
+	}
+
+	peerBytes, err := hex.DecodeString(peerHex)
+	if err != nil || len(peerBytes) != 32 {
+		return AwaitSignalResponse{}, fmt.Errorf("peer_id must be 64 hex characters")
+	}
+	var peer [32]byte
+	copy(peer[:], peerBytes)
+
+	parsed, err := voice.ParseSignalType(sigType)
+	if err != nil {
+		return AwaitSignalResponse{}, err
+	}
+
+	msg, err := svc.AwaitSignal(ctx, "call:"+peerHex, voice.PeerID(peer), parsed)
+	if err != nil {
+		// A timeout is not a failure: nothing matched within the window, which is
+		// what the dashboard is asking.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return AwaitSignalResponse{Found: false}, nil
+		}
+		return AwaitSignalResponse{}, err
+	}
+
+	callID := msg.CallID
+	return AwaitSignalResponse{
+		Found:   true,
+		CallID:  hex.EncodeToString(callID[:]),
+		Type:    msg.Type.String(),
+		Sender:  hex.EncodeToString(msg.Sender[:]),
+		Message: string(msg.Payload),
+	}, nil
+}
+
 // VoiceStatus reports the voice service's real state.
 func (a *NodeAPI) VoiceStatus() VoiceStatusResponse {
 	a.mu.RLock()
@@ -791,6 +941,7 @@ func (a *NodeAPI) VoiceStatus() VoiceStatusResponse {
 
 	resp := VoiceStatusResponse{
 		ServiceLive: svc != nil,
+		Signaling:   svc != nil && svc.SignalingChannel() != nil,
 		OpusEncoder: voice.OpusEncoderLinked(),
 		VPXEncoder:  voice.VPXEncoderLinked(),
 		Calls:       []VoiceCallResponse{},

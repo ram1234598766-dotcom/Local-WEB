@@ -40,6 +40,18 @@ func (m *mockSignalingChannel) Subscribe(_ string) (<-chan struct{}, error) {
 	return ch, nil
 }
 
+// History completes the SignalingChannel contract. The mock records nothing, so
+// it returns an empty batch rather than pretending a signal arrived; the tests
+// that exercise the read path use StoreChannel over a real messaging store.
+func (m *mockSignalingChannel) History(_ string, _ string, _ int) ([]Signaled, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrSignalingClosed
+	}
+	return nil, nil
+}
+
 func TestSignalMessageRoundTrip(t *testing.T) {
 	pub, priv, _ := crypto.GenerateKeyPair()
 	caller := crypto.NodeID(pub)
