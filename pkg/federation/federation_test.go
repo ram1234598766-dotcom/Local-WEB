@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/dht"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 )
 
@@ -76,7 +77,10 @@ func TestRendezvousLookupNotFound(t *testing.T) {
 
 func TestRendezvousRenewStale(t *testing.T) {
 	store := NewMemoryStore()
-	srv := httptest.NewServer(NewHTTPHandler(store))
+	// A controllable clock, because re-registering inside MinRegisterInterval is
+	// rate limited by design and this test is specifically about renewal.
+	now := time.Now()
+	srv := httptest.NewServer(NewHTTPHandler(store, WithClock(func() time.Time { return now })))
 	defer srv.Close()
 
 	client := NewRendezvousClient(srv.URL)
@@ -102,6 +106,9 @@ func TestRendezvousRenewStale(t *testing.T) {
 	}
 
 	peer.Addrs = []string{"10.0.0.2:4443"}
+	// Renewal is subject to the register rate limit, so advance past it. The
+	// assertion below is unchanged: the new address must be what a lookup returns.
+	now = now.Add(MinRegisterInterval + time.Second)
 	if err := client.Register(ctx, peer); err != nil {
 		t.Fatalf("Renew Register: %v", err)
 	}
@@ -155,7 +162,21 @@ func TestHTTPHandlerRegisterRoute(t *testing.T) {
 		Name:  "httptest",
 		Addrs: []string{"1.2.3.4:4443"},
 	}
-	body, _ := json.Marshal(peer)
+	// The body is a Registration envelope with a solved proof of work, because the
+	// endpoint is public and unauthenticated and charges for a write. Posting a
+	// bare PeerInfo is now correctly refused, which is the point of the gate.
+	signed, err := json.Marshal(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := dht.SolvePoW(signed, dht.MinPoWDifficulty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(Registration{Peer: peer, Nonce: nonce})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	req, _ := http.NewRequest("POST", srv.URL+"/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
