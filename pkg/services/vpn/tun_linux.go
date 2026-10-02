@@ -138,48 +138,4 @@ func (t *linuxTUN) Close() error {
 	return unix.Close(t.fd)
 }
 
-func parseIPv4(s string) *[4]byte {
-	parts := splitIP(s)
-	if len(parts) != 4 {
-		return nil
-	}
-	var ip [4]byte
-	for i, p := range parts {
-		v := 0
-		for _, c := range p {
-			if c < '0' || c > '9' {
-				return nil
-			}
-			v = v*10 + int(c-'0')
-		}
-		if v > 255 {
-			return nil
-		}
-		ip[i] = byte(v)
-	}
-	return &ip
-}
-
-func splitIP(s string) []string {
-	var parts []string
-	start := 0
-	for i, c := range s {
-		if c == '.' {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, s[start:])
-	return parts
-}
-
-func trimCStr(b []byte) string {
-	for i, c := range b {
-		if c == 0 {
-			return string(b[:i])
-		}
-	}
-	return string(b)
-}
-
 var _ Interface = (*linuxTUN)(nil)
