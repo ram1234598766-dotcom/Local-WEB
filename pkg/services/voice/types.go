@@ -1,6 +1,9 @@
 package voice
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // CallID uniquely identifies a voice/video call.
 type CallID [16]byte
@@ -13,8 +16,23 @@ type CodecID uint8
 
 const (
 	CodecOpus CodecID = iota + 1 // Opus audio
+	CodecVP8                     // VP8 video
 	CodecVP9                     // VP9 video
 )
+
+// String implements fmt.Stringer.
+func (c CodecID) String() string {
+	switch c {
+	case CodecOpus:
+		return "opus"
+	case CodecVP8:
+		return "vp8"
+	case CodecVP9:
+		return "vp9"
+	default:
+		return fmt.Sprintf("codec(%d)", uint8(c))
+	}
+}
 
 // MediaType classifies a media payload.
 type MediaType uint8

@@ -9,15 +9,41 @@ import (
 
 func TestCodecProfiles(t *testing.T) {
 	profiles := SupportedCodecs()
-	require.Len(t, profiles, 2)
+	// Opus, VP8 and VP9 are all implemented, so all three are advertised. This
+	// used to be 2 with only VP9 listed, which claimed support for a codec
+	// nothing could encode.
+	require.Len(t, profiles, 3)
 
-	opus := profiles[0]
-	require.Equal(t, CodecOpus, opus.ID)
+	// The order is preference order, so it is still asserted. The parameters are
+	// then looked up by ID rather than by index, so adding a codec cannot silently
+	// repoint a check at the wrong entry.
+	require.Equal(t, CodecOpus, profiles[0].ID)
+	require.Equal(t, CodecVP8, profiles[1].ID)
+	require.Equal(t, CodecVP9, profiles[2].ID)
+
+	byID := func(id CodecID) CodecProfile {
+		for _, p := range profiles {
+			if p.ID == id {
+				return p
+			}
+		}
+		t.Fatalf("codec %s missing from SupportedCodecs", id)
+		return CodecProfile{}
+	}
+
+	opus := byID(CodecOpus)
 	require.Equal(t, uint32(48000), opus.SampleRate)
 	require.Equal(t, "audio/opus", opus.MimeType)
+	require.Equal(t, "opus", opus.Name)
 
-	vp9 := profiles[1]
-	require.Equal(t, CodecVP9, vp9.ID)
+	vp8 := byID(CodecVP8)
+	require.Equal(t, VP8MimeType, vp8.MimeType)
+	require.Equal(t, uint32(640), vp8.Width)
+	require.Equal(t, uint32(480), vp8.Height)
+	require.Equal(t, uint32(VP8DefaultBitrate), vp8.Bitrate)
+
+	vp9 := byID(CodecVP9)
+	require.Equal(t, VP9MimeType, vp9.MimeType)
 	require.Equal(t, uint32(1280), vp9.Width)
 	require.Equal(t, uint32(720), vp9.Height)
 }
