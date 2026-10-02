@@ -100,6 +100,18 @@ func main() {
 	// first non-flag argument, so every flag after that word was being
 	// silently discarded and the node quietly used the default data dir.
 	// Drop a leading subcommand word so those invocations behave as written.
+	// QoS shaping. pkg/qos implements token buckets, priorities and an HTB
+	// hierarchy, but until this pass nothing outside its own tests constructed a
+	// QoSManager, so no traffic was actually shaped. Install it on the transport
+	// so every outbound service frame passes through a service class.
+	//
+	// Declared with the other flags rather than down where it is used: it used to
+	// sit after flag.Parse, which meant -qos and -qos-policy were not defined yet
+	// and passing either one failed with "flag provided but not defined".
+	qosPolicy := flag.String("qos-policy", "priority",
+		"outbound QoS policy: priority, fifo, wfq or htb")
+	qosEnabled := flag.Bool("qos", true,
+		"shape outbound service traffic with pkg/qos")
 	stripLeadingSubcommand()
 
 	flag.Parse()
@@ -123,6 +135,33 @@ func main() {
 
 	if *storage == "" {
 		*storage = filepath.Join(*dataDir, "data")
+	}
+
+	// Apply the config file after parsing, for flags that were not given
+	// explicitly. Doing it this way means a command-line flag always wins: the file
+	// is the machine's defaults and the command line is this run's intent.
+	//
+	// The installers write a config file, and until now the daemon ignored it
+	// entirely, so a setting like dht.bootstrap appeared to be honoured because the
+	// installer echoed it back while nothing had read it.
+	if cfg, cfgPath, err := loadNodeConfig(*dataDir); err != nil {
+		// A config file that exists but cannot be read is fatal rather than
+		// ignored, because continuing would run on defaults the operator did not
+		// ask for without telling them.
+		log.Fatalf("config: %v", err)
+	} else if cfg != nil {
+		explicit := map[string]bool{}
+		flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+
+		applied = nil
+		if err := applyNodeConfig(cfg, explicit); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		log.Printf("config: applied %s from %s", strings.Join(applied, " "), cfgPath)
+		if len(applied) == 0 {
+			log.Printf("config: %s set no flag this daemon honours; "+
+				"every setting in it was overridden on the command line", cfgPath)
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,10 +290,6 @@ func main() {
 	// hierarchy, but until this pass nothing outside its own tests constructed a
 	// QoSManager, so no traffic was actually shaped. Install it on the transport
 	// so every outbound service frame passes through a service class.
-	qosPolicy := flag.String("qos-policy", "priority",
-		"outbound QoS policy: priority, fifo, wfq or htb")
-	qosEnabled := flag.Bool("qos", true,
-		"shape outbound service traffic with pkg/qos")
 
 	var shaper transport.TrafficShaper
 	if *qosEnabled {
