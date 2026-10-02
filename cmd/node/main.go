@@ -34,6 +34,13 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
 
+// defaultGUIAddr is the dashboard's default listen address.
+//
+// The dashboard has no authentication and can write to the node's store, so it
+// binds loopback. Publishing this as a named constant rather than an inline
+// string means a test can hold it to being loopback, and a reader can find it.
+const defaultGUIAddr = "127.0.0.1:8080"
+
 // stripLeadingSubcommand removes a single leading non-flag argument, which the
 // packaging, installer and service entry points use as a "node" verb.
 // It rewrites os.Args because that is what flag.Parse reads.
@@ -80,7 +87,11 @@ func main() {
 	dhtAddr := flag.String("dht-addr", "0.0.0.0:9094", "dht listen address")
 	dhtAdvertise := flag.String("dht-advertise", "", "address peers should dial for the dht (e.g. 203.0.113.7:9094). Needed behind NAT, where nothing local can determine the public address; otherwise the primary outbound address is used")
 	dhtBootstrap := flag.String("dht-bootstrap", "", "comma-separated dht peer addresses to join a network (e.g. 10.0.0.5:7777). Without one this node serves but reaches no other node")
-	guiAddr := flag.String("gui-addr", "0.0.0.0:8080", "GUI dashboard listen address")
+	// The dashboard has no authentication of any kind and mutates state: it
+	// accepts file uploads, creates and saves documents, and restores backups. It
+	// binds loopback by default so that is not a network-exposed capability by
+	// accident. Exposing it deliberately is a separate, explicit choice.
+	guiAddr := flag.String("gui-addr", defaultGUIAddr, "GUI dashboard listen address; loopback by default because the dashboard is unauthenticated and can write files and restore backups")
 
 	// The daemon has no subcommands, but the packaging and service files all
 	// invoke it as `localweb node --data-dir ...`. flag.Parse stops at the
@@ -769,3 +780,4 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		}
 	}
 }
+
