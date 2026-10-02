@@ -68,6 +68,9 @@ type Server struct {
 	// this existed there was no way to tell a working tunnel from an idle one.
 	forwarded uint64
 	delivered uint64
+	// deviceErr is why iface is nil, kept so the failure can be reported instead
+	// of being logged once and lost.
+	deviceErr error
 }
 
 func NewServer(localID [32]byte) *Server {
@@ -80,7 +83,12 @@ func NewServer(localID [32]byte) *Server {
 			log.Warn().Err(err).Msg("vpn: failed to bring TUN interface up")
 		}
 	}
-	return NewServerWithInterface(localID, iface)
+	srv := NewServerWithInterface(localID, iface)
+	// The reason the device is missing is kept rather than discarded. It is the
+	// difference between "run as root" and "this platform has no TUN at all", and
+	// only the first is something an operator can act on.
+	srv.deviceErr = err
+	return srv
 }
 
 // NewServerWithInterface builds a server around a specific device, or around no
@@ -208,6 +216,24 @@ func (s *Server) HasDevice() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.iface != nil
+}
+
+// DeviceError returns why no TUN device is available.
+//
+// It is never nil when HasDevice is false on a server built by NewServer. Callers
+// must not substitute a generic "needs root" message: on a platform with no TUN
+// implementation that advice is wrong, because the fix is a driver rather than a
+// privilege.
+func (s *Server) DeviceError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iface != nil {
+		return nil
+	}
+	if s.deviceErr != nil {
+		return s.deviceErr
+	}
+	return errors.New("no TUN interface")
 }
 
 // DeviceName returns the tunnel interface name, or "" when there is none.

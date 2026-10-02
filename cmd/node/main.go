@@ -764,9 +764,9 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub, priv [32]byte, da
 	//
 	// The service registers a transport handler so a peer can open a VPN stream,
 	// and the forwarding loop carries packets over it. A tunnel is only possible
-	// where the operating system lets this process open a TUN device, which
-	// needs root or CAP_NET_ADMIN; where it cannot, the service stays reported as
-	// not running rather than claiming a tunnel that carries nothing.
+	// where the operating system lets this process open a TUN device; where it
+	// cannot, the service stays reported as not running rather than claiming a
+	// tunnel that carries nothing.
 	vpnSrv := vpn.NewServer(crypto.NodeID(pub))
 	if vpnSrv.HasDevice() {
 		srv.RegisterHandler(transport.ServiceVPN, vpnSrv.ServiceHandler(func(st transport.Stream) [32]byte {
@@ -776,7 +776,11 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub, priv [32]byte, da
 		log.Printf("vpn: tun device %q up, serviceVPN handler registered", vpnSrv.DeviceName())
 	} else {
 		api.SetServiceLive(false, "vpn")
-		log.Printf("vpn: no tun device (needs root or CAP_NET_ADMIN), service not started")
+		// The two failures are not the same and telling an operator the wrong one
+		// costs them. Missing privileges on a platform that has a TUN is fixed by
+		// running as root or granting CAP_NET_ADMIN. A platform with no TUN
+		// implementation is not fixed by that at all.
+		log.Printf("vpn: no tun device, service not started: %v", vpnSrv.DeviceError())
 	}
 
 	// Messaging is still the honest false: NewMessagingSignaling needs a channel
