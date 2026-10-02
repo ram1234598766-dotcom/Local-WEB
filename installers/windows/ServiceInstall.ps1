@@ -18,6 +18,25 @@ param(
 $ErrorActionPreference = "Stop"
 $VerbosePreference = "Continue"
 
+# Normalise the install directory before anything joins onto it.
+#
+# The MSI passes -InstallDir "[INSTALLDIR]", and INSTALLDIR carries a trailing
+# backslash. On a command line a backslash immediately before the closing quote
+# escapes that quote, so the value arrived here as C:\Program Files\LocalWEB"  and
+# every Join-Path built a nonsense path ending in a stray quote. The install then
+# failed with 1603 and, because the package rolled back, the script's own error
+# was nowhere in the MSI log.
+#
+# Trailing separators and a stray quote are stripped here rather than in the caller,
+# so the MSI, the PowerShell installer and anyone running this by hand all behave the
+# same. The quote is stripped because that is what the escaping above leaves behind:
+# the value arrives as C:\Program Files\LocalWEB" and every Join-Path then builds a
+# path containing a quote character.
+$InstallDir = $InstallDir.Trim().Trim('"').Trim().TrimEnd('\', '/')
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    throw "InstallDir must not be empty"
+}
+
 function Write-Log {
     param([string]$Message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"

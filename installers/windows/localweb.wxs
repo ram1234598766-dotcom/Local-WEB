@@ -67,7 +67,12 @@
       WiX infer a property-based type that InstallServices rejects at run time with
       error 2723, so the package builds cleanly and then fails to install with 1603.
       WiX 3 has neither a Type attribute nor an Arguments attribute; the type and the
-      full command line both come from ExeCommand.
+         full command line both come from ExeCommand.
+
+         SystemFolder64, not SystemFolder: this is a 64-bit package, and SystemFolder
+         resolves to SysWOW64, so the action ran 32-bit PowerShell. The firewall
+         cmdlets the script needs are not usable from there, so the action exited
+         non-zero, which InstallServices reports as 1722 and the install as 1603.
     -->
     <CustomAction Id="ConfigureWintunAndFirewall"
                   Directory="INSTALLDIR"
