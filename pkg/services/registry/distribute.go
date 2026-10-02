@@ -11,6 +11,7 @@ import (
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/dht"
+	"github.com/rs/zerolog/log"
 )
 
 // dhtMetaStore is the concrete DHT-backed implementation of DHTDistributor.
@@ -71,6 +72,14 @@ func (d *dhtMetaStore) SearchMeta(ctx context.Context, query string) ([]PackageM
 }
 
 // ResolveMeta retrieves a specific package's metadata.
+//
+// The local cache answers first. On a miss the metadata is fetched from the DHT
+// and cached, so a second resolve is local.
+//
+// This used to run a DHT lookup and then return ErrPackageNotFound regardless
+// of the result, discarding the lookup entirely. The test passed only because
+// it published to the same node, which short-circuits on the local cache: no
+// test ever resolved a package that lived on a different node.
 func (d *dhtMetaStore) ResolveMeta(ctx context.Context, packageID string) (*PackageMeta, error) {
 	d.mu.Lock()
 	meta, ok := d.local[packageID]
@@ -80,12 +89,33 @@ func (d *dhtMetaStore) ResolveMeta(ctx context.Context, packageID string) (*Pack
 		return &cp, nil
 	}
 
-	target := dht.NodeID(crypto.SHA3Hash([]byte("pkg:" + packageID)))
-	_, err := d.dht.Lookup(ctx, target)
+	key := "pkg:" + packageID
+	raw, err := d.dht.Get(ctx, key)
 	if err != nil {
+		// The sentinel is returned bare so callers can compare it directly; the
+		// underlying reason is logged rather than wrapped.
+		log.Debug().Err(err).Str("package", packageID).Msg("dht has no metadata for this package")
 		return nil, ErrPackageNotFound
 	}
-	return nil, ErrPackageNotFound
+
+	fetched, err := unmarshalPackageMeta(raw)
+	if err != nil {
+		log.Warn().Err(err).Str("package", packageID).Msg("metadata from the dht did not decode")
+		return nil, ErrPackageNotFound
+	}
+	// Trust the key we asked for, not one the value claims: a peer must not be
+	// able to answer a request for one package with another's metadata.
+	if fetched.ID != packageID {
+		log.Warn().
+			Str("asked_for", packageID).
+			Str("returned", fetched.ID).
+			Msg("peer answered a metadata request with a different package")
+		return nil, ErrPackageNotFound
+	}
+
+	d.AddLocal(fetched)
+	cp := *fetched
+	return &cp, nil
 }
 
 // Local returns a snapshot of locally cached package metadata.

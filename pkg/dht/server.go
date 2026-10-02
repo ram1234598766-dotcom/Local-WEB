@@ -90,6 +90,19 @@ func (s *Server) handleConn(conn net.Conn) {
 	conn.Write(resp.Payload)
 }
 
+// Addr reports the address the server is listening on.
+//
+// Start accepts a port of 0, so without this a node cannot tell a peer where to
+// reach it and every bootstrap or registration has to guess.
+func (s *Server) Addr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ln == nil {
+		return ""
+	}
+	return s.ln.Addr().String()
+}
+
 func (s *Server) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,6 +131,8 @@ func (n *Node) handleMessage(msg Message) Message {
 	case MsgStore:
 		key, value := decodeStore(msg.Payload)
 		if key != "" {
+			// n.store is already protected: handleMessage holds n.mu for its
+			// whole body, so taking it again here would self-deadlock.
 			if n.store == nil {
 				n.store = make(map[string][]byte)
 			}

@@ -33,6 +33,10 @@ var (
 	ErrPoWFailed   = errors.New("proof of work failed")
 	ErrNodeRunning = errors.New("dht node already running")
 	ErrNotRunning  = errors.New("dht node not running")
+	// ErrValueNotFound means no peer the node asked held the key. It is
+	// distinct from ErrNoPeers: the network was reachable and the answer was
+	// genuinely "I do not have this".
+	ErrValueNotFound = errors.New("value not found in the dht")
 )
 
 type NodeID [32]byte
@@ -405,6 +409,30 @@ func NewDHT(localID NodeID, pubKey [32]byte, name string, transport QUICTranspor
 	}
 }
 
+// localValue returns a value this node holds. It takes n.mu, so it must not be
+// called from inside handleMessage, which already holds it.
+func (n *Node) localValue(key string) ([]byte, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	v, ok := n.store[key]
+	if !ok {
+		return nil, false
+	}
+	cp := make([]byte, len(v))
+	copy(cp, v)
+	return cp, true
+}
+
+// Node exposes the underlying node so a Server can be attached to this DHT.
+//
+// NewServer takes a *Node and NewDHT keeps its own, so without this a DHT
+// cannot be made to serve anything: a node could store and fetch values only by
+// dialling others, never by answering a request. That is why the registry
+// could not resolve a package from a peer.
+func (d *DHT) Node() *Node {
+	return d.node
+}
+
 func (d *DHT) Bootstrap(ctx context.Context, bootstrap []string) error {
 	d.mu.Lock()
 	if d.running {
@@ -557,6 +585,66 @@ func dedupeAndPrune(peers []*Peer, target NodeID, n int) []*Peer {
 		}
 	}
 	return out
+}
+
+// Get retrieves a value previously offered to the DHT under key.
+//
+// Store sends MsgStore to the closest peers and the receiving node keeps the
+// value, but nothing ever asked for it back: there was no client-side
+// find-value, so a value written to the DHT could not be read from it by any
+// other node. Registry resolution needs exactly this.
+//
+// The local value store is checked first. Store propagates a value to the
+// *closest peers*, not to the publisher, so in a small network the copy that
+// can answer a request often lives on this node; asking only remote peers would
+// miss it.
+func (d *DHT) Get(ctx context.Context, key string) ([]byte, error) {
+	d.mu.RLock()
+	if !d.running {
+		d.mu.RUnlock()
+		return nil, ErrNotRunning
+	}
+	d.mu.RUnlock()
+
+	if local, ok := d.node.localValue(key); ok {
+		return local, nil
+	}
+
+	target := NodeID(crypto.SHA3Hash([]byte(key)))
+	peers := d.node.table.FindClosest(target, Alpha)
+	if len(peers) == 0 {
+		return nil, ErrValueNotFound
+	}
+
+	client := NewRPCClient(d.node.transport.Dial)
+	for _, p := range peers {
+		if len(p.Info.Addrs) == 0 {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		msg := Message{
+			Type:    MsgFindValue,
+			Src:     d.localID,
+			Dst:     p.Info.ID,
+			Payload: encodeStore(key, nil),
+		}
+		resp, err := client.Call(ctx, p.Info.Addrs[0], msg)
+		if err != nil {
+			continue
+		}
+		if resp.Type != MsgFoundValue {
+			// The peer does not hold it; keep asking the others.
+			continue
+		}
+		gotKey, value := decodeStore(resp.Payload)
+		if gotKey != key {
+			continue
+		}
+		return value, nil
+	}
+	return nil, ErrValueNotFound
 }
 
 func (d *DHT) Store(ctx context.Context, key string, value []byte) error {

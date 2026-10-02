@@ -1,17 +1,21 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // MemoryRegistry is an in-memory implementation of Registry.
 type MemoryRegistry struct {
-	mu       sync.RWMutex
-	packages map[string]*PackageMeta
-	store    map[string]*LWPKG
+	mu          sync.RWMutex
+	packages    map[string]*PackageMeta
+	store       map[string]*LWPKG
+	distributor DHTDistributor
 }
 
 // NewMemoryRegistry creates a new in-memory registry.
@@ -22,41 +26,53 @@ func NewMemoryRegistry() *MemoryRegistry {
 	}
 }
 
-// Publish adds a package to the registry.
+// Publish adds a package to the registry and shares its metadata when a DHT
+// distributor is attached.
 func (r *MemoryRegistry) Publish(pkg *LWPKG, authorPubKey [32]byte, privKey [32]byte) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	// The locked part is a closure so the lock is released before the
+	// distributor runs: that makes RPCs, and holding a mutex across one would
+	// block every other registry operation for the duration of the network.
+	meta, id, err := func() (*PackageMeta, string, error) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 
-	if pkg == nil || pkg.Manifest == nil {
-		return "", ErrManifestInvalid
-	}
-	if err := Validate(pkg.Manifest); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrManifestInvalid, err)
+		if pkg == nil || pkg.Manifest == nil {
+			return nil, "", ErrManifestInvalid
+		}
+		if err := Validate(pkg.Manifest); err != nil {
+			return nil, "", fmt.Errorf("%w: %v", ErrManifestInvalid, err)
+		}
+
+		id := PackageID(pkg.Manifest.Name, pkg.Manifest.Version, pkg.Manifest.Author)
+		if _, exists := r.packages[id]; exists {
+			return nil, "", ErrPackageExists
+		}
+
+		now := timeNow()
+		m := &PackageMeta{
+			ID:          id,
+			Name:        pkg.Manifest.Name,
+			Version:     pkg.Manifest.Version,
+			Description: pkg.Manifest.Description,
+			Author:      pkg.Manifest.Author,
+			Platform:    pkg.Manifest.Platform,
+			Entry:       pkg.Manifest.Entry,
+			Published:   now,
+			Updated:     now,
+			Downloads:   0,
+			Verified:    pkg.Signature != nil && len(pkg.Signature) > 0,
+			PublisherID: authorPubKey,
+		}
+
+		r.packages[id] = m
+		r.store[id] = pkg
+		return m, id, nil
+	}()
+	if err != nil {
+		return "", err
 	}
 
-	id := PackageID(pkg.Manifest.Name, pkg.Manifest.Version, pkg.Manifest.Author)
-	if _, exists := r.packages[id]; exists {
-		return "", ErrPackageExists
-	}
-
-	now := timeNow()
-	meta := &PackageMeta{
-		ID:          id,
-		Name:        pkg.Manifest.Name,
-		Version:     pkg.Manifest.Version,
-		Description: pkg.Manifest.Description,
-		Author:      pkg.Manifest.Author,
-		Platform:    pkg.Manifest.Platform,
-		Entry:       pkg.Manifest.Entry,
-		Published:   now,
-		Updated:     now,
-		Downloads:   0,
-		Verified:    pkg.Signature != nil && len(pkg.Signature) > 0,
-		PublisherID: authorPubKey,
-	}
-
-	r.packages[id] = meta
-	r.store[id] = pkg
+	r.distribute(context.Background(), meta)
 	return id, nil
 }
 
@@ -190,7 +206,28 @@ func isValidPlatform(platforms []string, target string) bool {
 // timeNow returns the current UTC time. Overridable for testing.
 var timeNow = func() time.Time { return time.Now().UTC() }
 
-// Register registers a memory registry as both Registry and DHTDistributor.
+// RegisterDistributor attaches a DHT distributor so publishing propagates.
+//
+// This discarded its argument outright, so a package published through the
+// registry never reached the DHT and no other node could resolve it, however
+// correct the DHT code underneath was.
 func (r *MemoryRegistry) RegisterDistributor(d DHTDistributor) {
-	_ = d
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.distributor = d
+}
+
+// distribute propagates package metadata to the DHT when one is attached.
+func (r *MemoryRegistry) distribute(ctx context.Context, meta *PackageMeta) {
+	r.mu.RLock()
+	d := r.distributor
+	r.mu.RUnlock()
+	if d == nil {
+		return
+	}
+	if err := d.PublishMeta(ctx, meta); err != nil {
+		// The local copy is already stored, so a DHT failure must not fail the
+		// publish; the metadata simply is not shared yet.
+		log.Warn().Err(err).Str("package", meta.ID).Msg("could not publish package metadata to the dht")
+	}
 }

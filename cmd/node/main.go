@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/crypto"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/dht"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/discovery"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/federation"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/gui"
@@ -313,6 +314,7 @@ func main() {
 		smtp:     *smtpAddr,
 		imap:     *imapAddr,
 		registry: *registryAddr,
+		dht:      "127.0.0.1:0",
 	})
 	defer stopServices()
 
@@ -337,6 +339,42 @@ type servicePorts struct {
 	smtp     string
 	imap     string
 	registry string
+	dht      string
+}
+
+// newDHTForNode builds a DHT node that listens and answers requests, so this
+// node can both publish metadata to peers and resolve metadata from them.
+//
+// dht.NewDHT was called from nowhere in the daemon before this, and
+// dht.NewServer from nowhere at all: a node could neither serve a lookup nor
+// start one, so a package published through the registry stayed on the machine
+// that published it.
+//
+// The DHT speaks TCP, which is a separate plane from the QUIC service
+// transport. bootstrap lists TCP addresses of peers to learn from; without any,
+// the node serves and stores locally and reaches no other node, which is why
+// the log says so plainly.
+func newDHTForNode(ctx context.Context, srv *transport.Server, pub [32]byte, stops *[]func()) (*dht.DHT, *dht.Server) {
+	localID := dht.NodeIDFromPub(pub)
+	node := dht.NewDHT(localID, pub, "localweb", dht.TCPTransport{})
+
+	if err := node.Bootstrap(ctx, nil); err != nil {
+		log.Printf("dht: not started: %v", err)
+	}
+
+	dhtSrv := dht.NewServer(node.Node())
+	if err := dhtSrv.Start("127.0.0.1:0"); err != nil {
+		log.Printf("dht: not serving: %v", err)
+		return node, dhtSrv
+	}
+	*stops = append(*stops, func() { _ = dhtSrv.Stop() })
+
+	// Announce this node to itself so its own value store is reachable and a
+	// Store has somewhere local to land.
+	if err := node.RegisterNode(ctx, pub, "localweb", []string{dhtSrv.Addr()}, dht.MinPoWDifficulty); err != nil {
+		log.Printf("dht: could not announce self: %v", err)
+	}
+	return node, dhtSrv
 }
 
 // startServices brings up every protocol service that has a real listener and
@@ -562,8 +600,19 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		log.Printf("docs: service ready")
 	}
 
-	// --- Registry: a real HTTP index ---
-	regSrv := registry.NewHTTPServer(registry.ServerConfig{Addr: ports.registry})
+	// --- Registry: a real HTTP index over a real DHT ---
+	//
+	// The index previously ran on a bare MemoryRegistry with no network behind
+	// it, so a package published here was visible to nothing but this node. The
+	// DHT is what makes a publish reach another node and a resolve come back.
+	dhtNode, dhtSrv := newDHTForNode(ctx, srv, pub, &stops)
+	memReg := registry.NewMemoryRegistry()
+	memReg.RegisterDistributor(registry.NewDHTDistributor(dhtNode, pub))
+
+	regSrv := registry.NewHTTPServer(registry.ServerConfig{
+		Addr:     ports.registry,
+		Registry: memReg,
+	})
 	go func() {
 		if err := regSrv.Start(); err != nil {
 			log.Printf("registry: not started: %v", err)
@@ -571,7 +620,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 			return
 		}
 		api.SetServiceLive(true, "registry")
-		log.Printf("registry: index listening on %s", ports.registry)
+		log.Printf("registry: index on %s, dht on %s", ports.registry, dhtSrv.Addr())
 	}()
 
 	// The remaining three stay false and that is the honest state.
