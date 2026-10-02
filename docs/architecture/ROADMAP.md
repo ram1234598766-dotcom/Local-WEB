@@ -81,9 +81,28 @@ Plus, for each of 8.1–8.5, a named test that fails against the current code.
 
 | # | Item | State |
 |---|---|---|
-| 6.1 | Federation: two nodes across the internet can find each other | ❌ open. The daemon wires `RendezvousDiscoveryMode`, but `discoveryLoop` only re-registers and logs "polling for peers" — it never performs a lookup or emits a `PeerEvent` |
-| 6.3 | Multi-path aggregation | ⚠️ open. Failover works; round-robin, bandwidth and latency modes **duplicate** bytes to every active link rather than distributing them |
+| 6.1 | Federation: two nodes across the internet can find each other | **Done.** `discoveryLoop` only re-registered and logged "polling for peers" — it never read a peer list and never emitted a `PeerEvent`, so the mode could not surface a single peer. The server gained `GET /peers` (lookup alone only answers for an id the caller already holds, which is useless for discovery), the client gained `ListPeers`, and the loop now emits `PeerFound`, `PeerUpdated` only when a peer's advertised `LastSeen` actually moves, and `PeerLost` after the expiry window. `TestTwoNodesDiscoverEachOtherThroughRendezvous` runs two nodes that share nothing but a real rendezvous server |
+| 6.3 | Multi-path aggregation | **Done, with a stated limit.** `SendToPeer` wrote the whole payload to the primary *and* every other active link, so the receiver got the stream once per link. Each mode now selects the single link that carries a write: failover retries the next link on a write error, round-robin advances a per-peer cursor, bandwidth and latency pick by metric. The modes pick a link per write rather than striping one write across several, because striping needs per-segment sequence numbers and a receive path to reassemble into and this manager has none; a single copy per call is the most it can do correctly. `TestSendToPeerWritesExactlyOnceAcrossLinks` pins that for all four modes |
 | 6.6 | ~~QoS / bandwidth shaping~~ | **Done.** `pkg/qos` had zero callers outside its own tests, so nothing was shaped. `transport.TrafficShaper` now gates every outbound service frame and the daemon installs `qos.NewQoSManager` behind `-qos` / `-qos-policy`. Pinned by `TestSendToPassesFramesThroughShaper` and `TestSendToHonoursShaperRejection` |
+
+---
+
+## 2a. Phase 7 (measured)
+
+Phase 7 was not tracked here at all. Measured against the code and the browser.
+
+| # | Item | State |
+|---|---|---|
+| 7.1 | Onboarding wizard | **Done.** `cli init` was implemented but unusable in three ways: `cli id` documented and read `--data-dir` without registering it, so its own example failed; `config.json` recorded `created_at` as the literal string `"now"`; and the closing hint told the user to run `./bin/localweb`, a path that exists only inside a built checkout. All three fixed and verified against the built binary |
+| 7.2 | Resumable file transfer | ⚠️ **open.** The Files panel reads and reports real store contents now, and `/api/files/list` and `/api/files/transfers` exist, but the transfer path is still the frontend's `simulateUpload`. The item specifies WebRTC direct transfer and `go.mod` has no WebRTC stack, so this needs a new dependency rather than more code |
+| 7.3 | Collaborative docs | **Done.** RGA `Merge` appended every unknown node at the tail in timestamp order and discarded each node's causal predecessor, so two replicas that applied the same operations in different orders never converged. Merge now places nodes at their causal position with siblings ordered by `(Timestamp, Author)`; the causal edge lives in a new `OriginID` field. Two integration tests asserted the non-convergent ordering and now require the deterministic one. The panel's create / save / autosave / comments / document / presence routes are registered, and save applies through the CRDT rather than a side-channel string map |
+| 7.4 | Voice and video | ❌ **open, needs a dependency.** There is no WebRTC, ICE, Opus or VP9 anywhere in `go.mod`; the canvas is painted by `simulateRemotePeer`. The item requires a library-backed codec, so this cannot be completed by wiring what exists |
+| 7.5 | VPN | ❌ **open, needs a platform binding.** There is no TUN forwarding loop at all, and the dashboard's connect toggle drives unused state. Routing a real IP packet through the tunnel needs privileged TUN access, which cannot be exercised in this environment |
+| 7.6 | Package registry | ⚠️ **partly done.** The index server is now started by the daemon and `/api/registry/installed` is registered, so the Registry panel no longer 404s. Still open: `ResolveMeta` returns not-found on its DHT paths, and install resolution is not driven by the DHT |
+
+Phase 7 is therefore **not** complete: 7.2, 7.4, 7.5 remain, and 7.6 is
+partial. The two blocked on a missing dependency or a privileged platform
+binding cannot be finished by writing more code in this repository as it stands.
 
 ---
 
@@ -221,12 +240,12 @@ Now fixed:
   github.ref_name }}`. `CHANGELOG.md` had no `1.0.1` entry although v1.0.1
   shipped; one is now recorded.
 - Root `ROADMAP.md` claimed "Phase 5 Complete | Phase 6 Complete" and "all 7
-  sub-phases complete". Re-measured: 6.6 QoS has no callers, 6.3 multi-path
-  duplicates rather than distributes, and 6.1 federation never performs a peer
-  lookup. Each status line now carries its evidence. It also claimed "13 screens"
-  (there are 14), "all backed by real API endpoints" (four `/api/docs/*` paths are
-  not registered), and "SSE real-time updates" (`BroadcastEvent` has no callers).
-  Its stale `$(date)` placeholders were also expanded.
+  sub-phases complete". Re-measured and fixed: 6.6 QoS had no callers, 6.3
+  duplicated bytes to every link, and 6.1 never performed a peer lookup — all
+  three are now done (see the Phase 6 table). It also claimed "13 screens" (there
+  are 14), "all backed by real API endpoints" (seven `/api/*` paths the SPA calls
+  were not registered), and "SSE real-time updates" (`BroadcastEvent` has no
+  callers). Its stale `$(date)` placeholders were also expanded.
 - The **v1.0.0** release page now carries a prominent warning that its assets
   contain the mDNS panic and points to v1.0.1. The binaries are unchanged so
   their published checksums still verify.

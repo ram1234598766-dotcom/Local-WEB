@@ -62,8 +62,11 @@ previous documentation, which described all nine as running.
                   │  L6  STORE  BadgerDB+AEAD    │
                   └──────────────────────────────┘
 
-   Present as tested libraries, NOT started by the daemon:
-     L4 security  L5 DHT    L7 CRDT    L8 nine services
+   L8 services: six of nine now started by the daemon
+     (dns, http, email, files, docs, registry);
+     messaging, voice and vpn have nothing to start.
+   Still library-only, NOT started by the daemon:
+     L4 security  L5 DHT    L7 CRDT
 ```
 
 ### 1.1 Layer status at a glance
@@ -360,10 +363,10 @@ Ranked. Each is a real gap, not a documentation nit.
 
 | # | Item | Severity |
 |---|---|---|
-| 1 | **The daemon starts none of the nine services.** `pkg/services/*` is tested library code; `cmd/node` wires only `Control`. | Critical (feature) |
+| 1 | **Resolved: six of the nine services now start.** `cmd/node` builds and starts dns, the HTTP gateway, SMTP/IMAP, the Files store, Docs and the registry index, and reports each one's real reachability through `/api/services/health`. `messaging`, `voice` and `vpn` stay down because they have no listener, no codec and no TUN loop respectively. | Fixed |
 | 2 | `/metrics` and `/debug/pprof` do not exist; 0 of the 27 previously documented Prometheus metrics are registered. | Critical (observability) |
 | 3 | TLS certificate verification is off by default. Peer identity is authenticated by Noise XX, so this is defence-in-depth rather than the primary control, but it should be opt-out rather than opt-in. | High |
-| 4 | RGA `Merge` is not a positional CRDT merge; concurrent editors in `pkg/services/docs` can diverge. | High |
+| 4 | **Resolved: RGA `Merge` is positional and convergent.** It appended every unknown node at the tail and discarded each node's causal predecessor, so replicas that applied the same operations in different orders never agreed. | Fixed |
 | 5 | Capability tokens are not Macaroons: no caveats, no attenuation, in-memory revocation. | High |
 | 6 | Audit log is in-memory and not persisted, so it does not survive a restart. | High |
 | 7 | DHT has no bucket refresh or split; table quality degrades. | Medium |

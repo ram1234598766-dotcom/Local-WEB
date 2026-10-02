@@ -376,22 +376,31 @@ plugin is never instantiated.
 
 Endpoints the SPA calls that the handler does not register. **This list was wrong
 twice and is now derived from observed HTTP traffic, not from reading the source.**
-The handler registers 23 routes. Driving all 14 screens in a real browser against
-a running daemon produced 15 distinct `/api/` requests:
+The handler registers 33 routes. Driving all 14 screens in a real browser against
+a running daemon now produces **34 API calls with zero 4xx and zero console
+errors**, against 3 screen-load 404s and 4 action-only 404s before:
 
 | Result | Count | Paths |
 |---|---|---|
-| `200` | 12 | `/api/status`, `/api/peers`, `/api/dht/table`, `/api/audit-log`, `/api/audit-log/verify`, `/api/crdt/sync-status`, `/api/services/health`, `/api/dns/records`, `/api/http/sites`, `/api/email/messages`, `/api/messaging/messages`, `/api/docs/documents`, `/api/registry/packages` |
-| `404` | 3 | `/api/files/list`, `/api/files/transfers`, `/api/registry/installed` |
+| `200` | all | `/api/status`, `/api/peers`, `/api/dht/table`, `/api/audit-log`, `/api/audit-log/verify`, `/api/crdt/sync-status`, `/api/services/health`, `/api/dns/records`, `/api/http/sites`, `/api/email/messages`, `/api/messaging/messages`, `/api/docs/documents`, `/api/registry/packages`, `/api/files/list`, `/api/files/transfers`, `/api/registry/installed` |
+| `404` | 0 | — |
 
-The three 404s are hit on **screen load**, so the Files and Registry screens render
-without data. Four more are missing but only fail on **user action**, so they do
-not appear in the traffic above: `/api/docs/create`, `/api/docs/save/{id}`,
-`/api/docs/autosave/{id}`, `/api/docs/comments/{id}` — creating or editing a
-document will 404.
+The seven paths that previously 404'd are now registered:
+`/api/files/list`, `/api/files/transfers`, `/api/registry/installed`,
+`/api/docs/create`, `/api/docs/save/{id}`, `/api/docs/autosave/{id}`,
+`/api/docs/comments/{id}`. Two more surfaced only on the document-editor route
+and were also added: `/api/docs/documents/{id}` and `/api/docs/presence/{id}`.
+`/api/docs/content/{id}` was added with them.
 
-Two earlier versions of this list were wrong. The first was written by reading
-`app.js`; the second "correction" removed `/api/files/list`,
+Two SPA defects were found while verifying this by hand and are fixed: the DHT
+search modal's inline style declared `display` twice (`none` then `flex`), so a
+full-screen overlay covered the app permanently and swallowed every click on
+every screen; and `navigate()` dispatched only through a static route table, so
+`#doc-editor-<id>` rendered a blank page on reload, on a shared link, or on
+browser back.
+
+Two earlier versions of this endpoint list were wrong. The first was written by
+reading `app.js`; the second "correction" removed `/api/files/list`,
 `/api/files/transfers` and `/api/registry/installed` on the grounds that a regex
 over the source found no reference to them. That was wrong because `fetchAPI`
 prepends `/api`, so the literals in the source are `/files/list`,
@@ -427,21 +436,28 @@ only heartbeats until Phase 8 item 8.3 wires real events.
 
 ## 7. Services
 
-Nine service packages exist as tested libraries. **The daemon starts none of
-them** — see `ARCHITECTURE.md` §1. Service IDs on the wire are ASCII letters
-(`'C','D','H','M','F','R','V','W','O','G'`), not the documented `0x00`–`0x09`.
+Nine service packages exist. **Six of them are now started by the daemon** and
+report their real state through `/api/services/health`; three deliberately stay
+`false` because they have nothing to start — reporting them up would be theatre.
+Service IDs on the wire are ASCII letters (`'C','D','H','M','F','R','V','W','O','G'`),
+not the documented `0x00`–`0x09`.
 
-| Service | Listens | Note |
-|---|---|---|
-| DNS | UDP :5353 | real wire codec; zone signing now works (`SignZone`) |
-| HTTP | TCP :8080 | routes by path prefix, not Host header; `/health` always 200 |
-| Email | TCP :587/:993 | real SMTP/IMAP; PoW enforced only when an `X-PoW` header is present, so it is bypassable by omission |
-| Messaging | **no listener** | in-memory store; signatures created but never verified |
-| Files | QUIC only | `Sync()` never contacts the peer; `GetFile` always returns a nil data slice |
-| Docs | QUIC only | `Merge` replays remote ops positionally — concurrent editors can diverge |
-| Registry | HTTP `cfg.Addr` | real publish + signature verify; `NewHTTPServer` is not called by the daemon; DHT `ResolveMeta` always returns not-found |
-| Voice | QUIC only | **no codec at all**; raw payload passthrough |
-| VPN | TUN on Linux | no packet-forwarding loop; no Windows path beyond a stub that logs and continues |
+| Service | Listens | Started? | Note |
+|---|---|---|---|
+| DNS | UDP :5353 (`-dns-port`) | ✅ | real wire codec; zone signing works (`SignZone`). 5353 is mDNS and is usually already held by the OS resolver, so the port is a flag and a bind failure is reported rather than swallowed |
+| HTTP gateway | TCP :8082 (`-http-addr`) | ✅ | routes by path prefix, not Host header; `/health` always 200. Not 8081, which the example echo plugin binds and its own tests need free |
+| Email | TCP :587/:993 (`-smtp-addr`, `-imap-addr`) | ✅ | real SMTP/IMAP; PoW enforced only when an `X-PoW` header is present, so it is bypassable by omission |
+| Files | block store + metadata index | ✅ | store is real and backs `/api/files/list`; `Sync()` still never contacts the peer and `GetFile` still returns a nil data slice |
+| Docs | in-process CRDT | ✅ | `RGA.Merge` now converges: nodes are placed at their causal position with siblings ordered by `(Timestamp, Author)` |
+| Registry | HTTP :9092 (`-registry-addr`) | ✅ | real publish + signature verify; DHT `ResolveMeta` still returns not-found on its DHT paths |
+| Messaging | **no listener** | ❌ | in-memory store; signatures created but never verified. Nothing to start |
+| Voice | QUIC only | ❌ | **no codec at all**; no WebRTC/ICE/Opus/VP9 in `go.mod`. Nothing to start |
+| VPN | TUN on Linux | ❌ | no packet-forwarding loop; no Windows path beyond a stub that logs and continues |
+
+A live node reports `dns`, `docs`, `email`, `files`, `gui`, `http` and `registry`
+healthy and `messaging`, `voice`, `vpn` not. Health is driven by probing
+reachability rather than by a `Start` return value, because `Gateway.Start`
+blocks in `ListenAndServe` and trusting its return marked a serving gateway down.
 
 ---
 
