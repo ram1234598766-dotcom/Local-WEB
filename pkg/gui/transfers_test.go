@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/docs"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
 )
 
@@ -170,5 +171,87 @@ func TestPackagesAreNotHardcoded(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("with no registry wired, Packages should be empty, got %d rows: %+v", len(got), got)
+	}
+}
+
+// TestDocPresenceIsReal is the test for presence. The editor used to call a
+// function whose whole body was a comment saying it would subscribe to SSE
+// "for the demo", so the presence bar could never show a collaborator and the
+// GET endpoint always returned an empty list.
+func TestDocPresenceIsReal(t *testing.T) {
+	api := NewAPI([32]byte{1})
+	svc := docs.NewService(docs.ServiceConfig{NodeID: "test-node", PubKey: [32]byte{1}})
+	api.SetDocsService(svc)
+	h := NewHandler(api)
+
+	const docID = "presence-doc"
+	svc.CreateDocument(docID, "Presence")
+
+	// Empty to begin with.
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/docs/presence/"+docID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET presence status = %d", rec.Code)
+	}
+	var before PresenceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &before); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(before.Users) != 0 {
+		t.Fatalf("a fresh document should have no collaborators, got %d", len(before.Users))
+	}
+
+	// A collaborator posts a cursor, which must be recorded with its position.
+	body := strings.NewReader(`{"peer_name":"alice","line":7,"column":12}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/docs/presence/"+docID, body)
+	rec = httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST presence status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/docs/presence/"+docID, nil))
+	var after PresenceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &after); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(after.Users) != 1 {
+		t.Fatalf("expected the collaborator to be recorded, got %d users", len(after.Users))
+	}
+	if after.Users[0].PeerName != "alice" {
+		t.Errorf("peer name = %q, want alice", after.Users[0].PeerName)
+	}
+	// The cursor position is the part that was missing entirely: a collaborator
+	// used to be listed with no indication of where they were.
+	if after.Users[0].Line != 7 || after.Users[0].Column != 12 {
+		t.Errorf("cursor = line %d column %d, want line 7 column 12",
+			after.Users[0].Line, after.Users[0].Column)
+	}
+}
+
+func TestDocPresenceRejectsBadInput(t *testing.T) {
+	api := NewAPI([32]byte{1})
+	api.SetDocsService(docs.NewService(docs.ServiceConfig{NodeID: "n", PubKey: [32]byte{1}}))
+	h := NewHandler(api)
+
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{"no peer name", `{"line":1,"column":1}`, http.StatusBadRequest},
+		{"negative line", `{"peer_name":"a","line":-1,"column":1}`, http.StatusBadRequest},
+		{"absurd line", `{"peer_name":"a","line":99999999,"column":1}`, http.StatusBadRequest},
+		{"not json", `nope`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/docs/presence/d", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			h.mux.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
 	}
 }

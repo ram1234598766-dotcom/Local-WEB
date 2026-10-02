@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/crypto/sha3"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -781,6 +782,18 @@ type PresenceUser struct {
 	PeerName  string `json:"peer_name"`
 	Connected bool   `json:"connected"`
 	LastSeen  string `json:"last_seen"`
+
+	// Cursor and selection. These were missing, so a collaborator appeared in
+	// the list with no indication of where in the document they were: the panel
+	// showed that someone was present and nothing else.
+	Line   int `json:"line"`
+	Column int `json:"column"`
+
+	HasSelection bool `json:"has_selection"`
+	SelStartLine int  `json:"sel_start_line"`
+	SelStartCol  int  `json:"sel_start_col"`
+	SelEndLine   int  `json:"sel_end_line"`
+	SelEndCol    int  `json:"sel_end_col"`
 }
 
 // PresenceResponse is the wrapper the editor expects: a "users" array.
@@ -837,14 +850,67 @@ func (a *NodeAPI) DocPresence(docID string) PresenceResponse {
 	peers := svc.GetDocPresence(docID)
 	users := make([]PresenceUser, 0, len(peers))
 	for _, p := range peers {
-		users = append(users, PresenceUser{
+		u := PresenceUser{
 			PeerID:    hex.EncodeToString(p.PeerID[:]),
 			PeerName:  p.PeerName,
 			Connected: p.Connected,
 			LastSeen:  p.LastSeen.UTC().Format(time.RFC3339),
-		})
+			Line:      p.Cursor.Line,
+			Column:    p.Cursor.Column,
+		}
+		if p.Selection != nil {
+			u.HasSelection = true
+			u.SelStartLine = p.Selection.StartLine
+			u.SelStartCol = p.Selection.StartCol
+			u.SelEndLine = p.Selection.EndLine
+			u.SelEndCol = p.Selection.EndCol
+		}
+		users = append(users, u)
 	}
 	return PresenceResponse{Users: users}
+}
+
+// UpdateDocPresence records a peer's cursor and pushes the new collaborator
+// list to every SSE client.
+//
+// The editor used to call a function whose body was a comment about how it
+// would be implemented, so presence was never real. Pushing over SSE rather than
+// polling means the panel updates when a collaborator actually moves.
+func (a *NodeAPI) UpdateDocPresence(docID, peerName string, line, column int) {
+	a.mu.RLock()
+	svc := a.docsSvc
+	a.mu.RUnlock()
+	if svc == nil || docID == "" || peerName == "" {
+		return
+	}
+
+	// A browser collaborator presents a name, not a node key, so the id is
+	// derived from it. This is not an authenticated identity.
+	peerID := crypto.NodeID(sha3.Sum256([]byte("presence:" + peerName)))
+	svc.UpdatePresence(context.Background(), docID, peerName, peerID, line, column)
+	a.BroadcastDocPresence(docID)
+}
+
+// BroadcastDocPresence pushes the current collaborator list for a document to
+// every SSE client.
+func (a *NodeAPI) BroadcastDocPresence(docID string) {
+	// DocPresence takes the read lock itself, so it is called before taking one
+	// here. A recursive RLock can deadlock against a waiting writer.
+	presence := a.DocPresence(docID)
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for ch := range a.sseClients {
+		select {
+		case ch <- SSEEvent{Type: "presence", Data: map[string]any{
+			"doc_id": docID,
+			"users":  presence.Users,
+		}}:
+		default:
+			// A client that is not draining its channel is dropped rather than
+			// allowed to block every broadcaster.
+		}
+	}
 }
 
 // CreateDoc creates a document through the Docs service.

@@ -197,6 +197,7 @@ class LocalWEBApp {
       'transfer_progress',
       'message_received',
       'doc_updated',
+      'presence',
       'call_state',
       'vpn_state',
     ];
@@ -226,7 +227,71 @@ class LocalWEBApp {
   dispatchEvent(data) {
     if (data.type === 'peer_connected' || data.type === 'peer_disconnected') {
       this.refreshPeers();
+    } else if (data.type === 'presence' && data.data && data.data.doc_id) {
+      // A real collaborator list from the node, pushed when someone moves.
+      this.renderPresence(data.data.doc_id, data.data.users || []);
     }
+  }
+
+  // Presence is pushed by the node over SSE rather than polled: a cursor that
+  // only updates when the panel is open, or every few seconds, is not presence.
+  subscribeToDocPresence(docId) {
+    this.state.presenceDoc = docId;
+
+    // Show whoever is already editing before anything moves.
+    this.fetchAPI('/docs/presence/' + encodeURIComponent(docId))
+      .then((p) => this.renderPresence(docId, (p && p.users) || []))
+      .catch(() => this.renderPresence(docId, []));
+
+    // Report our own cursor as the user types, throttled so a fast typist does
+    // not produce one request per keystroke.
+    if (this._presenceTimer) clearTimeout(this._presenceTimer);
+    const editor = document.getElementById('doc-editor-' + docId);
+    if (!editor) return;    const report = () => {
+      this._presenceTimer = setTimeout(() => this.postPresence(docId), 300);
+    };
+    editor.addEventListener('keyup', report);
+    editor.addEventListener('click', report);
+    editor.addEventListener('select', report);
+  }
+
+  async postPresence(docId) {
+    const editor = document.getElementById('doc-editor-' + docId);
+    if (!editor) return;
+    // Only the caret's line is meaningful without a full text-index map, and
+    // reporting an approximate position beats reporting none.
+    const upto = editor.value.slice(0, editor.selectionStart || 0);
+    const lines = upto.split('\n');
+    try {
+      await fetch('/api/docs/presence/' + encodeURIComponent(docId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          peer_name: this.peerName || 'anonymous',
+          line: lines.length - 1,
+          column: lines[lines.length - 1].length,
+        }),
+      });
+    } catch (e) {
+      // Presence is best-effort; a failure must not interrupt editing.
+    }
+  }
+
+  renderPresence(docId, users) {
+    this.state.presence = this.state.presence || {};
+    this.state.presence[docId] = users;
+    const bar = document.getElementById('presence-bar-' + docId);
+    if (!bar) return;
+    if (!users.length) {
+      bar.innerHTML = '<span style="font-size: 0.75rem; color: var(--color-text-muted);">No one else is editing</span>';
+      return;
+    }
+    bar.innerHTML = users.map(u => `
+      <span title="line ${u.line + 1}, column ${u.column + 1}" style="display: inline-flex; align-items: center; gap: 0.25rem; margin-right: 0.5rem; font-size: 0.75rem;">
+        <span style="width: 0.5rem; height: 0.5rem; border-radius: 9999px; background: var(--color-primary);"></span>
+        ${u.peer_name || 'anonymous'}${u.has_selection ? ' (selecting)' : ''}
+      </span>
+    `).join('');
   }
 
   async refreshPeers() {
@@ -1060,13 +1125,8 @@ class LocalWEBApp {
     // Load comments
     this.loadComments(docId);
 
-    // Load remote cursors (simulated via SSE)
+    // Subscribe to remote cursors, pushed by the node over SSE
     this.subscribeToDocPresence(docId);
-  }
-
-  subscribeToDocPresence(docId) {
-    // In real implementation, this would subscribe to SSE for real-time presence
-    // For demo, we'll simulate
   }
 
   async loadComments(docId) {
@@ -2006,67 +2066,6 @@ class LocalWEBApp {
     this.updateCallUI();
   }
 
-  simulateRemotePeer() {
-    // Simulate remote video
-    const placeholder = document.getElementById('remote-video-placeholder');
-    const remoteVideo = document.getElementById('remote-video');
-    const remoteName = document.getElementById('remote-video-name');
-
-    if (placeholder && remoteVideo) {
-      placeholder.style.display = 'block';
-
-      // Create a mock stream (in real implementation, this comes from WebRTC)
-      const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 360;
-      const ctx = canvas.getContext('2d');
-
-      const drawFrame = () => {
-        if (this.callState.status !== 'active') return;
-
-        // Draw a simulated remote video frame
-        const time = Date.now();
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Animated gradient background
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, `hsl(${(time / 50) % 360}, 70%, 20%)`);
-        gradient.addColorStop(1, `hsl(${(time / 50 + 180) % 360}, 70%, 15%)`);
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Moving elements
-        for (let i = 0; i < 5; i++) {
-          const x = (time / 30 + i * 400) % (canvas.width + 100) - 50;
-          const y = 100 + Math.sin(time / 1000 + i) * 50;
-          ctx.beginPath();
-          ctx.arc(x, y, 20 + Math.sin(time / 500 + i) * 10, 0, Math.PI * 2);
-          ctx.fillStyle = `hsla(${(time / 20 + i * 72) % 360}, 80%, 60%, 0.6)`;
-          ctx.fill();
-        }
-
-        // "Remote" label
-        ctx.fillStyle = 'rgba(255,255,255,0.8)';
-        ctx.font = '24px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('Remote Peer', canvas.width / 2, canvas.height / 2);
-
-        remoteVideo.srcObject = canvas.captureStream(30);
-        requestAnimationFrame(drawFrame);
-      };
-
-      drawFrame();
-
-      if (remoteName) remoteName.textContent = 'Peer-' + Math.random().toString(36).substr(2, 6);
-
-      // Simulate remote status
-      const remoteAudio = document.getElementById('remote-audio-status');
-      const remoteVideo = document.getElementById('remote-video-status');
-      if (remoteAudio) remoteAudio.className = 'status-dot';
-      if (remoteVideo) remoteVideo.className = 'status-dot';
-    }
-  }
 
   endCall() {
     if (this.callState.timerInterval) {

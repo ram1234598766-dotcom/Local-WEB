@@ -367,21 +367,57 @@ func (h *Handler) handleDocsDocument(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(doc)
 }
 
-// handleDocsPresence serves the live collaborator list for a document. The
-// response is always {"users": [...]} so the editor's presence.bar renders
-// rather than throwing on undefined.
+// handleDocsPresence reads and updates a document's collaborator list.
+//
+// GET returns {"users": [...]} so the editor's presence bar renders rather than
+// throwing on undefined. POST records a collaborator's cursor and pushes the new
+// list to every SSE client, which is what makes presence live: without the POST
+// side the list was always empty because nothing ever told the node where anyone
+// was.
 func (h *Handler) handleDocsPresence(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	docID, ok := docIDFromPath("/api/docs/presence/", r.URL.Path)
 	if !ok {
 		http.Error(w, "document id required", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(h.api.DocPresence(docID))
+
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(h.api.DocPresence(docID))
+
+	case http.MethodPost:
+		var body struct {
+			PeerName string `json:"peer_name"`
+			Line     int    `json:"line"`
+			Column   int    `json:"column"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body); err != nil {
+			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Line and column are attacker-controlled and reach the editor, so they
+		// are bounded rather than trusted.
+		if body.Line < 0 || body.Line > 1_000_000 || body.Column < 0 || body.Column > 1_000_000 {
+			http.Error(w, "cursor position out of range", http.StatusBadRequest)
+			return
+		}
+		if body.PeerName == "" {
+			http.Error(w, "peer_name required", http.StatusBadRequest)
+			return
+		}
+		if len(body.PeerName) > 128 {
+			http.Error(w, "peer_name too long", http.StatusBadRequest)
+			return
+		}
+
+		h.api.UpdateDocPresence(docID, body.PeerName, body.Line, body.Column)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(h.api.DocPresence(docID))
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (h *Handler) ListenAndServe(addr string) error {
