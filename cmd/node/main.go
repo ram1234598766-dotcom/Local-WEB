@@ -530,6 +530,9 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		syncEngine.SetExchange(exchange)
 		// Without this the block a peer serves is decoded and discarded.
 		exchange.SetHandler(syncEngine.HandleBlock)
+		// The engine cannot invent peers; the transport is the only thing that
+		// knows who is connected.
+		syncEngine.SetPeerSource(srv)
 		if err := syncEngine.Start(ctx); err != nil {
 			log.Printf("files: sync engine not started: %v", err)
 		} else {

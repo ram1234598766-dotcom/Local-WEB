@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
 
 // BlockSize is the fixed block size for content-addressed chunking (4 MiB).
@@ -112,6 +113,16 @@ type FileStore interface {
 	VersionFile(ctx context.Context, cid cid.Cid) (*FileMeta, error)
 }
 
+// PeerLister enumerates currently connected transport peers.
+//
+// The sync engine cannot invent peers: it only knows a peer once that peer
+// advertises what it holds, and nothing advertised anything, so the loop had no
+// peers to talk to and never started. The daemon satisfies this with the
+// transport server, which is the only thing that knows who is connected.
+type PeerLister interface {
+	Peers() []transport.PeerInfo
+}
+
 // SyncEngine handles file synchronization with peers.
 type SyncEngine interface {
 	Sync(ctx context.Context, peerID [32]byte) error
@@ -120,6 +131,8 @@ type SyncEngine interface {
 	// SetExchange gives the engine a way to reach peers. Without it Sync can
 	// only compute a diff.
 	SetExchange(ExchangeProtocol)
+	// SetPeerSource tells the engine who is currently connected.
+	SetPeerSource(PeerLister)
 	// SetHandler-ready block intake, installed on the exchange.
 	HandleBlock(ctx context.Context, peer [32]byte, msg *ExchangeMessage) error
 	// RecordPeerHave stores a have advertisement from a peer.

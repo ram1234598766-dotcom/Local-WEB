@@ -47,6 +47,8 @@ type ExchangeHandler func(ctx context.Context, peerID [32]byte, msg *ExchangeMes
 type ExchangeMessage struct {
 	Type MessageType
 	CID  cid.Cid
+	// CIDs carries a whole list, which is what a have advertisement is.
+	CIDs []cid.Cid
 	Data []byte
 }
 
@@ -238,6 +240,11 @@ func (e *exchangeProtocol) handleHave(ctx context.Context, peerID [32]byte, payl
 		}
 	}
 
+	cids := make([]cid.Cid, 0, len(have))
+	for _, entry := range have {
+		cids = append(cids, entry.CID)
+	}
+
 	e.mu.Lock()
 	peer, ok := e.peers[peerID]
 	if !ok {
@@ -248,7 +255,16 @@ func (e *exchangeProtocol) handleHave(ctx context.Context, peerID [32]byte, payl
 	// A have advertisement replaces the previous one for the same reason a
 	// want list does: it describes now, and the store only grows.
 	peer.have = have
+	handler := e.handler
 	e.mu.Unlock()
+
+	// Pass it on. Without this the requester has no way to learn what a peer
+	// holds, so it has nothing to ask for and sync never starts.
+	if handler != nil {
+		if err := handler(ctx, peerID, &ExchangeMessage{Type: MsgHave, CIDs: cids}); err != nil {
+			log.Warn().Err(err).Str("peer", fmt.Sprintf("%x", peerID[:8])).Msg("have handler rejected an advertisement")
+		}
+	}
 }
 
 func (e *exchangeProtocol) handleBlock(ctx context.Context, peerID [32]byte, payload []byte) {

@@ -19,6 +19,7 @@ type syncEngine struct {
 	store      BlockStore
 	fileStore  FileStore
 	exchange   ExchangeProtocol
+	lister     PeerLister
 	merkleRoot cid.Cid
 	have       map[cid.Cid]bool
 	want       map[cid.Cid]bool
@@ -69,6 +70,14 @@ func NewSyncEngine(store BlockStore, fileStore FileStore, peerID [32]byte, inter
 func (s *syncEngine) SetExchange(e ExchangeProtocol) {
 	s.mu.Lock()
 	s.exchange = e
+	s.mu.Unlock()
+}
+
+// SetPeerSource tells the engine who is connected. The daemon passes the
+// transport server.
+func (s *syncEngine) SetPeerSource(l PeerLister) {
+	s.mu.Lock()
+	s.lister = l
 	s.mu.Unlock()
 }
 
@@ -167,20 +176,79 @@ func (s *syncEngine) tickLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.mu.RLock()
-			peers := make([]PeerInfo, 0, len(s.peers))
-			for pid := range s.peers {
-				peers = append(peers, PeerInfo{ID: pid, State: "connected"})
-			}
-			s.mu.RUnlock()
-
-			for _, peer := range peers {
-				if err := s.Sync(ctx, peer.ID); err != nil {
-					// Log but continue
+			for _, peer := range s.connectedPeers() {
+				// Advertise first: a peer cannot ask for what it does not know
+				// this node holds, and it will not tell us what it holds until
+				// it sees a have message.
+				if err := s.advertise(ctx, peer); err != nil {
+					continue
+				}
+				if err := s.Sync(ctx, peer); err != nil {
+					// A peer that cannot be reached this tick may come back.
+					continue
 				}
 			}
 		}
 	}
+}
+
+// connectedPeers is the union of peers recorded from advertisements and peers
+// the transport currently holds open.
+func (s *syncEngine) connectedPeers() [][32]byte {
+	s.mu.RLock()
+	lister := s.lister
+	seen := make(map[[32]byte]bool, len(s.peers))
+	for pid := range s.peers {
+		seen[pid] = true
+	}
+	s.mu.RUnlock()
+
+	if lister == nil {
+		out := make([][32]byte, 0, len(seen))
+		for pid := range seen {
+			out = append(out, pid)
+		}
+		return out
+	}
+	for _, p := range lister.Peers() {
+		if p.ID != s.selfID() {
+			seen[p.ID] = true
+		}
+	}
+	out := make([][32]byte, 0, len(seen))
+	for pid := range seen {
+		out = append(out, pid)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return fmt.Sprintf("%x", out[i][:]) < fmt.Sprintf("%x", out[j][:])
+	})
+	return out
+}
+
+func (s *syncEngine) selfID() [32]byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.peerID
+}
+
+// advertise tells a peer what this node holds.
+func (s *syncEngine) advertise(ctx context.Context, peer [32]byte) error {
+	s.mu.RLock()
+	exchange := s.exchange
+	s.mu.RUnlock()
+	if exchange == nil {
+		return fmt.Errorf("sync engine has no exchange")
+	}
+
+	have, err := s.buildHaveList()
+	if err != nil {
+		return err
+	}
+	entries := make([]WantEntry, 0, len(have))
+	for _, c := range have {
+		entries = append(entries, WantEntry{CID: c, Type: WantHave, Priority: 1})
+	}
+	return exchange.SendHave(ctx, peer, entries)
 }
 
 // Sync diffs this node's store against a peer's advertisement and asks the peer
@@ -297,11 +365,19 @@ func (s *syncEngine) ReceivedBlock(ctx context.Context, block *Block) error {
 // attributes the progress to the peer that served it. The daemon installs it
 // with exchange.SetHandler, which is what turns an answered want into a stored
 // block and a moving progress bar.
+//
+// The same handler takes MsgHave, which is how a peer learns what this node
+// holds and therefore what there is to ask for.
 func (s *syncEngine) HandleBlock(ctx context.Context, peer [32]byte, msg *ExchangeMessage) error {
 	if msg == nil {
 		return fmt.Errorf("message is nil")
 	}
-	if msg.Type != MsgBlock {
+	switch msg.Type {
+	case MsgHave:
+		s.RecordPeerHave(peer, msg.CIDs)
+		return nil
+	case MsgBlock:
+	default:
 		return nil
 	}
 	block := &Block{CID: msg.CID, Data: msg.Data}

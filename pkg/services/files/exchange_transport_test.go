@@ -210,7 +210,96 @@ func TestExchangeRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
-// TestSyncEngineAcquiresWantedBlock drives the whole loop the daemon will use:
+// TestTwoNodesExchangeBlocksAutonomously is the whole loop with nothing
+// hand-fed: two sync engines, each told only who is connected, discover each
+// other's inventories and pull the block they are missing.
+//
+// Every earlier version of this needed something injected by hand - a have
+// advertisement, a want, a handler - which is why the Files service could
+// announce a sync engine and still never move a byte.
+func TestTwoNodesExchangeBlocksAutonomously(t *testing.T) {
+	pair := newExchangePair(t)
+
+	onlyOnA := []byte("this block exists only on node A")
+	onlyOnB := []byte("this block exists only on node B")
+	aCid, err := CidFor(onlyOnA)
+	if err != nil {
+		t.Fatalf("CidFor A: %v", err)
+	}
+	bCid, err := CidFor(onlyOnB)
+	if err != nil {
+		t.Fatalf("CidFor B: %v", err)
+	}
+	if err := pair.storeA.Put(context.Background(), &Block{CID: aCid, Data: onlyOnA}); err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+	if err := pair.storeB.Put(context.Background(), &Block{CID: bCid, Data: onlyOnB}); err != nil {
+		t.Fatalf("seed B: %v", err)
+	}
+
+	engineA, okA := NewSyncEngine(pair.storeA, nil, pair.idA, time.Hour).(*syncEngine)
+	if !okA {
+		t.Fatal("engine A has an unexpected type")
+	}
+	engineB, okB := NewSyncEngine(pair.storeB, nil, pair.idB, time.Hour).(*syncEngine)
+	if !okB {
+		t.Fatal("engine B has an unexpected type")
+	}
+	engineA.SetExchange(pair.exchangeA)
+	engineB.SetExchange(pair.exchangeB)
+	pair.exchangeA.SetHandler(engineA.HandleBlock)
+	pair.exchangeB.SetHandler(engineB.HandleBlock)
+	engineA.SetPeerSource(pair.serverA)
+	engineB.SetPeerSource(pair.serverB)
+
+	if err := engineA.Start(context.Background()); err != nil {
+		t.Fatalf("start A: %v", err)
+	}
+	t.Cleanup(func() { _ = engineA.Stop() })
+	if err := engineB.Start(context.Background()); err != nil {
+		t.Fatalf("start B: %v", err)
+	}
+	t.Cleanup(func() { _ = engineB.Stop() })
+
+	// Drive the same path the tick loop drives, rather than waiting on a timer.
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, peer := range engineA.connectedPeers() {
+			if err := engineA.advertise(context.Background(), peer); err != nil {
+				continue
+			}
+			_ = engineA.Sync(context.Background(), peer)
+		}
+		for _, peer := range engineB.connectedPeers() {
+			if err := engineB.advertise(context.Background(), peer); err != nil {
+				continue
+			}
+			_ = engineB.Sync(context.Background(), peer)
+		}
+		if pair.storeB.Has(context.Background(), aCid) && pair.storeA.Has(context.Background(), bCid) {
+			gotA, err := pair.storeA.Get(context.Background(), bCid)
+			if err != nil {
+				t.Fatalf("A get: %v", err)
+			}
+			if string(gotA.Data) != string(onlyOnB) {
+				t.Errorf("A holds %q, want %q", gotA.Data, onlyOnB)
+			}
+			gotB, err := pair.storeB.Get(context.Background(), aCid)
+			if err != nil {
+				t.Fatalf("B get: %v", err)
+			}
+			if string(gotB.Data) != string(onlyOnA) {
+				t.Errorf("B holds %q, want %q", gotB.Data, onlyOnA)
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("the two nodes never exchanged blocks: A has B's=%v, B has A's=%v",
+		pair.storeA.Has(context.Background(), bCid),
+		pair.storeB.Has(context.Background(), aCid))
+}
+
 // B advertises what it has, A diffs its own store against that, asks for the
 // difference, and the block lands in A's store.
 func TestSyncEngineAcquiresWantedBlock(t *testing.T) {
