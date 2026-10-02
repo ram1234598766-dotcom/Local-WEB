@@ -37,6 +37,14 @@ type liveDHTNode struct {
 
 func newLiveDHTNode(t *testing.T, name string) *liveDHTNode {
 	t.Helper()
+	return newLiveDHTNodeBootstrapped(t, name, nil)
+}
+
+// newLiveDHTNodeBootstrapped builds a node and gives it seed addresses to learn
+// from. A node given no seeds knows nobody, which is the case the reachability
+// test is built around.
+func newLiveDHTNodeBootstrapped(t *testing.T, name string, bootstrap []string) *liveDHTNode {
+	t.Helper()
 
 	pub, _, err := crypto.GenerateKeyPair()
 	require.NoError(t, err)
@@ -47,17 +55,15 @@ func newLiveDHTNode(t *testing.T, name string) *liveDHTNode {
 	require.NoError(t, srv.Start("127.0.0.1:0"))
 	t.Cleanup(func() { _ = srv.Stop() })
 
-	// Bootstrap is what marks a node running; Store and Get refuse to act
-	// otherwise. No bootstrap addresses are needed because the nodes learn each
-	// other explicitly below.
-	require.NoError(t, d.Bootstrap(context.Background(), nil))
+	// Bootstrap is what marks a node running and seeds its table.
+	require.NoError(t, d.Bootstrap(context.Background(), bootstrap))
 
 	return &liveDHTNode{
 		dht:  d,
 		srv:  srv,
 		pub:  pub,
 		addr: srv.Addr(),
-		dist: NewDHTDistributor(d, pub),
+		dist: NewDHTDistributorAt(d, pub, srv.Addr()),
 	}
 }
 
@@ -210,4 +216,81 @@ func TestResolveMetaRejectsMismatchedID(t *testing.T) {
 	_, err = node.dist.ResolveMeta(ctx, "wanted")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrPackageNotFound)
+}
+
+// TestResolveViaSeedOnlyProvesDiscovery is the reachability test.
+//
+// The consumer is given one address - the seed's - and is never told about the
+// publisher. It can only find the package if the routing table actually
+// propagates: the seed knows the publisher, the consumer's lookup folds that in,
+// and the re-publish loop pushes the metadata to whoever turned up.
+//
+// Without the refresh loop a node registered itself once and sat still, so a
+// value was only ever pushed to peers the publisher already knew, and a node
+// that joined later had no route to it. That is the difference between
+// "resolution works in a test" and "resolution works in a network".
+func TestResolveViaSeedOnlyProvesDiscovery(t *testing.T) {
+	// The seed is the only address any node is given. The publisher and the
+	// consumer each bootstrap from it and are never told about each other, so
+	// the consumer can only find the package if discovery actually propagates
+	// through the seed.
+	seed := newLiveDHTNode(t, "seed")
+	publisher := newLiveDHTNodeBootstrapped(t, "publisher", []string{seed.addr})
+	consumer := newLiveDHTNodeBootstrapped(t, "consumer", []string{seed.addr})
+
+	// The consumer is bootstrapped from the seed alone: it learns the seed's
+	// address and is never told who the publisher is.
+	publisherDist := NewDHTDistributorAt(publisher.dht, publisher.pub, publisher.addr)
+	consumerDist := NewDHTDistributorAt(consumer.dht, consumer.pub, consumer.addr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	publisherDist.Start(ctx, 300*time.Millisecond)
+	consumerDist.Start(ctx, 300*time.Millisecond)
+
+	meta := &PackageMeta{
+		ID:      "seed-only-pkg",
+		Name:    "found-through-a-seed",
+		Version: "1.4.0",
+		Author:  "publisher",
+	}
+	if err := publisherDist.PublishMeta(ctx, meta); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	resolved := waitForResolveFrom(t, consumerDist, "seed-only-pkg", seed.addr)
+	if resolved.Name != "found-through-a-seed" {
+		t.Errorf("resolved name = %q", resolved.Name)
+	}
+	if consumerDist.PeersSeen() == 0 {
+		// The refresh runs in the background, so the resolve can win the race
+		// against the first tick. Wait for the loop rather than assuming it has
+		// already run.
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) && consumerDist.PeersSeen() == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if consumerDist.PeersSeen() == 0 {
+		t.Error("the consumer's routing table is still empty, so it never joined the network")
+	}
+}
+
+// waitForResolveFrom retries a resolve after seeding the consumer's routing
+// table from a bootstrap address, which is what a node does at startup.
+func waitForResolveFrom(t *testing.T, dist DHTDistributor, id string, seed string) *PackageMeta {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		got, err := dist.ResolveMeta(context.Background(), id)
+		if err == nil {
+			return got
+		}
+		lastErr = err
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("could not resolve %s via seed %s: %v", id, seed, lastErr)
+	return nil
 }

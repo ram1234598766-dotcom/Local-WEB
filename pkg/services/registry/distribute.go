@@ -21,6 +21,15 @@ type dhtMetaStore struct {
 	nodeID dht.NodeID
 	pubKey [32]byte
 	local  map[string]*PackageMeta
+
+	// addr is this node's DHT address, advertised in its registration so a peer
+	// that learns about this node can add it to its own table. Without it a node
+	// could be found but not contacted.
+	addr string
+
+	// peersSeen counts successful lookups, so the daemon can report whether the
+	// node is actually part of a network or talking to nobody.
+	peersSeen int
 }
 
 // NewDHTDistributor creates a DHT-backed metadata distributor.
@@ -31,6 +40,88 @@ func NewDHTDistributor(d *dht.DHT, pubKey [32]byte) DHTDistributor {
 		pubKey: pubKey,
 		local:  make(map[string]*PackageMeta),
 	}
+}
+
+// NewDHTDistributorAt is NewDHTDistributor with the node's own DHT address, so
+// it can advertise where peers should connect.
+func NewDHTDistributorAt(d *dht.DHT, pubKey [32]byte, addr string) DHTDistributor {
+	return &dhtMetaStore{
+		dht:    d,
+		nodeID: dht.NodeIDFromPub(pubKey),
+		pubKey: pubKey,
+		addr:   addr,
+		local:  make(map[string]*PackageMeta),
+	}
+}
+
+// Start begins the background work that makes the DHT reachable rather than
+// merely present: periodically re-announcing this node, refreshing the routing
+// table, and re-publishing local metadata.
+//
+// Without it a node registered itself once and then sat still. A peer that
+// joined later had no route to it, because a value is only pushed to peers the
+// publisher already knows, and nothing ever discovered anybody else.
+func (d *dhtMetaStore) Start(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		d.announceAndRefresh(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.announceAndRefresh(ctx)
+			}
+		}
+	}()
+}
+
+// announceAndRefresh does one round of discovery and re-publication.
+func (d *dhtMetaStore) announceAndRefresh(ctx context.Context) {
+	if d.addr != "" {
+		// The registration carries our address and the anti-Sybil proof of work.
+		if err := d.dht.RegisterNode(ctx, d.pubKey, "localweb", []string{d.addr}, dht.MinPoWDifficulty); err != nil {
+			log.Debug().Err(err).Msg("dht: announce failed")
+		}
+	}
+
+	// A lookup against a stable target walks the network and folds every peer it
+	// meets into the routing table, which is how a node learns publishers it was
+	// never told about.
+	target := dht.NodeID(crypto.SHA3Hash([]byte("localweb-refresh")))
+	if _, err := d.dht.Lookup(ctx, target); err != nil {
+		log.Debug().Err(err).Msg("dht: refresh lookup found nothing")
+	}
+	// Counted from the routing table rather than from what the lookup returned:
+	// the table is what decides whether anyone can be reached.
+	d.mu.Lock()
+	d.peersSeen = d.dht.PeerCount()
+	d.mu.Unlock()
+
+	// Re-publish so the value reaches peers discovered since the last round,
+	// including nodes that joined after we first published.
+	for _, m := range d.Local() {
+		key := "pkg:" + m.ID
+		data, err := marshalPackageMeta(&m)
+		if err != nil {
+			continue
+		}
+		if err := d.dht.Store(ctx, key, data); err != nil {
+			log.Debug().Err(err).Str("package", m.ID).Msg("dht: store failed")
+		}
+	}
+}
+
+// PeersSeen reports how many peers the last refresh found, so a node that is
+// bootstrapped with no addresses can be seen to be reaching nobody.
+func (d *dhtMetaStore) PeersSeen() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.peersSeen
 }
 
 // PublishMeta stores package metadata in the DHT.

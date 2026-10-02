@@ -409,6 +409,28 @@ func NewDHT(localID NodeID, pubKey [32]byte, name string, transport QUICTranspor
 	}
 }
 
+// selfInfo describes this node, for handing out in a find-node reply.
+//
+// listenAddr is what a peer needs to dial us. It is set when the DHT server
+// starts listening; without it a node advertises an empty address and every
+// peer that learns about it is undialable.
+//
+// It takes no lock: handleMessage already holds n.mu for its whole body, so
+// locking here would deadlock the request it is answering.
+func (n *Node) selfInfo() PeerInfo {
+	var addrs []string
+	if n.listenAddr != "" {
+		addrs = []string{n.listenAddr}
+	}
+	return PeerInfo{
+		ID:        n.id,
+		PublicKey: n.pubKey,
+		Name:      n.name,
+		Addrs:     addrs,
+		FirstSeen: time.Now(),
+	}
+}
+
 // localValue returns a value this node holds. It takes n.mu, so it must not be
 // called from inside handleMessage, which already holds it.
 func (n *Node) localValue(key string) ([]byte, bool) {
@@ -475,6 +497,25 @@ func (d *DHT) Bootstrap(ctx context.Context, bootstrap []string) error {
 // implementation appended every newly discovered peer to the frontier without
 // re-sorting or pruning, so the query set grew on every hop and the lookup
 // degenerated into a broadcast.
+// detachPeers copies the peers so the caller can read them without holding a
+// lock.
+//
+// FindClosest returns the table's own *Peer pointers, and storePeer rewrites
+// p.Info in place when a peer's details change. A caller that kept those
+// pointers and read p.Info later raced with that write. Copying here removes the
+// aliasing, so a lookup can read its shortlist freely.
+func detachPeers(peers []*Peer) []*Peer {
+	out := make([]*Peer, 0, len(peers))
+	for _, p := range peers {
+		if p == nil {
+			continue
+		}
+		cp := *p
+		out = append(out, &cp)
+	}
+	return out
+}
+
 func (d *DHT) Lookup(ctx context.Context, target NodeID) ([]PeerInfo, error) {
 	d.mu.RLock()
 	if !d.running {
@@ -484,7 +525,7 @@ func (d *DHT) Lookup(ctx context.Context, target NodeID) ([]PeerInfo, error) {
 	d.mu.RUnlock()
 
 	client := NewRPCClient(d.node.transport.Dial)
-	seeds := d.node.table.FindClosest(target, KBucketSize)
+	seeds := detachPeers(d.node.table.FindClosest(target, KBucketSize))
 	if len(seeds) == 0 {
 		return nil, ErrNoPeers
 	}
@@ -587,6 +628,17 @@ func dedupeAndPrune(peers []*Peer, target NodeID, n int) []*Peer {
 	return out
 }
 
+// PeerCount reports how many peers the routing table holds.
+//
+// The table is the thing that decides whether a node can be reached, so this is
+// the honest measure of "did I join the network" rather than what a single
+// lookup happened to return.
+func (d *DHT) PeerCount() int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.node.table.Len()
+}
+
 // Get retrieves a value previously offered to the DHT under key.
 //
 // Store sends MsgStore to the closest peers and the receiving node keeps the
@@ -611,7 +663,7 @@ func (d *DHT) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	target := NodeID(crypto.SHA3Hash([]byte(key)))
-	peers := d.node.table.FindClosest(target, Alpha)
+	peers := detachPeers(d.node.table.FindClosest(target, Alpha))
 	if len(peers) == 0 {
 		return nil, ErrValueNotFound
 	}
@@ -657,7 +709,7 @@ func (d *DHT) Store(ctx context.Context, key string, value []byte) error {
 
 	client := NewRPCClient(d.node.transport.Dial)
 	target := NodeID(crypto.SHA3Hash([]byte(key)))
-	peers := d.node.table.FindClosest(target, Alpha)
+	peers := detachPeers(d.node.table.FindClosest(target, Alpha))
 	for _, p := range peers {
 		msg := Message{
 			Type:    MsgStore,
@@ -677,7 +729,7 @@ func (d *DHT) Store(ctx context.Context, key string, value []byte) error {
 // costs the registerer 2^difficulty SHA3-256 hashes, and the receiving node
 // verifies it before the peer enters the table.
 func (d *DHT) RegisterNode(ctx context.Context, pubKey [32]byte, name string, addrs []string, difficulty int) error {
-	nonce, err := SolvePoW(registrationChallenge(pubKey, name), difficulty)
+	nonce, err := SolvePoW(registrationChallenge(pubKey, name, addrs), difficulty)
 	if err != nil {
 		return ErrPoWFailed
 	}
@@ -697,7 +749,7 @@ func (d *DHT) RegisterNode(ctx context.Context, pubKey [32]byte, name string, ad
 	}
 	client := NewRPCClient(d.node.transport.Dial)
 	target := NodeIDFromPub(pubKey)
-	peers := d.node.table.FindClosest(target, Alpha)
+	peers := detachPeers(d.node.table.FindClosest(target, Alpha))
 	for _, p := range peers {
 		if len(p.Info.Addrs) == 0 {
 			continue
@@ -713,13 +765,32 @@ func (d *DHT) RegisterNode(ctx context.Context, pubKey [32]byte, name string, ad
 func (d *DHT) storePeer(pi PeerInfo) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if p, ok := d.node.peers[pi.ID]; ok {
-		p.Info = pi
+	// A fresh Peer is built rather than rewriting the existing one in place. The
+	// table hands out *Peer pointers to FindClosest callers, and mutating one
+	// behind their backs raced with them reading p.Info.
+	peer := &Peer{Info: copyPeerInfo(pi)}
+	if existing, ok := d.node.peers[pi.ID]; ok {
+		// Keep the table entry pointing at the new value.
+		existing.Info = peer.Info
 	} else {
-		peer := &Peer{Info: pi}
 		d.node.peers[pi.ID] = peer
 		d.node.table.Add(peer)
 	}
+}
+
+// copyPeerInfo deep-copies a PeerInfo, including its address slice, so a holder
+// of the copy is unaffected by later changes.
+func copyPeerInfo(pi PeerInfo) PeerInfo {
+	out := pi
+	if pi.Addrs != nil {
+		out.Addrs = make([]string, len(pi.Addrs))
+		copy(out.Addrs, pi.Addrs)
+	}
+	if pi.Services != nil {
+		out.Services = make([]string, len(pi.Services))
+		copy(out.Services, pi.Services)
+	}
+	return out
 }
 
 func (d *DHT) Stop() {
@@ -748,10 +819,19 @@ const (
 )
 
 // registrationChallenge is the pre-image a registering node must hash.
-func registrationChallenge(pubKey [32]byte, name string) []byte {
-	buf := make([]byte, 0, 32+len(name))
+// registrationChallenge is what the proof of work commits to.
+//
+// It binds the identity, the name and every advertised address, so a peer that
+// solved the challenge for one address cannot have a different one swapped in
+// afterwards.
+func registrationChallenge(pubKey [32]byte, name string, addrs []string) []byte {
+	buf := make([]byte, 0, 32+len(name)+len(addrs)*32)
 	buf = append(buf, pubKey[:]...)
 	buf = append(buf, name...)
+	for _, a := range addrs {
+		buf = append(buf, byte(len(a)))
+		buf = append(buf, a...)
+	}
 	return buf
 }
 
@@ -833,24 +913,46 @@ func decodeStore(data []byte) (string, []byte) {
 // len). The name is part of the payload because it is part of the
 // proof-of-work pre-image; omitting it made the server unable to recompute the
 // challenge and therefore unable to verify the work at all.
+// encodeRegister serialises a registration announcement.
+//
+// It carries the advertised addresses, which it previously did not: the handler
+// then fell back to putting the node's *ID* in PeerInfo.Addrs, so every peer
+// learned through a registration was permanently undialable
+// ("dial tcp: <nodeid>: missing port in address"). A node could be discovered
+// and then never contacted.
 func encodeRegister(pi PeerInfo, nonce []byte, difficulty int) []byte {
 	name := []byte(pi.Name)
 	if len(name) > math.MaxUint16 {
 		name = name[:math.MaxUint16]
 	}
-	buf := make([]byte, 32+8+1+2+len(name))
+	// One address is the normal case; the field is a length-prefixed list so a
+	// multi-homed node can advertise more.
+	addrBlock := []byte{}
+	for i, a := range pi.Addrs {
+		if i >= 1 || len(a) > math.MaxUint16 {
+			break
+		}
+		ab := []byte(a)
+		addrBlock = append(addrBlock, byte(len(ab)>>8), byte(len(ab)))
+		addrBlock = append(addrBlock, ab...)
+	}
+
+	buf := make([]byte, 32+8+1+2+len(name)+2+len(addrBlock))
 	copy(buf[:32], pi.PublicKey[:])
 	copy(buf[32:40], nonce)
 	buf[40] = byte(difficulty)
 	binary.BigEndian.PutUint16(buf[41:43], uint16(len(name)))
 	copy(buf[43:], name)
+	base := 43 + len(name)
+	binary.BigEndian.PutUint16(buf[base:base+2], uint16(len(addrBlock)))
+	copy(buf[base+2:], addrBlock)
 	return buf
 }
 
 // decodeRegister parses a registration announcement. It reports false when the
 // payload is malformed or truncated, so a hostile peer cannot drive the
 // verifier into a panic with a short buffer.
-func decodeRegister(data []byte) (pubKey [32]byte, nonce []byte, difficulty int, name string, ok bool) {
+func decodeRegister(data []byte) (pubKey [32]byte, nonce []byte, difficulty int, name string, addrs []string, ok bool) {
 	const header = 32 + 8 + 1 + 2
 	if len(data) < header {
 		return
@@ -859,10 +961,30 @@ func decodeRegister(data []byte) (pubKey [32]byte, nonce []byte, difficulty int,
 	nonce = append([]byte{}, data[32:40]...)
 	difficulty = int(data[40])
 	nameLen := int(binary.BigEndian.Uint16(data[41:43]))
-	if len(data) < header+nameLen {
+	if len(data) < header+nameLen+2 {
 		return
 	}
 	name = string(data[header : header+nameLen])
+
+	addrBase := header + nameLen
+	addrLen := int(binary.BigEndian.Uint16(data[addrBase : addrBase+2]))
+	if len(data) < addrBase+2+addrLen {
+		return
+	}
+	// The address block is a sequence of uint16 length-prefixed strings.
+	for off := addrBase + 2; off < addrBase+2+addrLen; {
+		if off+2 > addrBase+2+addrLen {
+			return
+		}
+		l := int(binary.BigEndian.Uint16(data[off : off+2]))
+		off += 2
+		if l == 0 || off+l > addrBase+2+addrLen {
+			return
+		}
+		addrs = append(addrs, string(data[off:off+l]))
+		off += l
+	}
+
 	ok = true
 	return
 }
@@ -920,4 +1042,11 @@ func decodePeerList(data []byte) ([]PeerInfo, error) {
 		}
 	}
 	return peers, nil
+}
+
+// setListenAddr records the address this node is reachable on.
+func (n *Node) setListenAddr(addr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.listenAddr = addr
 }

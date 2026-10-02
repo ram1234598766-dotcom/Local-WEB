@@ -77,6 +77,7 @@ func main() {
 	smtpAddr := flag.String("smtp-addr", "0.0.0.0:587", "SMTP listen address")
 	imapAddr := flag.String("imap-addr", "0.0.0.0:993", "IMAP listen address")
 	registryAddr := flag.String("registry-addr", "0.0.0.0:9092", "package registry listen address")
+	dhtBootstrap := flag.String("dht-bootstrap", "", "comma-separated dht peer addresses to join a network (e.g. 10.0.0.5:7777). Without one this node serves but reaches no other node")
 	guiAddr := flag.String("gui-addr", "0.0.0.0:8080", "GUI dashboard listen address")
 
 	// The daemon has no subcommands, but the packaging and service files all
@@ -315,7 +316,7 @@ func main() {
 		smtp:     *smtpAddr,
 		imap:     *imapAddr,
 		registry: *registryAddr,
-		dht:      "127.0.0.1:0",
+		dhtBoot:  splitList(*dhtBootstrap),
 	})
 	defer stopServices()
 
@@ -341,6 +342,7 @@ type servicePorts struct {
 	imap     string
 	registry string
 	dht      string
+	dhtBoot  []string
 }
 
 // newDHTForNode builds a DHT node that listens and answers requests, so this
@@ -355,25 +357,42 @@ type servicePorts struct {
 // transport. bootstrap lists TCP addresses of peers to learn from; without any,
 // the node serves and stores locally and reaches no other node, which is why
 // the log says so plainly.
-func newDHTForNode(ctx context.Context, srv *transport.Server, pub [32]byte, stops *[]func()) (*dht.DHT, *dht.Server) {
+// newDHTForNode builds a DHT node that listens, answers requests and keeps
+// itself reachable.
+//
+// bootstrap lists DHT addresses of peers to learn from. It is the difference
+// between a node that can resolve a package and a node that only ever talks to
+// itself: without at least one seed a node has nobody to ask, however correct
+// the DHT code underneath is. -dht-bootstrap supplies them.
+//
+// The distributor runs a background loop that re-announces this node, refreshes
+// the routing table and re-publishes local metadata. A value is only pushed to
+// peers the publisher already knows, so without that loop a node that joined
+// after a publish would never learn the value existed.
+func newDHTForNode(ctx context.Context, pub [32]byte, bootstrap []string, stops *[]func()) (*dht.DHT, *dht.Server) {
 	localID := dht.NodeIDFromPub(pub)
 	node := dht.NewDHT(localID, pub, "localweb", dht.TCPTransport{})
-
-	if err := node.Bootstrap(ctx, nil); err != nil {
-		log.Printf("dht: not started: %v", err)
-	}
 
 	dhtSrv := dht.NewServer(node.Node())
 	if err := dhtSrv.Start("127.0.0.1:0"); err != nil {
 		log.Printf("dht: not serving: %v", err)
+		node.Stop()
 		return node, dhtSrv
 	}
 	*stops = append(*stops, func() { _ = dhtSrv.Stop() })
 
-	// Announce this node to itself so its own value store is reachable and a
-	// Store has somewhere local to land.
-	if err := node.RegisterNode(ctx, pub, "localweb", []string{dhtSrv.Addr()}, dht.MinPoWDifficulty); err != nil {
-		log.Printf("dht: could not announce self: %v", err)
+	// Bootstrap marks the node running and learns the seed peers.
+	if err := node.Bootstrap(ctx, bootstrap); err != nil {
+		log.Printf("dht: not started: %v", err)
+		return node, dhtSrv
+	}
+	if len(bootstrap) > 0 {
+		log.Printf("dht: bootstrapped from %v, serving on %s", bootstrap, dhtSrv.Addr())
+	} else {
+		// Said plainly rather than left implicit: with no seed this node is
+		// reachable but reaches nobody.
+		log.Printf("dht: serving on %s with no bootstrap peers, so it reaches no other node "+
+			"(pass -dht-bootstrap host:port to join a network)", dhtSrv.Addr())
 	}
 	return node, dhtSrv
 }
@@ -434,6 +453,17 @@ func portNum(addr string) int {
 		return 0
 	}
 	return n
+}
+
+// splitList turns a comma separated flag value into a list, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir string, srv *transport.Server, ports servicePorts) func() {
@@ -606,9 +636,12 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 	// The index previously ran on a bare MemoryRegistry with no network behind
 	// it, so a package published here was visible to nothing but this node. The
 	// DHT is what makes a publish reach another node and a resolve come back.
-	dhtNode, dhtSrv := newDHTForNode(ctx, srv, pub, &stops)
+	dhtNode, dhtSrv := newDHTForNode(ctx, pub, ports.dhtBoot, &stops)
 	memReg := registry.NewMemoryRegistry()
-	memReg.RegisterDistributor(registry.NewDHTDistributor(dhtNode, pub))
+	dist := registry.NewDHTDistributorAt(dhtNode, pub, dhtSrv.Addr())
+	memReg.RegisterDistributor(dist)
+	// Keep the node reachable: re-announce, refresh the table, re-publish.
+	dist.Start(ctx, 30*time.Second)
 	// The GUI reads the same registry, so the Registry panel reflects real
 	// publishes instead of a hardcoded row.
 	api.SetRegistry(memReg)

@@ -74,6 +74,10 @@ type DHTDistributor interface {
 	PublishMeta(ctx context.Context, meta *PackageMeta) error
 	SearchMeta(ctx context.Context, query string) ([]PackageMeta, error)
 	ResolveMeta(ctx context.Context, packageID string) (*PackageMeta, error)
+	// Start runs the background discovery and re-publication loop.
+	Start(ctx context.Context, interval time.Duration)
+	// PeersSeen reports how many peers the last refresh found.
+	PeersSeen() int
 	Local() []PackageMeta
 	AddLocal(meta *PackageMeta)
 	RemoveLocal(id string)

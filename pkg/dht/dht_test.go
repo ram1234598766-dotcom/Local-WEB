@@ -59,15 +59,15 @@ func TestVerifyPoWRejectsWrongNonceLength(t *testing.T) {
 }
 
 func TestVerifyPoWBindsToChallengePreimage(t *testing.T) {
-	nonce, err := SolvePoW(registrationChallenge([32]byte{1}, "node-a"), MinPoWDifficulty)
+	nonce, err := SolvePoW(registrationChallenge([32]byte{1}, "node-a", nil), MinPoWDifficulty)
 	if err != nil {
 		t.Fatalf("solve: %v", err)
 	}
 	// The same nonce must not validate for a different identity or name.
-	if VerifyPoW(registrationChallenge([32]byte{2}, "node-a"), nonce, MinPoWDifficulty) {
+	if VerifyPoW(registrationChallenge([32]byte{2}, "node-a", nil), nonce, MinPoWDifficulty) {
 		t.Fatal("nonce verified against a different public key")
 	}
-	if VerifyPoW(registrationChallenge([32]byte{1}, "node-b"), nonce, MinPoWDifficulty) {
+	if VerifyPoW(registrationChallenge([32]byte{1}, "node-b", nil), nonce, MinPoWDifficulty) {
 		t.Fatal("nonce verified against a different name")
 	}
 }
@@ -320,15 +320,21 @@ func TestEncodeDecodeRegister(t *testing.T) {
 		ID:        NodeIDFromPub([32]byte{1: 1}),
 		PublicKey: [32]byte{1: 1},
 		Name:      "node",
+		Addrs:     []string{"10.0.0.7:7777"},
 	}
 	nonce := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 	data := encodeRegister(pi, nonce, 20)
-	pubKey, n, diff, name, ok := decodeRegister(data)
+	pubKey, n, diff, name, addrs, ok := decodeRegister(data)
 	if !ok {
 		t.Fatal("decodeRegister rejected a well-formed payload")
 	}
 	if pubKey != pi.PublicKey || string(n) != string(nonce) || diff != 20 || name != pi.Name {
 		t.Fatalf("register decode mismatch")
+	}
+	// The address is what makes a discovered peer dialable, so it has to
+	// survive the wire encoding too.
+	if len(addrs) != 1 || addrs[0] != pi.Addrs[0] {
+		t.Fatalf("address round-trip: got %v, want %v", addrs, pi.Addrs)
 	}
 }
 
@@ -337,7 +343,7 @@ func TestEncodeDecodeRegister(t *testing.T) {
 func TestEncodeDecodeRegisterRoundTripsName(t *testing.T) {
 	for _, name := range []string{"", "n", "node-with-a-longer-name", "unicode-\u00e9\u00e8\u00ea"} {
 		pi := PeerInfo{PublicKey: [32]byte{7}, Name: name}
-		_, _, _, got, ok := decodeRegister(encodeRegister(pi, make([]byte, 8), 12))
+		_, _, _, got, _, ok := decodeRegister(encodeRegister(pi, make([]byte, 8), 12))
 		if !ok {
 			t.Fatalf("decode rejected payload for name %q", name)
 		}
@@ -351,7 +357,7 @@ func TestDecodeRegisterRejectsTruncatedInput(t *testing.T) {
 	pi := PeerInfo{PublicKey: [32]byte{1}, Name: "node"}
 	full := encodeRegister(pi, make([]byte, 8), 12)
 	for i := 0; i < len(full); i++ {
-		if _, _, _, _, ok := decodeRegister(full[:i]); ok {
+		if _, _, _, _, _, ok := decodeRegister(full[:i]); ok {
 			t.Fatalf("truncation to %d bytes still decoded", i)
 		}
 	}
@@ -428,7 +434,7 @@ func TestHandleRegisterNodeAcceptsValidProofOfWork(t *testing.T) {
 	n := newTestNode()
 	pubKey := [32]byte{0: 0x42}
 	pi := PeerInfo{PublicKey: pubKey, Name: "honest-node"}
-	nonce, err := SolvePoW(registrationChallenge(pubKey, pi.Name), MinPoWDifficulty)
+	nonce, err := SolvePoW(registrationChallenge(pubKey, pi.Name, nil), MinPoWDifficulty)
 	if err != nil {
 		t.Fatalf("solve: %v", err)
 	}
@@ -459,7 +465,7 @@ func TestHandleRegisterNodeRejectsInvalidProofOfWork(t *testing.T) {
 		},
 		// Solved for a different identity, then replayed here.
 		"work for another key": func(pk [32]byte, name string) (PeerInfo, []byte) {
-			n2, err := SolvePoW(registrationChallenge([32]byte{9: 9}, name), MinPoWDifficulty)
+			n2, err := SolvePoW(registrationChallenge([32]byte{9: 9}, name, nil), MinPoWDifficulty)
 			if err != nil {
 				t.Fatalf("solve: %v", err)
 			}
@@ -467,7 +473,7 @@ func TestHandleRegisterNodeRejectsInvalidProofOfWork(t *testing.T) {
 		},
 		// Solved for a different name, then replayed here.
 		"work for another name": func(pk [32]byte, name string) (PeerInfo, []byte) {
-			n2, err := SolvePoW(registrationChallenge(pk, "someone-else"), MinPoWDifficulty)
+			n2, err := SolvePoW(registrationChallenge(pk, "someone-else", nil), MinPoWDifficulty)
 			if err != nil {
 				t.Fatalf("solve: %v", err)
 			}
@@ -475,7 +481,7 @@ func TestHandleRegisterNodeRejectsInvalidProofOfWork(t *testing.T) {
 		},
 		// Valid work, but the sender is not the identity that did the work.
 		"identity mismatch": func(pk [32]byte, name string) (PeerInfo, []byte) {
-			n2, err := SolvePoW(registrationChallenge(pk, name), MinPoWDifficulty)
+			n2, err := SolvePoW(registrationChallenge(pk, name, nil), MinPoWDifficulty)
 			if err != nil {
 				t.Fatalf("solve: %v", err)
 			}
@@ -483,7 +489,7 @@ func TestHandleRegisterNodeRejectsInvalidProofOfWork(t *testing.T) {
 		},
 		// A difficulty the system never issues.
 		"impossible difficulty": func(pk [32]byte, name string) (PeerInfo, []byte) {
-			n2, err := SolvePoW(registrationChallenge(pk, name), MinPoWDifficulty)
+			n2, err := SolvePoW(registrationChallenge(pk, name, nil), MinPoWDifficulty)
 			if err != nil {
 				t.Fatalf("solve: %v", err)
 			}

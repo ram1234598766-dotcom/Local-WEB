@@ -34,6 +34,8 @@ func (s *Server) Start(addr string) error {
 		return err
 	}
 	s.ln = ln
+	// Tell the node where it is reachable, so it can hand that address out.
+	s.node.setListenAddr(ln.Addr().String())
 	go s.acceptLoop()
 	return nil
 }
@@ -123,9 +125,17 @@ func (n *Node) handleMessage(msg Message) Message {
 		target := NodeID{}
 		copy(target[:], msg.Payload)
 		peers := n.table.FindClosest(target, KBucketSize)
-		out := make([]PeerInfo, len(peers))
-		for i, p := range peers {
-			out[i] = p.Info
+		// Include ourselves. The response used to list only peers we already
+		// knew, so a node bootstrapping from an empty seed learned nothing at
+		// all - not even the seed it had just dialled. Bootstrap was therefore
+		// a no-op on a fresh network and a node could never join one.
+		out := make([]PeerInfo, 0, len(peers)+1)
+		out = append(out, n.selfInfo())
+		for _, p := range peers {
+			// Detach before handing the value out: the table's peers are
+			// replaced when their details change, and the caller must not share
+			// memory with them.
+			out = append(out, copyPeerInfo(p.Info))
 		}
 		return Message{Type: MsgFoundNode, Src: n.id, Dst: msg.Src, Payload: encodePeerList(out)}
 	case MsgStore:
@@ -150,11 +160,13 @@ func (n *Node) handleMessage(msg Message) Message {
 		// This is the anti-Sybil gate. Previously the message type was not
 		// handled at all and fell through to default, so a node could solve
 		// the challenge and be ignored: the proof of work was decorative.
-		pubKey, nonce, difficulty, name, ok := decodeRegister(msg.Payload)
+		pubKey, nonce, difficulty, name, addrs, ok := decodeRegister(msg.Payload)
 		if !ok {
 			return Message{Type: MsgPong, Src: n.id, Dst: msg.Src}
 		}
-		if !VerifyPoW(registrationChallenge(pubKey, name), nonce, difficulty) {
+		// The challenge binds the advertised addresses, so an address cannot be
+		// swapped in after the fact.
+		if !VerifyPoW(registrationChallenge(pubKey, name, addrs), nonce, difficulty) {
 			// Do not admit the peer. A failed challenge is the same shape as
 			// a pong so the responder does not confirm the endpoint is a DHT
 			// registration oracle.
@@ -169,7 +181,7 @@ func (n *Node) handleMessage(msg Message) Message {
 			ID:        msg.Src,
 			PublicKey: pubKey,
 			Name:      name,
-			Addrs:     []string{msg.Src.String()},
+			Addrs:     addrs,
 			Score:     0.5,
 			FirstSeen: time.Now(),
 		}
