@@ -18,6 +18,7 @@ type syncEngine struct {
 	peerID     [32]byte
 	store      BlockStore
 	fileStore  FileStore
+	exchange   ExchangeProtocol
 	merkleRoot cid.Cid
 	have       map[cid.Cid]bool
 	want       map[cid.Cid]bool
@@ -50,6 +51,31 @@ func NewSyncEngine(store BlockStore, fileStore FileStore, peerID [32]byte, inter
 		peers:     make(map[[32]byte]*peerSyncState),
 		interval:  interval,
 	}
+}
+
+// SetExchange gives the engine a way to actually reach peers.
+//
+// Without it Sync could compute a diff and had no way to act on it, which is why
+// the previous implementation computed the want list and returned: the only
+// honest options were to move the blocks or to do nothing, and it did nothing
+// without saying so.
+func (s *syncEngine) SetExchange(e ExchangeProtocol) {
+	s.mu.Lock()
+	s.exchange = e
+	s.mu.Unlock()
+}
+
+// recordPeerHave stores what a peer says it holds, so the next Sync can diff it.
+func (s *syncEngine) recordPeerHave(peerID [32]byte, have []cid.Cid) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peer, ok := s.peers[peerID]
+	if !ok {
+		peer = &peerSyncState{}
+		s.peers[peerID] = peer
+	}
+	peer.have = have
+	peer.lastSync = time.Now()
 }
 
 func (s *syncEngine) Start(ctx context.Context) error {
@@ -107,40 +133,68 @@ func (s *syncEngine) tickLoop(ctx context.Context) {
 	}
 }
 
+// Sync diffs this node's store against a peer's advertisement and asks the peer
+// for whatever is missing.
 func (s *syncEngine) Sync(ctx context.Context, peerID [32]byte) error {
 	s.mu.Lock()
 	s.stats.TotalSyncs++
+	exchange := s.exchange
 	s.mu.Unlock()
 
-	have, err := s.buildHaveList()
-	if err != nil {
+	if exchange == nil {
+		s.mu.Lock()
+		s.stats.FailedSyncs++
+		s.mu.Unlock()
+		return fmt.Errorf("sync engine has no exchange, cannot reach peer %x", peerID[:8])
+	}
+
+	// buildHaveList also refreshes the engine's view of the local store, which
+	// is what buildWantList diffs against.
+	if _, err := s.buildHaveList(); err != nil {
+		s.mu.Lock()
+		s.stats.FailedSyncs++
+		s.mu.Unlock()
 		return fmt.Errorf("build have list: %w", err)
 	}
 
 	want, err := s.buildWantList(ctx, peerID)
 	if err != nil {
+		s.mu.Lock()
+		s.stats.FailedSyncs++
+		s.mu.Unlock()
 		return fmt.Errorf("build want list: %w", err)
 	}
 
-	onlyInWant := diffCIDs(want, have)
-	if len(onlyInWant) == 0 {
-		s.mu.Lock()
-		s.stats.ActiveSyncs--
-		s.mu.Unlock()
+	if len(want) == 0 {
+		// Nothing to fetch. Leave the counters alone: this is a no-op, not a
+		// completed transfer and not a failure.
 		return nil
 	}
 
+	entries := make([]WantEntry, 0, len(want))
+	for _, c := range want {
+		entries = append(entries, WantEntry{CID: c, Type: WantWant, Priority: 1})
+	}
+
 	s.mu.Lock()
-	for _, c := range onlyInWant {
+	for _, c := range want {
 		s.want[c] = true
 		s.inFlight[c] = time.Now()
 	}
-	s.mu.Unlock()
-
-	// Trigger exchange with peer (handled externally via ReceivedBlock)
-	s.mu.Lock()
 	s.stats.ActiveSyncs++
 	s.mu.Unlock()
+
+	if err := exchange.SendWant(ctx, peerID, entries); err != nil {
+		s.mu.Lock()
+		for _, c := range want {
+			delete(s.want, c)
+			delete(s.inFlight, c)
+		}
+		s.stats.ActiveSyncs--
+		s.stats.FailedSyncs++
+		s.mu.Unlock()
+		return fmt.Errorf("send want: %w", err)
+	}
 
 	return nil
 }
@@ -166,13 +220,38 @@ func (s *syncEngine) ReceivedBlock(ctx context.Context, block *Block) error {
 
 	s.mu.Lock()
 	s.have[block.CID] = true
+	_, wasWanted := s.want[block.CID]
 	delete(s.want, block.CID)
 	delete(s.inFlight, block.CID)
 	s.stats.BlocksRecv++
 	s.stats.BytesRecv += uint64(len(block.Data))
+	if wasWanted && s.stats.ActiveSyncs > 0 {
+		s.stats.ActiveSyncs--
+	}
 	s.mu.Unlock()
 
 	return nil
+}
+
+// HandleBlock adapts a block arriving on the exchange to ReceivedBlock. The
+// daemon installs it with exchange.SetHandler, which is what turns an answered
+// want into a stored block.
+func (s *syncEngine) HandleBlock(ctx context.Context, peer [32]byte, msg *ExchangeMessage) error {
+	if msg == nil {
+		return fmt.Errorf("message is nil")
+	}
+	if msg.Type != MsgBlock {
+		return nil
+	}
+	block := &Block{CID: msg.CID, Data: msg.Data}
+	// The store recomputes the CID on Put, so a peer cannot hand us content
+	// under someone else's name; that check is the boundary here.
+	return s.ReceivedBlock(ctx, block)
+}
+
+// RecordPeerHave stores a have advertisement received from a peer.
+func (s *syncEngine) RecordPeerHave(peerID [32]byte, have []cid.Cid) {
+	s.recordPeerHave(peerID, have)
 }
 
 func (s *syncEngine) Peers() []PeerInfo {
@@ -213,9 +292,15 @@ func (s *syncEngine) buildHaveList() ([]cid.Cid, error) {
 	return out, nil
 }
 
+// buildWantList returns the peer's blocks that this node does not have yet.
+//
+// The previous version returned this node's entire inventory when the peer's
+// advertisement was unknown, which is exactly backwards: the want list is what
+// to ask the peer for, and an unknown peer inventory means ask for nothing.
 func (s *syncEngine) buildWantList(ctx context.Context, peerID [32]byte) ([]cid.Cid, error) {
-	have, err := s.buildHaveList()
-	if err != nil {
+	// buildHaveList refreshes s.have from the local store, which is the map
+	// this diffs against.
+	if _, err := s.buildHaveList(); err != nil {
 		return nil, err
 	}
 
@@ -224,23 +309,22 @@ func (s *syncEngine) buildWantList(ctx context.Context, peerID [32]byte) ([]cid.
 	s.mu.RUnlock()
 
 	if peerHave == nil || len(peerHave.have) == 0 {
-		return have, nil
+		return nil, nil
 	}
 
-	peerSet := make(map[string]bool, len(peerHave.have))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// have is a slice, so it cannot be indexed by CID; the lookup has to go
+	// through the map the engine maintains.
+	out := make([]cid.Cid, 0, len(peerHave.have))
 	for _, c := range peerHave.have {
-		peerSet[c.String()] = true
-	}
-
-	out := make([]cid.Cid, 0)
-	for cidStr := range peerSet {
-		c, err := cid.Decode(cidStr)
-		if err != nil {
+		if s.have[c] {
 			continue
 		}
-		if !s.have[c] && s.want[c] {
-			out = append(out, c)
+		if _, inflight := s.inFlight[c]; inflight {
+			continue
 		}
+		out = append(out, c)
 	}
 	return out, nil
 }

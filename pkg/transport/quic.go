@@ -139,6 +139,20 @@ func NewServer(ctx context.Context, addr string, pubKey, privKey [32]byte, opts 
 	return s, nil
 }
 
+// Addr reports the address the server is actually listening on.
+//
+// NewServer accepts a port of 0, so the address it was given is not necessarily
+// the one peers can reach. Without this the daemon cannot advertise a working
+// address, and a test cannot connect two servers it did not bind by hand.
+func (s *Server) Addr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ln == nil {
+		return s.addr
+	}
+	return s.ln.Addr().String()
+}
+
 // RegisterHandler associates a service ID with a stream handler.
 func (s *Server) RegisterHandler(svc ServiceID, handler StreamHandler) {
 	s.mu.Lock()
@@ -201,9 +215,24 @@ func (s *Server) handleConn(qc *quic.Conn) {
 	s.mu.Unlock()
 
 	// Accept and dispatch streams
+	s.serveStreams(conn, qc)
+}
+
+// serveStreams accepts streams on an established connection and dispatches each
+// to the handler for its service.
+//
+// It runs for inbound and outbound connections alike. Connect used to return
+// without starting it, which left the dialing node unable to receive anything
+// the peer sent back on the same connection: the transport worked for a request
+// and silently failed for the response, so every request/response protocol in
+// the project (Files block exchange, registry publish/fetch, docs sync) could
+// only ever work in one direction.
+func (s *Server) serveStreams(conn *Connection, qc *quic.Conn) {
 	for {
 		stream, err := qc.AcceptStream(s.ctx)
 		if err != nil {
+			// The connection is finished, whether the server shut down or the
+			// peer went away.
 			break
 		}
 
@@ -263,10 +292,10 @@ func (s *Server) handleConn(qc *quic.Conn) {
 
 	s.mu.Lock()
 	s.stats.ActiveConns--
-	delete(s.conns, hs.PeerID)
+	delete(s.conns, conn.peerID)
 	s.mu.Unlock()
 
-	log.Info().Str("peer", fmt.Sprintf("%x", hs.PeerID[:8])).Msg("connection closed")
+	log.Info().Str("peer", fmt.Sprintf("%x", conn.peerID[:8])).Msg("connection closed")
 }
 
 // HandshakeResult carries what a completed Noise or hybrid handshake
@@ -447,6 +476,14 @@ func (s *Server) Connect(ctx context.Context, addr string, peerID [32]byte) (*Co
 	s.stats.TotalConns++
 	s.stats.ActiveConns++
 	s.mu.Unlock()
+
+	// The peer can open streams on this connection too, so it needs the same
+	// dispatch loop an accepted connection gets.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.serveStreams(c, qc)
+	}()
 
 	return c, nil
 }

@@ -133,6 +133,9 @@ type ExchangeProtocol interface {
 	SendWant(ctx context.Context, peerID [32]byte, entries []WantEntry) error
 	SendHave(ctx context.Context, peerID [32]byte, entries []WantEntry) error
 	SendBlock(ctx context.Context, peerID [32]byte, block *Block) error
+	// SetHandler installs the callback for blocks arriving from peers. Without
+	// it, a served block is decoded and discarded.
+	SetHandler(h ExchangeHandler)
 	Close() error
 }
 

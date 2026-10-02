@@ -35,6 +35,40 @@ func TestEncodeDecodeWantEntries(t *testing.T) {
 	if decoded[0].Priority != 10 {
 		t.Fatalf("expected priority 10, got %d", decoded[0].Priority)
 	}
+	// The CID is the whole point of the message. The test above checked only
+	// the fields at fixed offsets, so an entry could carry a garbage CID and
+	// still pass: a peer would answer a want for a block nobody asked for.
+	if decoded[0].CID != c {
+		t.Errorf("entry 0 CID did not survive the round trip:\n got %s\nwant %s", decoded[0].CID, c)
+	}
+	if decoded[1].CID != c {
+		t.Errorf("entry 1 CID did not survive the round trip:\n got %s\nwant %s", decoded[1].CID, c)
+	}
+}
+
+// TestEncodeDecodeWantEntriesDistinctCIDs guards the length prefix: two
+// different CIDs in one message must not be confused for each other.
+func TestEncodeDecodeWantEntriesDistinctCIDs(t *testing.T) {
+	a := computeFileCID([]byte("alpha"))
+	b := computeFileCID([]byte("bravo"))
+	entries := []WantEntry{
+		{CID: a, Type: WantWant, Priority: 1},
+		{CID: b, Type: WantHave, Priority: 2},
+	}
+
+	decoded, err := decodeWantEntries(encodeWantEntries(entries))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("got %d entries, want 2", len(decoded))
+	}
+	if decoded[0].CID != a {
+		t.Errorf("entry 0 CID = %s, want %s", decoded[0].CID, a)
+	}
+	if decoded[1].CID != b {
+		t.Errorf("entry 1 CID = %s, want %s", decoded[1].CID, b)
+	}
 }
 
 func TestDecodeWantEntriesEmpty(t *testing.T) {
