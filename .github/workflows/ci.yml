@@ -155,9 +155,10 @@ jobs:
   # ============================================================
   # "Works offline" decays quietly: one added CDN <link> and the dashboard
   # stops rendering on a plane while every other job stays green. This job
-  # builds with GOPROXY=off so any module fetch is a hard failure, and runs
-  # scripts/check-offline.sh to assert the shipped product references nothing
-  # on the public internet.
+  # builds with GOPROXY=off so any module fetch is a hard failure, pins
+  # GOTOOLCHAIN=local so Go does not try to resolve a toolchain through the
+  # module cache, and runs scripts/check-offline.sh to assert the shipped product
+  # references nothing on the public internet.
   offline:
     name: Offline Build
     runs-on: ubuntu-latest
@@ -169,18 +170,20 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Build with the module proxy disabled
+      - name: Build with no network access
         env:
           GOPROXY: "off"
           GOFLAGS: "-mod=vendor"
+          GOTOOLCHAIN: "local"
         run: |
           go build ./...
           go vet ./...
 
-      - name: Test with the module proxy disabled
+      - name: Test with no network access
         env:
           GOPROXY: "off"
           GOFLAGS: "-mod=vendor"
+          GOTOOLCHAIN: "local"
         run: go test ./...
 
       - name: Assert no external references

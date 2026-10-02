@@ -153,13 +153,21 @@ deps:
 # vendor/ holds every Go dependency, so the build needs no module proxy and no
 # network. GOFLAGS pins -mod=vendor and GOPROXY=off makes any attempt to reach
 # the network a hard failure rather than a silent download, so this target is a
-# real check and not a formality. scripts/check-offline.sh additionally asserts
-# that the shipped SPA references no external origin.
+# real check and not a formality.
+#
+# GOTOOLCHAIN=local matters as much: with the default toolchain switching, Go
+# resolves the version named in go.mod *through the module cache*, so a machine
+# with Go already installed but an empty cache still tries to download a
+# toolchain and fails offline. Pinning to the local toolchain keeps the check
+# honest. scripts/check-offline.sh additionally asserts that the shipped SPA
+# references no external origin.
+OFFLINE_ENV = GOPROXY=off GOFLAGS=-mod=vendor GOTOOLCHAIN=local
+
 verify-offline:
-	@GOPROXY=off GOFLAGS=-mod=vendor $(GO) build ./...
-	@GOPROXY=off GOFLAGS=-mod=vendor $(GO) vet ./...
-	@bash scripts/check-offline.sh
-	@echo "offline: build, vet and static reference checks all passed with GOPROXY=off"
+	@$(OFFLINE_ENV) $(GO) build ./...
+	@$(OFFLINE_ENV) $(GO) vet ./...
+	@GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=vendor bash scripts/check-offline.sh
+	@echo "offline: build, vet and static reference checks all passed with no network access"
 
 # Dry run only. goreleaser v2 also produces the real release, so it is not
 # invoked by any target here.

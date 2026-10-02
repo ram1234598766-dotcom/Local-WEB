@@ -244,8 +244,16 @@ Building is offline too. Every Go dependency is committed under `vendor/`, so no
 module proxy is needed:
 
 ```bash
-make verify-offline   # builds, vets and tests with GOPROXY=off
+make verify-offline   # builds, vets and tests with no network access
 ```
+
+`vendor/` is committed, so no module proxy is needed. The build also pins
+`GOTOOLCHAIN=local`, because Go otherwise resolves the toolchain version named
+in `go.mod` *through* the module cache and a machine with Go already installed
+but an empty cache would still try to download one.
+
+Verified from a fresh clone with an empty module cache and `GOPROXY=off`:
+`go build ./...` and `go test ./...` both pass.
 
 `scripts/check-offline.sh` is the guard that keeps this true. It fails if the
 embedded UI gains a reference to another origin, if runtime code hardcodes a

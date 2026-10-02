@@ -59,6 +59,15 @@ else
   bad "vendor/ is missing; an offline build would need the module proxy. Run: go mod vendor"
 fi
 
+# 4. Report the effective toolchain setting, informationally.
+#    With Go's default toolchain switching, the version named in go.mod is
+#    resolved through the module cache, so a machine that already has Go
+#    installed but an empty cache still tries to download a toolchain and fails
+#    offline. Offline builds therefore pin GOTOOLCHAIN=local. The release jobs
+#    in CI set that in their `env:` block, and 'make verify-offline' sets it for
+#    the build and vet it runs.
+note "GOTOOLCHAIN=$(go env GOTOOLCHAIN 2>/dev/null || echo unknown) (informational; offline builds pin it to local)"
+
 if [ "$fail" -ne 0 ]; then
   echo "offline check FAILED" >&2
   exit 1
