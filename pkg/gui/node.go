@@ -45,6 +45,11 @@ type NodeAPI struct {
 	fileStore         files.FileStore
 	registryInstalled []registry.PackageMeta
 
+	// syncEngine backs /api/files/transfers with the Files service's real
+	// per-peer transfer state. It is nil until the daemon builds one, in which
+	// case Transfers reports an empty list instead of invented progress.
+	syncEngine files.SyncEngine
+
 	// docsSvc backs the Docs panel. The documents, comments and autosave
 	// endpoints all read and write through it, so the panel shows real CRDT
 	// state instead of the hardcoded placeholder document this used to return.
@@ -523,15 +528,68 @@ type TransferResponse struct {
 	SpeedBPS  int64  `json:"speed_bps"`
 	PeerName  string `json:"peer_name"`
 	TotalSize int64  `json:"total_size"`
+
+	// Block counts, so the panel can show real progress rather than a bar
+	// that is decorative.
+	BlocksTotal  int    `json:"blocks_total"`
+	BlocksDone   int    `json:"blocks_done"`
+	BlocksFailed int    `json:"blocks_failed"`
+	BytesRecv    int64  `json:"bytes_recv"`
+	Error        string `json:"error,omitempty"`
 }
 
-// Transfers reports in-flight and recent file transfers.
+// SetSyncEngine records the Files sync engine so /api/files/transfers can
+// report real transfer state. Until the daemon supplies one, Transfers returns
+// an empty list.
+func (a *NodeAPI) SetSyncEngine(se files.SyncEngine) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.syncEngine = se
+}
+
+// Transfers reports in-flight and completed file transfers per peer.
 //
-// The transfer machinery lives in the Files service, which the daemon does not
-// yet drive a transfer loop from, so this reports an empty list rather than
-// fabricating progress. Phase 7 item 7.2 is where that gets wired.
+// Every field is derived from the sync engine's own counters. An empty list is
+// the honest answer when the daemon has no engine or nothing has synced yet; a
+// fabricated progress bar is not.
 func (a *NodeAPI) Transfers() []TransferResponse {
-	return []TransferResponse{}
+	a.mu.RLock()
+	engine := a.syncEngine
+	a.mu.RUnlock()
+	if engine == nil {
+		return []TransferResponse{}
+	}
+
+	progress := engine.Progress()
+	out := make([]TransferResponse, 0, len(progress))
+	for _, p := range progress {
+		// Every field comes from the engine's own counters, measured against
+		// the local block store. An empty list is the honest answer when the
+		// daemon has no engine or nothing has synced; a fabricated progress bar
+		// is not.
+		status := "in-flight"
+		switch {
+		case p.Err != "":
+			status = "failed"
+		case len(p.InFlight) == 0 && p.BytesRecv > 0:
+			status = "complete"
+		case len(p.InFlight) == 0:
+			status = "idle"
+		}
+
+		out = append(out, TransferResponse{
+			Name:         fmt.Sprintf("sync-%x", p.PeerID[:6]),
+			Status:       status,
+			PeerName:     fmt.Sprintf("%x", p.PeerID[:6]),
+			TotalSize:    p.TotalBytes,
+			BytesRecv:    int64(p.BytesRecv),
+			BlocksTotal:  len(p.Have),
+			BlocksDone:   len(p.Have) - len(p.InFlight),
+			BlocksFailed: len(p.InFlight),
+			Error:        p.Err,
+		})
+	}
+	return out
 }
 
 // RegistryInstalled returns the packages installed on this node.

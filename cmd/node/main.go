@@ -307,7 +307,7 @@ func main() {
 	// Each service is started in its own goroutine and marked running only once
 	// its listener is actually up, so the health endpoint keeps reporting the
 	// truth if one fails to bind.
-	stopServices := startServices(ctx, api, pub, *dataDir, servicePorts{
+	stopServices := startServices(ctx, api, pub, *dataDir, server.Server, servicePorts{
 		dns:      *dnsPort,
 		http:     *httpAddr,
 		smtp:     *smtpAddr,
@@ -397,7 +397,7 @@ func portNum(addr string) int {
 	return n
 }
 
-func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir string, ports servicePorts) func() {
+func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir string, srv *transport.Server, ports servicePorts) func() {
 	var stops []func()
 
 	// --- DNS: a real UDP listener ---
@@ -506,10 +506,15 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 	api.SetServiceLive(emailUp, "email")
 
 	// --- Files: a real sync engine over the local block store ---
-	// --- Files: a real block store and file metadata index ---
 	//
 	// The metadata store is handed to the GUI so /api/files/list reports the
 	// files that are actually on this node rather than an empty placeholder.
+	//
+	// The exchange protocol and sync engine are the reason the node can
+	// actually fetch a block from a peer. Neither was constructed anywhere in
+	// the daemon, so the Files service announced a sync engine it did not have
+	// and could never have moved a block: the want/have/block path existed only
+	// in tests.
 	filesDir := filepath.Join(dataDir, "files")
 	blockStore, ferr := files.NewFileStore(filesDir)
 	if ferr != nil {
@@ -518,9 +523,22 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 	} else {
 		metaStore := files.NewFileMetadataStore()
 		api.SetFileStore(metaStore)
+
+		nodeID := crypto.NodeID(pub)
+		exchange := files.NewExchangeProtocol(srv, blockStore, metaStore, nodeID)
+		syncEngine := files.NewSyncEngine(blockStore, metaStore, nodeID, 15*time.Second)
+		syncEngine.SetExchange(exchange)
+		// Without this the block a peer serves is decoded and discarded.
+		exchange.SetHandler(syncEngine.HandleBlock)
+		if err := syncEngine.Start(ctx); err != nil {
+			log.Printf("files: sync engine not started: %v", err)
+		} else {
+			stops = append(stops, func() { _ = syncEngine.Stop() })
+		}
+
+		api.SetSyncEngine(syncEngine)
 		api.SetServiceLive(true, "files")
-		log.Printf("files: blocks at %s", filesDir)
-		_ = blockStore
+		log.Printf("files: blocks at %s, sync every 15s over %x", filesDir, nodeID[:6])
 	}
 
 	// --- Docs: the collaborative document service ---

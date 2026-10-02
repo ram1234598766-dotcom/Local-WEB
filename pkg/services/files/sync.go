@@ -34,6 +34,13 @@ type syncEngine struct {
 type peerSyncState struct {
 	have     []cid.Cid
 	lastSync time.Time
+	// inFlight and bytesRecv give the UI something true to show. Without them
+	// a transfer is invisible while it runs and indistinguishable from one that
+	// never started.
+	inFlight   map[cid.Cid]bool
+	bytesRecv  uint64
+	blocksRecv uint64
+	failed     error
 }
 
 // NewSyncEngine creates a new synchronization engine.
@@ -71,11 +78,54 @@ func (s *syncEngine) recordPeerHave(peerID [32]byte, have []cid.Cid) {
 	defer s.mu.Unlock()
 	peer, ok := s.peers[peerID]
 	if !ok {
-		peer = &peerSyncState{}
+		peer = &peerSyncState{inFlight: make(map[cid.Cid]bool)}
 		s.peers[peerID] = peer
 	}
 	peer.have = have
 	peer.lastSync = time.Now()
+}
+
+// Progress reports what each peer is currently owed, what has arrived, and
+// whether the exchange finished. It is the source for the GUI's Transfers
+// panel, so every field has to be a real count.
+func (s *syncEngine) Progress() []SyncProgress {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]SyncProgress, 0, len(s.peers))
+	for pid, peer := range s.peers {
+		inflight := make([]cid.Cid, 0, len(peer.inFlight))
+		for c := range peer.inFlight {
+			inflight = append(inflight, c)
+		}
+		sort.Slice(inflight, func(i, j int) bool { return inflight[i].KeyString() < inflight[j].KeyString() })
+
+		// The total is measured from the local block store, so a peer cannot
+		// inflate the progress bar by claiming a large size.
+		var total int64
+		for _, c := range peer.have {
+			if sz, err := s.store.Size(context.Background(), c); err == nil {
+				total += sz
+			}
+		}
+
+		prog := SyncProgress{
+			PeerID:     pid,
+			Have:       peer.have,
+			InFlight:   inflight,
+			Complete:   len(inflight) == 0 && peer.failed == nil,
+			BytesRecv:  peer.bytesRecv,
+			TotalBytes: total,
+		}
+		if peer.failed != nil {
+			prog.Err = peer.failed.Error()
+		}
+		out = append(out, prog)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return fmt.Sprintf("%x", out[i].PeerID[:]) < fmt.Sprintf("%x", out[j].PeerID[:])
+	})
+	return out
 }
 
 func (s *syncEngine) Start(ctx context.Context) error {
@@ -177,9 +227,17 @@ func (s *syncEngine) Sync(ctx context.Context, peerID [32]byte) error {
 	}
 
 	s.mu.Lock()
+	peer, ok := s.peers[peerID]
+	if !ok {
+		peer = &peerSyncState{inFlight: make(map[cid.Cid]bool)}
+		s.peers[peerID] = peer
+	}
+	peer.lastSync = time.Now()
+	peer.failed = nil
 	for _, c := range want {
 		s.want[c] = true
 		s.inFlight[c] = time.Now()
+		peer.inFlight[c] = true
 	}
 	s.stats.ActiveSyncs++
 	s.mu.Unlock()
@@ -189,7 +247,9 @@ func (s *syncEngine) Sync(ctx context.Context, peerID [32]byte) error {
 		for _, c := range want {
 			delete(s.want, c)
 			delete(s.inFlight, c)
+			delete(peer.inFlight, c)
 		}
+		peer.failed = err
 		s.stats.ActiveSyncs--
 		s.stats.FailedSyncs++
 		s.mu.Unlock()
@@ -233,9 +293,10 @@ func (s *syncEngine) ReceivedBlock(ctx context.Context, block *Block) error {
 	return nil
 }
 
-// HandleBlock adapts a block arriving on the exchange to ReceivedBlock. The
-// daemon installs it with exchange.SetHandler, which is what turns an answered
-// want into a stored block.
+// HandleBlock adapts a block arriving on the exchange to ReceivedBlock and
+// attributes the progress to the peer that served it. The daemon installs it
+// with exchange.SetHandler, which is what turns an answered want into a stored
+// block and a moving progress bar.
 func (s *syncEngine) HandleBlock(ctx context.Context, peer [32]byte, msg *ExchangeMessage) error {
 	if msg == nil {
 		return fmt.Errorf("message is nil")
@@ -246,7 +307,21 @@ func (s *syncEngine) HandleBlock(ctx context.Context, peer [32]byte, msg *Exchan
 	block := &Block{CID: msg.CID, Data: msg.Data}
 	// The store recomputes the CID on Put, so a peer cannot hand us content
 	// under someone else's name; that check is the boundary here.
-	return s.ReceivedBlock(ctx, block)
+	if err := s.ReceivedBlock(ctx, block); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	if p, ok := s.peers[peer]; ok {
+		if p.inFlight == nil {
+			p.inFlight = make(map[cid.Cid]bool)
+		}
+		delete(p.inFlight, block.CID)
+		p.blocksRecv++
+		p.bytesRecv += uint64(len(block.Data))
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 // RecordPeerHave stores a have advertisement received from a peer.

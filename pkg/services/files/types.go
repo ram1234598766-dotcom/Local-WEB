@@ -67,6 +67,13 @@ type SyncProgress struct {
 	Complete  bool
 	BytesSent uint64
 	BytesRecv uint64
+
+	// TotalBytes is the size of the blocks the peer holds, which is the work
+	// this exchange covers. The engine measures it from its own block store
+	// rather than trusting a peer-supplied number.
+	TotalBytes int64
+	// Err is the last failure against this peer, if any.
+	Err string
 }
 
 // WantType indicates whether a peer has or wants a block.
@@ -110,6 +117,15 @@ type SyncEngine interface {
 	Sync(ctx context.Context, peerID [32]byte) error
 	WantList(ctx context.Context, peerID [32]byte) ([]cid.Cid, error)
 	ReceivedBlock(ctx context.Context, block *Block) error
+	// SetExchange gives the engine a way to reach peers. Without it Sync can
+	// only compute a diff.
+	SetExchange(ExchangeProtocol)
+	// SetHandler-ready block intake, installed on the exchange.
+	HandleBlock(ctx context.Context, peer [32]byte, msg *ExchangeMessage) error
+	// RecordPeerHave stores a have advertisement from a peer.
+	RecordPeerHave(peerID [32]byte, have []cid.Cid)
+	// Progress reports per-peer transfer state for the UI.
+	Progress() []SyncProgress
 	Start(ctx context.Context) error
 	Stop() error
 	Peers() []PeerInfo
