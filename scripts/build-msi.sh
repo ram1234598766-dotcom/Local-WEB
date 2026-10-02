@@ -17,6 +17,21 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${1:-${REPO_ROOT}/dist}"
 OUT_DIR="$(normalize_out_dir "${OUT_DIR}")"
 VERSION="${VERSION:-1.0.1}"
+
+# Product metadata, overridable the same way VERSION is. UpgradeCode is fixed on
+# purpose: it is what tells Windows a later build is the same product and should
+# upgrade in place rather than install alongside.
+PRODUCT_NAME="${PRODUCT_NAME:-LocalWEB}"
+MANUFACTURER="${MANUFACTURER:-LocalWEB Project}"
+UPGRADE_CODE="${UPGRADE_CODE:-{12345678-1234-1234-1234-123456789012}}"
+
+# MSI Version is three numeric fields, so a pre-release suffix such as 1.1.0-rc1
+# cannot be stamped and would be silently mangled. Fail rather than ship a package
+# whose stamped version is not the one that was asked for.
+if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "error: VERSION='${VERSION}' is not major.minor.build, which MSI Version requires" >&2
+  exit 1
+fi
 STAGE="$(make_stage_dir "${OUT_DIR}/.stage")"
 trap 'rm -rf "${STAGE}"' EXIT
 
@@ -74,7 +89,17 @@ WXS_ARG="$(to_tool_path "${CANDLE}" "${STAGE}/localweb.wxs")"
 OBJ_ARG="$(to_tool_path "${CANDLE}" "${STAGE}/localweb.wixobj")"
 
 echo "==> candle"
-"${CANDLE}" -nologo -arch x64 -out "${OBJ_ARG}" -ext WixUtilExtension "${WXS_ARG}"
+# Product metadata is passed here rather than left to the <?define ?> block in the
+# wxs. Without it the output is named localweb_1.1.0_...msi while the package inside
+# still reports 1.0.1, so Windows treats two different builds as the same product and
+# an upgrade silently does nothing. One VERSION now drives the filename and the
+# stamped ProductVersion together.
+"${CANDLE}" -nologo -arch x64 -out "${OBJ_ARG}" -ext WixUtilExtension \
+  "-dProductName=${PRODUCT_NAME}" \
+  "-dProductVersion=${VERSION}" \
+  "-dManufacturer=${MANUFACTURER}" \
+  "-dUpgradeCode=${UPGRADE_CODE}" \
+  "${WXS_ARG}"
 
 echo "==> light"
 mkdir -p "${OUT_DIR}"

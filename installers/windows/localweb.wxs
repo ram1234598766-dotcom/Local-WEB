@@ -1,10 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
-  <?define ProductName = "LocalWEB"?>
-  <?define ProductVersion = "1.0.1"?>
-  <?define Manufacturer = "LocalWEB Project"?>
-  <?define UpgradeCode = "{12345678-1234-1234-1234-123456789012}"?>
+  <!--
+    ProductName, ProductVersion, Manufacturer and UpgradeCode are NOT defined here.
+
+    They used to be, and that silently defeated every attempt to set them: a
+    <?define ?> in this file overrides a -d on the candle command line, so the
+    package kept reporting 1.0.1 whatever version the output file was named, and
+    Windows treated two different builds as one product so an upgrade did nothing.
+    candle now fails loudly if they are not passed, and scripts/build-msi.sh passes
+    them from VERSION and its neighbours.
+  -->
   <?define InstallDir = "ProgramFiles64Folder\LocalWEB"?>
   <?define SourceDir = "." ?>
   <?define IconFile = "icon.ico"?>
@@ -54,16 +60,25 @@
       BinaryKey, because a BinaryKey is launched as a PE image and pointing one
       at a .ps1 fails. Property + Value is Type 51, which must be immediate.
     -->
+    <!--
+      ExeCommand together with deferred and Impersonate="no" encodes custom action
+      type 34, which runs the command as SYSTEM after the files are in place, and it
+      carries the whole command line. Passing the command line as Value instead makes
+      WiX infer a property-based type that InstallServices rejects at run time with
+      error 2723, so the package builds cleanly and then fails to install with 1603.
+      WiX 3 has neither a Type attribute nor an Arguments attribute; the type and the
+      full command line both come from ExeCommand.
+    -->
     <CustomAction Id="ConfigureWintunAndFirewall"
                   Directory="INSTALLDIR"
-                  Value='"[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[INSTALLDIR]ServiceInstall.ps1" -Install -InstallDir "[INSTALLDIR]"'
+                  ExeCommand='"[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[INSTALLDIR]ServiceInstall.ps1" -Install -InstallDir "[INSTALLDIR]"'
                   Execute="deferred"
                   Impersonate="no"
                   Return="check" />
 
     <CustomAction Id="RemoveWintunAndFirewall"
                   Directory="INSTALLDIR"
-                  Value='"[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[INSTALLDIR]ServiceInstall.ps1" -Uninstall -InstallDir "[INSTALLDIR]"'
+                  ExeCommand='"[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[INSTALLDIR]ServiceInstall.ps1" -Uninstall -InstallDir "[INSTALLDIR]"'
                   Execute="deferred"
                   Impersonate="no"
                   Return="ignore" />
