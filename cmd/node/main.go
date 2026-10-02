@@ -77,6 +77,8 @@ func main() {
 	smtpAddr := flag.String("smtp-addr", "0.0.0.0:587", "SMTP listen address")
 	imapAddr := flag.String("imap-addr", "0.0.0.0:993", "IMAP listen address")
 	registryAddr := flag.String("registry-addr", "0.0.0.0:9092", "package registry listen address")
+	dhtAddr := flag.String("dht-addr", "0.0.0.0:9094", "dht listen address")
+	dhtAdvertise := flag.String("dht-advertise", "", "address peers should dial for the dht (e.g. 203.0.113.7:9094). Needed behind NAT, where nothing local can determine the public address; otherwise the primary outbound address is used")
 	dhtBootstrap := flag.String("dht-bootstrap", "", "comma-separated dht peer addresses to join a network (e.g. 10.0.0.5:7777). Without one this node serves but reaches no other node")
 	guiAddr := flag.String("gui-addr", "0.0.0.0:8080", "GUI dashboard listen address")
 
@@ -311,12 +313,14 @@ func main() {
 	// its listener is actually up, so the health endpoint keeps reporting the
 	// truth if one fails to bind.
 	stopServices := startServices(ctx, api, pub, *dataDir, server.Server, servicePorts{
-		dns:      *dnsPort,
-		http:     *httpAddr,
-		smtp:     *smtpAddr,
-		imap:     *imapAddr,
-		registry: *registryAddr,
-		dhtBoot:  splitList(*dhtBootstrap),
+		dns:       *dnsPort,
+		http:      *httpAddr,
+		smtp:      *smtpAddr,
+		imap:      *imapAddr,
+		registry:  *registryAddr,
+		dhtBoot:   splitList(*dhtBootstrap),
+		dhtListen: *dhtAddr,
+		dhtAdv:    *dhtAdvertise,
 	})
 	defer stopServices()
 
@@ -336,13 +340,14 @@ func main() {
 // passed together rather than as five parameters so a new service cannot be
 // added with its address silently pinned to a constant.
 type servicePorts struct {
-	dns      string
-	http     string
-	smtp     string
-	imap     string
-	registry string
-	dht      string
-	dhtBoot  []string
+	dns       string
+	http      string
+	smtp      string
+	imap      string
+	registry  string
+	dhtListen string
+	dhtAdv    string
+	dhtBoot   []string
 }
 
 // newDHTForNode builds a DHT node that listens and answers requests, so this
@@ -369,30 +374,95 @@ type servicePorts struct {
 // the routing table and re-publishes local metadata. A value is only pushed to
 // peers the publisher already knows, so without that loop a node that joined
 // after a publish would never learn the value existed.
-func newDHTForNode(ctx context.Context, pub [32]byte, bootstrap []string, stops *[]func()) (*dht.DHT, *dht.Server) {
+// dhtAdvertisedAddr decides what address peers are told to dial for the DHT.
+//
+// The bound address is usually a wildcard ("0.0.0.0:9094" or ":0"), and a remote
+// peer cannot dial 0.0.0.0, so publishing the bound address would make the node
+// look reachable while being unreachable. An explicit override always wins,
+// because a node behind NAT knows its public address and nothing local can work
+// it out. Otherwise a wildcard bind is paired with the primary outbound address.
+func dhtAdvertisedAddr(explicit, bound string) string {
+	if explicit != "" {
+		return explicit
+	}
+	host, port, err := net.SplitHostPort(bound)
+	if err != nil {
+		return bound
+	}
+	if host != "" && !isWildcardHost(host) && host != "localhost" {
+		// A specific non-loopback bind is already dialable by peers.
+		return bound
+	}
+	if ip := outboundIPv4(); ip != "" {
+		return net.JoinHostPort(ip, port)
+	}
+	// Nothing sensible to publish. Returning "" is honest: the caller skips
+	// advertising rather than handing peers a wildcard they cannot connect to.
+	return ""
+}
+
+func isWildcardHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsUnspecified()
+	}
+	return false
+}
+
+// outboundIPv4 finds the address the kernel would use to reach the internet.
+//
+// This opens a UDP socket and connects it, which sends no packets, then discards
+// the connection. The local address of that socket is the interface address that
+// would carry real traffic, which is what needs publishing.
+func outboundIPv4() string {
+	conn, err := net.Dial("udp4", "192.0.2.1:9") // TEST-NET-1, never routed
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || addr.IP == nil || addr.IP.IsLoopback() || addr.IP.IsUnspecified() {
+		return ""
+	}
+	return addr.IP.String()
+}
+
+func newDHTForNode(ctx context.Context, pub [32]byte, listen, advertise string, bootstrap []string, stops *[]func()) (*dht.DHT, *dht.Server) {
 	localID := dht.NodeIDFromPub(pub)
 	node := dht.NewDHT(localID, pub, "localweb", dht.TCPTransport{})
 
 	dhtSrv := dht.NewServer(node.Node())
-	if err := dhtSrv.Start("127.0.0.1:0"); err != nil {
+	if err := dhtSrv.Start(listen); err != nil {
 		log.Printf("dht: not serving: %v", err)
 		node.Stop()
 		return node, dhtSrv
 	}
 	*stops = append(*stops, func() { _ = dhtSrv.Stop() })
 
+	// Publishing the bound address is only correct when a peer can dial it, which a
+	// wildcard bind is not.
+	advertised := dhtAdvertisedAddr(advertise, dhtSrv.Addr())
+	dhtSrv.SetAdvertisedAddr(advertised)
+
 	// Bootstrap marks the node running and learns the seed peers.
 	if err := node.Bootstrap(ctx, bootstrap); err != nil {
 		log.Printf("dht: not started: %v", err)
 		return node, dhtSrv
 	}
-	if len(bootstrap) > 0 {
-		log.Printf("dht: bootstrapped from %v, serving on %s", bootstrap, dhtSrv.Addr())
-	} else {
+	switch {
+	case advertised == "":
+		// Said plainly rather than left implicit: with no dialable address this
+		// node reaches out but nothing can reach it.
+		log.Printf("dht: serving on %s but no dialable address could be determined, "+
+			"so no peer can connect to it (pass -dht-advertise host:port)", dhtSrv.Addr())
+	case len(bootstrap) > 0:
+		log.Printf("dht: bootstrapped from %v, serving on %s, advertised as %s",
+			bootstrap, dhtSrv.Addr(), advertised)
+	default:
 		// Said plainly rather than left implicit: with no seed this node is
 		// reachable but reaches nobody.
-		log.Printf("dht: serving on %s with no bootstrap peers, so it reaches no other node "+
-			"(pass -dht-bootstrap host:port to join a network)", dhtSrv.Addr())
+		log.Printf("dht: serving on %s, advertised as %s, with no bootstrap peers, so it "+
+			"reaches no other node (pass -dht-bootstrap host:port to join a network)",
+			dhtSrv.Addr(), advertised)
 	}
 	return node, dhtSrv
 }
@@ -636,9 +706,10 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 	// The index previously ran on a bare MemoryRegistry with no network behind
 	// it, so a package published here was visible to nothing but this node. The
 	// DHT is what makes a publish reach another node and a resolve come back.
-	dhtNode, dhtSrv := newDHTForNode(ctx, pub, ports.dhtBoot, &stops)
+	dhtNode, dhtSrv := newDHTForNode(ctx, pub, ports.dhtListen, ports.dhtAdv, ports.dhtBoot, &stops)
 	memReg := registry.NewMemoryRegistry()
-	dist := registry.NewDHTDistributorAt(dhtNode, pub, dhtSrv.Addr())
+	// The advertised address, not the bound one: a wildcard bind is not dialable.
+	dist := registry.NewDHTDistributorAt(dhtNode, pub, dhtSrv.AdvertisedAddr())
 	memReg.RegisterDistributor(dist)
 	// Keep the node reachable: re-announce, refresh the table, re-publish.
 	dist.Start(ctx, 30*time.Second)
@@ -657,7 +728,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 			return
 		}
 		api.SetServiceLive(true, "registry")
-		log.Printf("registry: index on %s, dht on %s", ports.registry, dhtSrv.Addr())
+		log.Printf("registry: index on %s, dht on %s", ports.registry, dhtSrv.AdvertisedAddr())
 	}()
 
 	// --- VPN: a real TUN device and a real ServiceVPN tunnel ---

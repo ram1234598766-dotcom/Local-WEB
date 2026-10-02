@@ -17,6 +17,9 @@ type Server struct {
 	ln     net.Listener
 	mu     sync.Mutex
 	closed bool
+	// advertised is the address published to peers when it differs from the bound
+	// one. Guarded by mu.
+	advertised string
 }
 
 func NewServer(node *Node) *Server {
@@ -99,6 +102,36 @@ func (s *Server) handleConn(conn net.Conn) {
 func (s *Server) Addr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ln == nil {
+		return ""
+	}
+	return s.ln.Addr().String()
+}
+
+// SetAdvertisedAddr sets the address peers should be told to dial.
+//
+// This is separate from Addr because binding and being reachable are different
+// questions. A node commonly binds a wildcard ("0.0.0.0:9094" or ":0"), and that
+// address is useless to publish: a remote peer cannot dial 0.0.0.0. Without this
+// the only way to be reachable is to bind a specific address, which rules out
+// listening on every interface.
+//
+// An empty value is allowed and means "publish the bound address", which is the
+// correct behaviour only when the bound address is one a peer can actually dial.
+func (s *Server) SetAdvertisedAddr(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.advertised = addr
+}
+
+// AdvertisedAddr returns the address to publish to peers: the override if one was
+// set, otherwise the bound address.
+func (s *Server) AdvertisedAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.advertised != "" {
+		return s.advertised
+	}
 	if s.ln == nil {
 		return ""
 	}
