@@ -107,30 +107,55 @@ else
     echo "WARNING: Failed to start LocalWEB service. Check logs with: journalctl -u localweb -f"
 fi
 
+# Ports the node actually listens on by default. Defined once so the three
+# backends below cannot drift apart again: 8080 used to be opened even though the
+# dashboard binds loopback, while every real service port was left closed.
+#
+# UDP: 4443 QUIC, 5353 DNS/mDNS discovery
+# TCP: 8082 HTTP gateway, 587 SMTP, 993 IMAP, 9092 registry, 9094 DHT
+#
+# 8080 is deliberately absent. The dashboard is unauthenticated and can write
+# files and restore backups, so it binds 127.0.0.1 unless an operator passes
+# -gui-addr 0.0.0.0:8080 deliberately.
+LOCALWEB_UDP_PORTS="4443 5353"
+LOCALWEB_TCP_PORTS="8082 587 993 9092 9094"
+
 # Configure firewall if ufw is available
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-    ufw allow 4443/udp comment "LocalWEB QUIC" 2>/dev/null || true
-    ufw allow 5353/udp comment "LocalWEB mDNS" 2>/dev/null || true
-    ufw allow 8080/tcp comment "LocalWEB GUI" 2>/dev/null || true
+    for port in $LOCALWEB_UDP_PORTS; do
+        ufw allow "$port/udp" comment "LocalWEB" 2>/dev/null || true
+    done
+    for port in $LOCALWEB_TCP_PORTS; do
+        ufw allow "$port/tcp" comment "LocalWEB" 2>/dev/null || true
+    done
     echo "Firewall rules added"
 fi
 
 # Configure firewall if firewalld is available
 if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
-    firewall-cmd --permanent --add-port=4443/udp 2>/dev/null || true
-    firewall-cmd --permanent --add-port=5353/udp 2>/dev/null || true
-    firewall-cmd --permanent --add-port=8080/tcp 2>/dev/null || true
+    for port in $LOCALWEB_UDP_PORTS; do
+        firewall-cmd --permanent --add-port="$port/udp" 2>/dev/null || true
+    done
+    for port in $LOCALWEB_TCP_PORTS; do
+        firewall-cmd --permanent --add-port="$port/tcp" 2>/dev/null || true
+    done
     firewall-cmd --reload 2>/dev/null || true
     echo "Firewalld rules added"
 fi
 
 # Configure iptables directly if available
 if command -v iptables >/dev/null 2>&1; then
-    iptables -A INPUT -p udp --dport 4443 -j ACCEPT 2>/dev/null || true
-    iptables -A INPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
-    iptables -A INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null || true
+    for port in $LOCALWEB_UDP_PORTS; do
+        iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || true
+    done
+    for port in $LOCALWEB_TCP_PORTS; do
+        iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
+    done
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
+
+echo "The dashboard (8080) was not opened: it binds 127.0.0.1 by default."
+echo "To reach it remotely, start the node with -gui-addr 0.0.0.0:8080 behind your own auth."
 
 # Create log directory
 mkdir -p /var/log/localweb

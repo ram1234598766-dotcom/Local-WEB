@@ -138,32 +138,61 @@ set_capabilities() {
     fi
 }
 
+# Ports the node actually listens on by default.
+#
+# These used to be spelled out separately in each of the three firewall
+# backends below, which is how they drifted: 8080 was opened even though the
+# dashboard binds loopback by default, while every real service port was left
+# closed. Listing them once keeps the backends in agreement with cmd/node.
+#
+# UDP: 4443 QUIC, 5353 DNS/mDNS discovery
+# TCP: 8082 HTTP gateway, 587 SMTP, 993 IMAP, 9092 registry, 9094 DHT
+#
+# The dashboard's 8080 is deliberately absent. It is unauthenticated and can
+# write files and restore backups, so it binds 127.0.0.1 unless an operator
+# passes -gui-addr 0.0.0.0:8080 deliberately.
+LOCALWEB_UDP_PORTS="4443 5353"
+LOCALWEB_TCP_PORTS="8082 587 993 9092 9094"
+
 # Configure firewall
 configure_firewall() {
     log_info "Configuring firewall..."
-    
+
     if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-        ufw allow 4443/udp comment "LocalWEB QUIC" >/dev/null 2>&1 || true
-        ufw allow 5353/udp comment "LocalWEB mDNS" >/dev/null 2>&1 || true
-        ufw allow 8080/tcp comment "LocalWEB GUI" >/dev/null 2>&1 || true
+        for port in $LOCALWEB_UDP_PORTS; do
+            ufw allow "$port/udp" comment "LocalWEB" >/dev/null 2>&1 || true
+        done
+        for port in $LOCALWEB_TCP_PORTS; do
+            ufw allow "$port/tcp" comment "LocalWEB" >/dev/null 2>&1 || true
+        done
         log_info "UFW rules added"
     elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --add-port=4443/udp >/dev/null 2>&1 || true
-        firewall-cmd --permanent --add-port=5353/udp >/dev/null 2>&1 || true
-        firewall-cmd --permanent --add-port=8080/tcp >/dev/null 2>&1 || true
+        for port in $LOCALWEB_UDP_PORTS; do
+            firewall-cmd --permanent --add-port="$port/udp" >/dev/null 2>&1 || true
+        done
+        for port in $LOCALWEB_TCP_PORTS; do
+            firewall-cmd --permanent --add-port="$port/tcp" >/dev/null 2>&1 || true
+        done
         firewall-cmd --reload >/dev/null 2>&1 || true
         log_info "Firewalld rules added"
     elif command -v iptables >/dev/null 2>&1; then
-        iptables -A INPUT -p udp --dport 4443 -j ACCEPT 2>/dev/null || true
-        iptables -A INPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
-        iptables -A INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null || true
+        for port in $LOCALWEB_UDP_PORTS; do
+            iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || true
+        done
+        for port in $LOCALWEB_TCP_PORTS; do
+            iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
+        done
         if command -v iptables-save >/dev/null 2>&1; then
             iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
         fi
         log_info "iptables rules added"
     else
-        log_warn "No supported firewall found. Please manually open ports: 4443/udp, 5353/udp, 8080/tcp"
+        log_warn "No supported firewall found. Open UDP $LOCALWEB_UDP_PORTS and TCP $LOCALWEB_TCP_PORTS manually."
     fi
+
+    log_info "The dashboard is not opened: it binds 127.0.0.1 by default."
+    log_info "To reach it from another machine, start the node with -gui-addr 0.0.0.0:8080"
+    log_info "and put your own authentication in front of it."
 }
 
 # Print node ID and next steps

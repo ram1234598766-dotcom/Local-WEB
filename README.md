@@ -124,7 +124,8 @@ These scripts automatically:
 **Post-install:**
 - LocalWEB service runs at boot (if selected)
 - Wintun driver installed to `C:\Windows\System32\drivers\wintun.dll`
-- Firewall rules created for ports 4443 (QUIC), 5353 (mDNS), 8080 (GUI)
+- Firewall rules added for the `localweb.exe` **program** (any port it uses, on
+  Domain and Private profiles only) — so no port list to keep in sync
 - Start Menu + Desktop shortcuts created
 
 **CLI:** `localweb-cli peers` (available in PATH after install)
@@ -198,6 +199,12 @@ setcap 'cap_net_admin,cap_net_bind_service,cap_net_raw,cap_sys_admin,cap_dac_ove
 ```
 
 **Firewall auto-configured:** ufw / firewalld / iptables
+
+Opens UDP `4443` (QUIC) and `5353` (DNS/mDNS), plus TCP `8082` (HTTP), `587`
+(SMTP), `993` (IMAP), `9092` (registry) and `9094` (DHT) — the ports the node
+actually listens on. The dashboard's `8080` is **not** opened, because it binds
+loopback by default. Uninstalling removes all of them, including `8080` so that
+upgrading from an older release clears the stale rule.
 
 **Uninstall:** `sudo dpkg -r localweb` / `sudo rpm -e localweb` / `apk del localweb`
 
@@ -319,17 +326,28 @@ after that first fetch. The shipped binaries contain no network dependency.
 
 ## 📦 9 Built-in Services
 
-| Service | Protocol | Port | Key Feature |
-|---------|----------|------|-------------|
-| **DNS** | mDNS/DoH | 5353 | `.localweb` TLD, signed records |
-| **HTTP** | HTTP/1.1 over QUIC | 8080 | Per-site routing, health |
-| **Email** | SMTP + IMAP | 587/993 | Maildir, PoW antispam |
-| **Messaging** | Pub/sub over QUIC | 9090 | Signed, offline queue |
-| **Files** | Bitswap-like over QUIC + WebRTC | 9091 | BlockStore + Merkle DAG sync; two nodes exchange blocks on their own |
-| **Docs** | RGA over messaging | 9092 | Real-time cursors/selections |
-| **Registry** | HTTP + DHT | 9093 | LWPKG (tar.gz + Ed25519 sig) |
-| **Voice** | WebRTC (ICE, Opus) | 9093 | Call state machine. Transport + Opus **decoder** real; **no encoder** yet, so it cannot send audio |
-| **VPN** | TUN + QUIC | 9094 | Route dist, split tunnel. Forwarding loop real and tested; no transport-side carrier yet |
+| Service | Protocol | Listens on | Key Feature |
+|---------|----------|-------------|-------------|
+| **Transport** | QUIC over Noise XX | `4443/udp` | The single socket every stream service below is multiplexed onto |
+| **DNS** | mDNS + UDP | `5353/udp` | `.localweb` TLD, signed records |
+| **HTTP** | HTTP/1.1 | `8082/tcp` | Per-site routing, health |
+| **Email** | SMTP + IMAP | `587/tcp`, `993/tcp` | Maildir, PoW antispam |
+| **Messaging** | QUIC stream (`ServiceMsg`) | — | Signed messages, offline queue. No listener of its own: it is a stream on the QUIC transport |
+| **Files** | QUIC stream + WebRTC SCTP (`ServiceFS`) | — | BlockStore + Merkle DAG sync; two nodes exchange blocks on their own |
+| **Docs** | QUIC stream (`ServiceDocs`) | — | RGA CRDT, presence and cursors broadcast over SSE |
+| **Registry** | HTTP + DHT | `9092/tcp`, DHT `9094/tcp` | LWPKG (tar.gz + Ed25519 sig) |
+| **Voice** | WebRTC ICE/DTLS/SRTP (`ServiceVoice`) | — | Opus always decodable; encoding needs `-tags libopus`, VP8/VP9 needs `-tags libvpx` |
+| **VPN** | QUIC stream (`ServiceVPN`) | — | Route dist, split tunnel. Forwarding loop and `StreamCarrier` real; opening a TUN device needs `CAP_NET_ADMIN` on Linux/macOS, and has no implementation on Windows |
+| **Dashboard** | HTTP over TCP | `127.0.0.1:8080` | Unauthenticated, loopback-only by default. Not a P2P service |
+
+**Why most rows have no port:** all the QUIC-stream services are multiplexed onto
+the single QUIC transport by a one-byte service ID. They do not each bind a
+socket, so there is nothing to firewall and nothing to configure. The ports that
+do exist are the ones with their own listener, plus the DHT, which speaks TCP on
+its own plane.
+
+`/api/services/health` reports which services are actually running, and
+`/api/voice/status` reports what a given binary can encode.
 
 ---
 
