@@ -443,7 +443,13 @@ func TestMultiPathSendToPeer(t *testing.T) {
 		return m, id, primary, backup, ble, wd
 	}
 
-	t.Run("non-failover duplicates the payload to every active link", func(t *testing.T) {
+	// This subtest previously asserted that a non-failover mode writes the whole
+	// payload to every active link, and was named to match. That assertion
+	// encoded a defect rather than a requirement: sending the same bytes twice
+	// over two links does not give the receiver redundancy, it gives it the
+	// stream twice, so every protocol layer above this one sees its own data
+	// interleaved with copies. A single write must travel over exactly one link.
+	t.Run("non-failover sends the payload over exactly one link", func(t *testing.T) {
 		m, id, primary, backup, ble, wd := setup(t)
 		defer m.Stop()
 
@@ -455,27 +461,35 @@ func TestMultiPathSendToPeer(t *testing.T) {
 		if n != len(payload) {
 			t.Errorf("SendToPeer returned n = %d, want %d", n, len(payload))
 		}
-		// BLE is the primary (2ms vs 40ms), so both it and the backup must
-		// have received the bytes.
-		if !primary.sink.waitForLen(len(payload), 2*time.Second) {
-			t.Errorf("primary sink = %q, want %q", primary.sink.bytes(), payload)
-		} else if got := string(primary.sink.bytes()); got != string(payload) {
-			t.Errorf("primary sink = %q, want %q", got, payload)
+
+		// Exactly one link must carry the bytes. The sinks are fed
+		// asynchronously, so wait for the write to land before inspecting them.
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if primary.sink.len() == len(payload) || backup.sink.len() == len(payload) {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		if !backup.sink.waitForLen(len(payload), 2*time.Second) {
-			t.Errorf("backup sink = %q, want %q", backup.sink.bytes(), payload)
-		} else if got := string(backup.sink.bytes()); got != string(payload) {
-			t.Errorf("backup sink = %q, want %q", got, payload)
+		gotPrimary, gotBackup := primary.sink.len(), backup.sink.len()
+		if gotPrimary != len(payload) && gotBackup != len(payload) {
+			t.Errorf("payload reached neither link: primary=%d backup=%d, want %d on one",
+				gotPrimary, gotBackup, len(payload))
+		}
+		if gotPrimary != 0 && gotBackup != 0 {
+			t.Errorf("payload was duplicated across links: primary=%d backup=%d",
+				gotPrimary, gotBackup)
 		}
 
+		// Whichever link carried it, only that link's byte counter moves.
 		links, ok := m.GetPeerLinks(id)
 		if !ok {
 			t.Fatal("GetPeerLinks reported the peer as unknown")
 		}
-		for _, mode := range []LinkMode{ModeBLE, ModeWiFiDirect} {
-			if got := links[mode].BytesSent; got != uint64(len(payload)) {
-				t.Errorf("%s BytesSent = %d, want %d", mode, got, len(payload))
-			}
+		total := links[ModeBLE].BytesSent + links[ModeWiFiDirect].BytesSent
+		if total != uint64(len(payload)) {
+			t.Errorf("total BytesSent = %d, want %d; the payload was counted more than once",
+				total, len(payload))
 		}
 		if got := ble.connectCallCount(); got != 1 {
 			t.Errorf("BLE Connect calls = %d, want 1", got)

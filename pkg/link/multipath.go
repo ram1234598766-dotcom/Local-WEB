@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ type PeerLinkSet struct {
 	connections map[LinkMode]*LinkConnection
 	primary     LinkMode
 	aggregated  AggregatedStats
+	// rrCursor advances on each round-robin write so consecutive writes take
+	// different links. It is guarded by mu like the rest of the set.
+	rrCursor uint64
 }
 
 // LinkConnection represents an active connection over a specific link.
@@ -437,7 +441,28 @@ func (m *MultiPathManager) ConnectToPeer(ctx context.Context, peer *PeerInfo) (m
 	return connections, nil
 }
 
-// SendToPeer sends data over all active links (for redundancy) or primary link.
+// SendToPeer writes data to one peer over exactly one of its active links.
+//
+// It previously wrote the whole payload to the primary link and then again to
+// every other active link for every mode except failover. That is not redundancy:
+// the receiver ends up with the same stream once per link, so any protocol above
+// this layer sees its data interleaved with copies of itself. A payload must
+// therefore travel over exactly one link per call.
+//
+// Each mode now selects which single link carries the write:
+//
+//   - AggregationFailover uses the primary link, and on a write error tries the
+//     remaining active links in order.
+//   - AggregationRoundRobin rotates a per-peer cursor across active links.
+//   - AggregationBandwidth prefers the link that has moved the most bytes per
+//     second since it came up.
+//   - AggregationLatency prefers the link with the lowest measured latency.
+//
+// These modes pick a link per write rather than striping one write across
+// several. Byte-level striping would need per-segment sequence numbers and a
+// reassembly step on the receiving side, and MultiPathManager has no receive path
+// to reassemble into, so splitting a single write would corrupt the stream. A
+// single copy per call is the most this layer can do correctly today.
 func (m *MultiPathManager) SendToPeer(peerID [32]byte, data []byte) (int, error) {
 	m.mu.RLock()
 	pls, exists := m.peerLinks[peerID]
@@ -447,38 +472,149 @@ func (m *MultiPathManager) SendToPeer(peerID [32]byte, data []byte) (int, error)
 		return 0, fmt.Errorf("peer %x not connected", peerID[:8])
 	}
 
-	pls.mu.RLock()
-	defer pls.mu.RUnlock()
+	// Ordering candidate links requires the write lock because the round-robin
+	// cursor advances on every call, and BytesSent is updated under it.
+	pls.mu.Lock()
+	defer pls.mu.Unlock()
 
-	// Send over primary link
-	primaryConn := pls.connections[pls.primary]
-	if primaryConn == nil || primaryConn.Conn == nil || !primaryConn.Active {
-		return 0, fmt.Errorf("no active primary connection")
+	candidates := pls.selectLinks(m.aggregation)
+	if len(candidates) == 0 {
+		return 0, fmt.Errorf("no active connection to peer %x", peerID[:8])
 	}
 
-	n, err := primaryConn.Conn.Write(data)
-	if err != nil {
-		return n, err
-	}
-
-	primaryConn.BytesSent += uint64(n)
-
-	// For redundancy, also send over other links (optional)
-	if m.aggregation == AggregationFailover {
-		return n, err
-	}
-
-	// Also send over backup links
-	for mode, conn := range pls.connections {
-		if mode == pls.primary || conn.Conn == nil || !conn.Active {
+	var lastErr error
+	for i, conn := range candidates {
+		n, err := conn.ptr.Conn.Write(data)
+		if err != nil {
+			lastErr = fmt.Errorf("write over %v: %w", conn.mode, err)
+			// Failover retries on the next link; the other modes report the
+			// failure, because silently moving a stream between links mid-write
+			// would leave the peer's reader with a gap.
+			if m.aggregation != AggregationFailover {
+				return n, lastErr
+			}
 			continue
 		}
-		if n, err := conn.Conn.Write(data); err == nil {
-			conn.BytesSent += uint64(n)
+		conn.ptr.BytesSent += uint64(n)
+		conn.ptr.LastUpdate = time.Now()
+
+		if i == 0 {
+			// The link that carried the write becomes the primary, so subsequent
+			// calls start from where the traffic actually is.
+			pls.primary = conn.mode
 		}
+		return n, nil
 	}
 
-	return n, err
+	return 0, lastErr
+}
+
+// selectedLink is one candidate connection plus the mode it belongs to, so
+// selectLinks can report which link carried a write.
+type selectedLink struct {
+	mode LinkMode
+	ptr  *LinkConnection
+}
+
+// selectLinks orders the active, connected links according to the aggregation
+// mode. The caller must hold pls.mu for writing.
+//
+// A connection with no Link behind it cannot carry traffic, and one with no
+// net.Conn has not been dialled, so both are excluded rather than attempted.
+func (pls *PeerLinkSet) selectLinks(mode AggregationMode) []selectedLink {
+	conns := pls.activeConnections()
+	usable := make([]selectedLink, 0, len(conns))
+	for _, c := range conns {
+		if c.Link == nil || c.Conn == nil {
+			continue
+		}
+		usable = append(usable, selectedLink{mode: c.modeOf(pls), ptr: c})
+	}
+	if len(usable) == 0 {
+		return nil
+	}
+
+	// A stable base order keeps the non-rotating modes deterministic: map
+	// iteration order is randomised in Go, which would otherwise make link
+	// selection vary run to run. The current primary leads the list, so a tie
+	// between two links with no measurements yet keeps the one already known to
+	// work instead of an arbitrary one.
+	sort.SliceStable(usable, func(i, j int) bool {
+		return usable[i].mode < usable[j].mode
+	})
+	usable = pls.primaryFirst(usable)
+
+	switch mode {
+	case AggregationRoundRobin:
+		start := int(pls.rrCursor) % len(usable)
+		out := make([]selectedLink, 0, len(usable))
+		for i := 0; i < len(usable); i++ {
+			out = append(out, usable[(start+i)%len(usable)])
+		}
+		pls.rrCursor++
+		return out
+
+	case AggregationBandwidth:
+		sort.SliceStable(usable, func(i, j int) bool {
+			return usable[i].ptr.throughput() > usable[j].ptr.throughput()
+		})
+		return usable
+
+	case AggregationLatency:
+		sort.SliceStable(usable, func(i, j int) bool {
+			return usable[i].ptr.Latency < usable[j].ptr.Latency
+		})
+		return usable
+
+	default: // AggregationFailover
+		return usable
+	}
+}
+
+// primaryFirst moves the current primary link to the front of the list.
+func (pls *PeerLinkSet) primaryFirst(in []selectedLink) []selectedLink {
+	for i, u := range in {
+		if u.mode == pls.primary {
+			if i == 0 {
+				return in
+			}
+			out := make([]selectedLink, 0, len(in))
+			out = append(out, u)
+			out = append(out, in[:i]...)
+			out = append(out, in[i+1:]...)
+			return out
+		}
+	}
+	return in
+}
+
+// modeOf reports the mode whose connection entry this is.
+func (c *LinkConnection) modeOf(pls *PeerLinkSet) LinkMode {
+	for mode, conn := range pls.connections {
+		if conn == c {
+			return mode
+		}
+	}
+	return ModeNone
+}
+
+// throughput ranks links for the bandwidth-weighted aggregation mode.
+//
+// Dividing by the time since the connection came up is unstable for a young
+// connection: a link established a millisecond ago has an elapsed time near zero,
+// so the rate is dominated by the denominator and every fresh link measures as
+// zero. Below one second of observation the absolute volume is used instead,
+// which at least orders the links correctly, and once a link has been up long
+// enough the true rate takes over.
+func (c *LinkConnection) throughput() float64 {
+	if c.Established.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(c.Established).Seconds()
+	if elapsed < 1 {
+		return float64(c.BytesSent)
+	}
+	return float64(c.BytesSent) / elapsed
 }
 
 // GetAggregatedStats returns aggregate stats for a peer.

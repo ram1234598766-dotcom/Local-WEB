@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -61,6 +62,20 @@ func main() {
 	// service contract; -dns-port exists for the desktop case.
 	dnsPort := flag.String("dns-port", "5353",
 		"DNS service UDP port (5353 is mDNS and is often already taken by the OS resolver)")
+
+	// Service listen ports. Each is a flag because several of the documented
+	// defaults collide with something else on an ordinary machine, and a node
+	// that cannot bind one should not be a node that fails to start.
+	//
+	// The HTTP gateway defaults to 8082 rather than 8081: 8081 is the port the
+	// built-in example echo plugin binds, and the plugin host's own tests bind
+	// it to prove a busy port is reported. Sharing it meant running a node made
+	// those tests fail.
+	httpAddr := flag.String("http-addr", "0.0.0.0:8082", "HTTP gateway listen address")
+	smtpAddr := flag.String("smtp-addr", "0.0.0.0:587", "SMTP listen address")
+	imapAddr := flag.String("imap-addr", "0.0.0.0:993", "IMAP listen address")
+	registryAddr := flag.String("registry-addr", "0.0.0.0:9092", "package registry listen address")
+	guiAddr := flag.String("gui-addr", "0.0.0.0:8080", "GUI dashboard listen address")
 
 	// The daemon has no subcommands, but the packaging and service files all
 	// invoke it as `localweb node --data-dir ...`. flag.Parse stops at the
@@ -292,12 +307,18 @@ func main() {
 	// Each service is started in its own goroutine and marked running only once
 	// its listener is actually up, so the health endpoint keeps reporting the
 	// truth if one fails to bind.
-	stopServices := startServices(ctx, api, pub, *dataDir, *dnsPort)
+	stopServices := startServices(ctx, api, pub, *dataDir, servicePorts{
+		dns:      *dnsPort,
+		http:     *httpAddr,
+		smtp:     *smtpAddr,
+		imap:     *imapAddr,
+		registry: *registryAddr,
+	})
 	defer stopServices()
 
 	guiHandler := gui.NewHandler(api)
 	go func() {
-		if err := guiHandler.ListenAndServe("0.0.0.0:8080"); err != nil {
+		if err := guiHandler.ListenAndServe(*guiAddr); err != nil {
 			log.Printf("gui server: %v", err)
 		}
 	}()
@@ -305,6 +326,17 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("shutting down")
+}
+
+// servicePorts carries the listen address for each protocol service. They are
+// passed together rather than as five parameters so a new service cannot be
+// added with its address silently pinned to a constant.
+type servicePorts struct {
+	dns      string
+	http     string
+	smtp     string
+	imap     string
+	registry string
 }
 
 // startServices brings up every protocol service that has a real listener and
@@ -350,7 +382,22 @@ func portOf(addr string) string {
 	return port
 }
 
-func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir, dnsPort string) func() {
+// portNum returns the numeric port from addr, or 0 when there is none. The email
+// configs take an int, so an unparsable address must not silently become a
+// plausible-looking number.
+func portNum(addr string) int {
+	p := portOf(addr)
+	if p == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir string, ports servicePorts) func() {
 	var stops []func()
 
 	// --- DNS: a real UDP listener ---
@@ -371,7 +418,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 		Data:   []byte{127, 0, 0, 1},
 	}}
 	dnsSrv := dns.NewServer(dnsZone, nil)
-	dnsAddr := "0.0.0.0:" + dnsPort
+	dnsAddr := "0.0.0.0:" + ports.dns
 	go func() {
 		if err := dnsSrv.Start(ctx, dnsAddr); err != nil {
 			log.Printf("dns: not started on %s: %v (5353 is mDNS and may already be in use; override with -dns-port)", dnsAddr, err)
@@ -391,16 +438,15 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 	// Gateway.Start blocks in ListenAndServe, so its return value only arrives
 	// at shutdown. Health is therefore driven by probing the port, not by the
 	// return, otherwise a gateway that is genuinely serving still reports down.
-	httpAddr := "0.0.0.0:8081"
 	gatewayErr := make(chan error, 1)
-	go func() { gatewayErr <- gateway.Start(ctx, httpAddr) }()
+	go func() { gatewayErr <- gateway.Start(ctx, ports.http) }()
 	go func() {
-		if waitForTCP(ctx, httpAddr, 10*time.Second) {
+		if waitForTCP(ctx, ports.http, 10*time.Second) {
 			api.SetServiceLive(true, "http")
 			api.SetHTTPSites([]gui.HTTPSiteResponse{{
 				Name: "gui.localweb", Status: "active", Routes: 1,
 			}})
-			log.Printf("http: gateway reachable on %s", httpAddr)
+			log.Printf("http: gateway reachable on %s", ports.http)
 			return
 		}
 		// The port never accepted a connection: report the real reason.
@@ -408,7 +454,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 		case err := <-gatewayErr:
 			log.Printf("http: not started: %v", err)
 		default:
-			log.Printf("http: not reachable on %s", httpAddr)
+			log.Printf("http: not reachable on %s", ports.http)
 		}
 		api.SetServiceLive(false, "http")
 	}()
@@ -423,12 +469,12 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 	mailbox := email.NewMailboxStore(filepath.Join(dataDir, "mail"))
 	creds := email.NewCredentialStore()
 	queue := email.NewQueue()
-	smtpLn, serr := net.Listen("tcp", "0.0.0.0:587")
+	smtpLn, serr := net.Listen("tcp", ports.smtp)
 	if serr != nil {
 		log.Printf("email: smtp not started: %v", serr)
 	} else {
 		smtpSrv, cerr := email.NewSMTPServer(ctx, &email.SMTPConfig{
-			Hostname: "node.localweb", Port: 587, MaxSize: 32 << 20,
+			Hostname: "node.localweb", Port: portNum(ports.smtp), MaxSize: 32 << 20,
 			Listener: smtpLn, DB: mailbox, Queue: queue, Credentials: creds,
 		})
 		if cerr != nil {
@@ -437,15 +483,15 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 		} else {
 			emailUp = true
 			stops = append(stops, smtpSrv.Stop)
-			log.Printf("email: smtp listening on :587")
+			log.Printf("email: smtp listening on %s", ports.smtp)
 		}
 	}
-	imapLn, ierr := net.Listen("tcp", "0.0.0.0:993")
+	imapLn, ierr := net.Listen("tcp", ports.imap)
 	if ierr != nil {
 		log.Printf("email: imap not started: %v", ierr)
 	} else {
 		imapSrv, cerr := email.NewIMAPServer(ctx, &email.IMAPConfig{
-			Hostname: "node.localweb", Port: 993,
+			Hostname: "node.localweb", Port: portNum(ports.imap),
 			Listener: imapLn, DB: mailbox, Credentials: creds,
 		})
 		if cerr != nil {
@@ -454,7 +500,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 		} else {
 			emailUp = true
 			stops = append(stops, imapSrv.Stop)
-			log.Printf("email: imap listening on :993")
+			log.Printf("email: imap listening on %s", ports.imap)
 		}
 	}
 	api.SetServiceLive(emailUp, "email")
@@ -496,7 +542,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 	}
 
 	// --- Registry: a real HTTP index ---
-	regSrv := registry.NewHTTPServer(registry.ServerConfig{Addr: "0.0.0.0:9092"})
+	regSrv := registry.NewHTTPServer(registry.ServerConfig{Addr: ports.registry})
 	go func() {
 		if err := regSrv.Start(); err != nil {
 			log.Printf("registry: not started: %v", err)
@@ -504,7 +550,7 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir,
 			return
 		}
 		api.SetServiceLive(true, "registry")
-		log.Printf("registry: index listening on :9092")
+		log.Printf("registry: index listening on %s", ports.registry)
 	}()
 
 	// The remaining three stay false and that is the honest state.
