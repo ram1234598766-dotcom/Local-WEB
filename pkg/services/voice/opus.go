@@ -1,11 +1,14 @@
 package voice
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"sync"
 
 	"github.com/pion/opus"
+	"github.com/pion/webrtc/v4"
 )
 
 // Opus constants for the media path.
@@ -35,6 +38,24 @@ const (
 // ErrNoOpusEncoder is returned by SendPCM. It is a specific error so a caller
 // can tell "no encoder linked" apart from a transport failure.
 var ErrNoOpusEncoder = fmt.Errorf("no Opus encoder is linked into this build")
+
+// defaultOpusBitrate is what the encoder is opened at. 32 kbps is a reasonable
+// voice bitrate in opus' own recommendation range (6-510 kbps) for VOIP.
+const defaultOpusBitrate = 32000
+
+// newSSRC picks a synchronisation source for an outgoing track. The value only
+// has to be distinct within an RTP session, not unpredictable.
+func newSSRC() webrtc.SSRC {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 1
+	}
+	ssrc := webrtc.SSRC(binary.BigEndian.Uint32(b[:]))
+	if ssrc == 0 {
+		return 1
+	}
+	return ssrc
+}
 
 // OpusDecoder decodes Opus packets to PCM.
 //
@@ -97,11 +118,21 @@ func FrameCount(samples []int16) int {
 	return len(samples) / (OpusFrameSize * OpusChannels)
 }
 
-// TonePCM builds a deterministic stereo sine wave, so a decode result can be
+// TonePCM builds a deterministic stereo sine wave, so a codec result can be
 // checked for carrying signal rather than merely for not erroring.
+//
+// frames counts 20 ms frames, so TonePCM(1, 440) returns exactly one frame's
+// worth of interleaved samples - which is what the Opus encoder requires.
+//
+// This used to allocate frames*OpusChannels samples, so TonePCM(1, 440) returned
+// two samples rather than one frame, and the sine never swung: the phase was
+// sampled once per stereo pair. The decoder test passed OpusFrameSize as the
+// frame count to compensate, which hid it. The encoder rejects any frame that
+// is not exactly OpusFrameSize*OpusChannels samples, so the two cancelled.
 func TonePCM(frames, freq int) []int16 {
-	out := make([]int16, frames*OpusChannels)
-	for i := 0; i < frames; i++ {
+	total := frames * OpusFrameSize * OpusChannels
+	out := make([]int16, total)
+	for i := 0; i < frames*OpusFrameSize; i++ {
 		v := int16(12000 * math.Sin(2*math.Pi*float64(freq*i)/float64(OpusSampleRate)))
 		out[i*2] = v
 		out[i*2+1] = v

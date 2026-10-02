@@ -208,7 +208,15 @@ func TestWebRTCDataChannelTransfersPayloadIntact(t *testing.T) {
 // SendPCM must report honestly that this build has no Opus encoder, rather than
 // transmitting raw PCM under an Opus payload type that a browser would decode
 // as noise.
-func TestWebRTCSendPCMReportsNoEncoder(t *testing.T) {
+// A session with no send path must refuse audio rather than dropping it
+// silently.
+//
+// The original test asserted the error was exactly ErrNoOpusEncoder. That is
+// right in a default build, but with -tags libopus an encoder *is* linked and
+// the failure is the missing send path instead, so asserting one specific error
+// would break the build that actually has a codec. What matters either way is
+// that SendPCM does not report success.
+func TestSendPCMRefusesWhenThereIsNoSendPath(t *testing.T) {
 	s, err := NewWebRTCSession("offerer")
 	if err != nil {
 		t.Fatalf("NewWebRTCSession: %v", err)
@@ -219,8 +227,13 @@ func TestWebRTCSendPCMReportsNoEncoder(t *testing.T) {
 	}
 
 	err = s.SendPCM(TonePCM(1, 440))
-	if !errors.Is(err, ErrNoOpusEncoder) {
-		t.Errorf("SendPCM error = %v, want ErrNoOpusEncoder", err)
+	if err == nil {
+		t.Fatal("SendPCM on a recvonly session must error, not silently drop audio")
+	}
+	// With no encoder linked the reason must name that, so a caller can tell
+	// "not built with a codec" from "not connected to a track".
+	if !opusEncoderAvailable() && !errors.Is(err, ErrNoOpusEncoder) {
+		t.Errorf("SendPCM error = %v, want ErrNoOpusEncoder in a build with no encoder", err)
 	}
 }
 
@@ -246,7 +259,7 @@ func TestOpusDecoderRejectsBadInput(t *testing.T) {
 }
 
 func TestFrameCountAndTone(t *testing.T) {
-	pcm := TonePCM(OpusFrameSize, 440) // one full frame, so the sine actually swings
+	pcm := TonePCM(1, 440) // one full frame, so the sine actually swings
 	if got := FrameCount(pcm); got != 1 {
 		t.Errorf("FrameCount = %d, want 1", got)
 	}

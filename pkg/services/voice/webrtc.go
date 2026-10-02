@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/rs/zerolog/log"
 )
 
 // WebRTCSession is a real WebRTC peer connection.
@@ -34,6 +36,15 @@ type WebRTCSession struct {
 	remoteSDP atomicString
 	onTrack   func(*webrtc.TrackRemote)
 	dataChans map[string]*webrtc.DataChannel
+
+	// Send path. Populated by PrepareAudio when the direction includes sending.
+	track      *webrtc.TrackLocalStaticRTP
+	encoder    *OpusEncoder
+	pcmIn      chan []int16
+	pumpCancel context.CancelFunc
+	ssrc       webrtc.SSRC
+	seq        uint16
+	timestamp  uint32
 }
 
 // atomicString is a tiny mutex-guarded string; the session keeps the last remote
@@ -134,13 +145,170 @@ func (s *WebRTCSession) ConnectionState() webrtc.PeerConnectionState {
 //
 // A node is normally the receiver in a call, since the browser on the far end
 // is what encodes, so RecvOnly is the sensible default.
+// PrepareAudio adds the audio transceiver and, when the direction includes
+// sending, attaches a real local track and starts the encoder pump.
+//
+// The transceiver alone was not a send path: there was no local track behind it,
+// so even with an encoder there would have been nothing to write RTP to.
 func (s *WebRTCSession) PrepareAudio(direction webrtc.RTPTransceiverDirection) (*webrtc.RTPTransceiver, error) {
 	tr, err := s.pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio,
 		webrtc.RTPTransceiverInit{Direction: direction})
 	if err != nil {
 		return nil, fmt.Errorf("add audio transceiver: %w", err)
 	}
+
+	if direction != webrtc.RTPTransceiverDirectionSendrecv &&
+		direction != webrtc.RTPTransceiverDirectionSendonly {
+		return tr, nil
+	}
+
+	track, err := webrtc.NewTrackLocalStaticRTP(opusCodecCapability(), "audio", "localweb-opus")
+	if err != nil {
+		return nil, fmt.Errorf("create local audio track: %w", err)
+	}
+	// RTPTransceiverInit has no Senders field, so the track is attached to the
+	// transceiver's sender instead.
+	if err := tr.Sender().ReplaceTrack(track); err != nil {
+		return nil, fmt.Errorf("attach local audio track: %w", err)
+	}
+	if err := s.startSending(track); err != nil {
+		return nil, err
+	}
 	return tr, nil
+}
+
+// opusCodecCapability is the RFC 7587 Opus capability: 48 kHz, stereo.
+func opusCodecCapability() webrtc.RTPCodecCapability {
+	return webrtc.RTPCodecCapability{
+		MimeType:  "audio/opus",
+		ClockRate: OpusSampleRate,
+		Channels:  OpusChannels,
+	}
+}
+
+// startSending wires an encoder to a local track and starts the pump that turns
+// queued PCM into RTP.
+func (s *WebRTCSession) startSending(track *webrtc.TrackLocalStaticRTP) error {
+	enc, err := NewOpusEncoder(defaultOpusBitrate)
+	if err != nil {
+		return err
+	}
+
+	pumpCtx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		cancel()
+		_ = enc.Close()
+		return fmt.Errorf("session is closed")
+	}
+	s.track = track
+	s.encoder = enc
+	s.pcmIn = make(chan []int16, 64)
+	s.pumpCancel = cancel
+	s.ssrc = newSSRC()
+	s.mu.Unlock()
+
+	go s.encodePump(pumpCtx, track, enc)
+	return nil
+}
+
+// encodePump is the 20 ms clock: take queued PCM, encode it, write one RTP
+// packet with the right sequence number and timestamp.
+func (s *WebRTCSession) encodePump(ctx context.Context, track *webrtc.TrackLocalStaticRTP, enc *OpusEncoder) {
+	s.mu.Lock()
+	in := s.pcmIn
+	s.mu.Unlock()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case pcm, ok := <-in:
+			if !ok {
+				return
+			}
+			packet, err := enc.EncodePCM(pcm)
+			if err != nil {
+				// A bad frame must not kill the pump; the next one may be fine.
+				log.Warn().Err(err).Msg("voice: opus encode failed")
+				continue
+			}
+			if err := track.WriteRTP(&rtp.Packet{
+				Header: rtp.Header{
+					Version:        2,
+					PayloadType:    OpusPayloadTyp,
+					SequenceNumber: s.nextSequence(),
+					Timestamp:      s.nextTimestamp(),
+					SSRC:           uint32(s.ssrcValue()),
+				},
+				Payload: packet,
+			}); err != nil {
+				if ctx.Err() == nil {
+					log.Warn().Err(err).Msg("voice: could not write an rtp packet")
+				}
+				return
+			}
+		}
+	}
+}
+
+func (s *WebRTCSession) nextSequence() uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	return s.seq
+}
+
+func (s *WebRTCSession) nextTimestamp() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.timestamp += opusFrameDuration
+	return s.timestamp
+}
+
+func (s *WebRTCSession) ssrcValue() webrtc.SSRC {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ssrc
+}
+
+// SendPCM encodes and sends one 20 ms frame of interleaved stereo samples.
+//
+// It returns ErrNoOpusEncoder in a build without the `libopus` tag, rather than
+// transmitting raw PCM under an Opus payload type, which a browser would decode
+// as noise.
+func (s *WebRTCSession) SendPCM(pcm []int16) error {
+	s.mu.Lock()
+	track := s.track
+	in := s.pcmIn
+	closed := s.closed
+	s.mu.Unlock()
+
+	if closed {
+		return fmt.Errorf("session is closed")
+	}
+	if !opusEncoderAvailable() {
+		return ErrNoOpusEncoder
+	}
+	if track == nil || in == nil {
+		return fmt.Errorf("this session has no audio send path: prepare the transceiver as sendrecv or sendonly")
+	}
+	if len(pcm) != OpusFrameSize*OpusChannels {
+		return fmt.Errorf("expected %d samples for one %d ms frame, got %d",
+			OpusFrameSize*OpusChannels, OpusFrameMs, len(pcm))
+	}
+
+	// The caller may reuse its buffer, so the frame is copied before it is
+	// queued rather than referenced.
+	cp := make([]int16, len(pcm))
+	copy(cp, pcm)
+	select {
+	case in <- cp:
+		return nil
+	default:
+		return fmt.Errorf("the audio send queue is full: the encoder is not keeping up")
+	}
 }
 
 // Offer creates an SDP offer and waits for ICE gathering to finish.
@@ -266,15 +434,6 @@ func (s *WebRTCSession) DecodeInboundPacket(packet []byte) ([]int16, error) {
 	return dec.DecodeToPCM(packet)
 }
 
-// SendPCM is not supported: this build has no Opus encoder.
-//
-// It returns ErrNoOpusEncoder rather than transmitting raw PCM under an Opus
-// payload type, which a browser would decode as noise. A node in a call receives
-// media - the browser on the far end does the encoding.
-func (s *WebRTCSession) SendPCM(pcm []int16) error {
-	return ErrNoOpusEncoder
-}
-
 // Close tears the session down.
 func (s *WebRTCSession) Close() error {
 	s.mu.Lock()
@@ -285,8 +444,19 @@ func (s *WebRTCSession) Close() error {
 	s.closed = true
 	dec := s.decoder
 	s.decoder = nil
+	enc := s.encoder
+	s.encoder = nil
+	s.track = nil
+	cancel := s.pumpCancel
+	s.pumpCancel = nil
 	s.mu.Unlock()
 
+	if cancel != nil {
+		cancel()
+	}
+	if enc != nil {
+		_ = enc.Close()
+	}
 	if dec != nil {
 		_ = dec.Close()
 	}

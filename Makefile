@@ -166,8 +166,9 @@ OFFLINE_ENV = GOPROXY=off GOFLAGS=-mod=vendor GOTOOLCHAIN=local
 verify-offline:
 	@$(OFFLINE_ENV) $(GO) build ./...
 	@$(OFFLINE_ENV) $(GO) vet ./...
+	@$(OFFLINE_ENV) $(GO) test ./...
 	@GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=vendor bash scripts/check-offline.sh
-	@echo "offline: build, vet and static reference checks all passed with no network access"
+	@echo "offline: build, vet, test and static reference checks all passed with no network access"
 
 # Dry run only. goreleaser v2 also produces the real release, so it is not
 # invoked by any target here.
