@@ -170,6 +170,12 @@ func (s *Server) forwardInbound(ctx context.Context, iface Interface, carrier Ca
 		}
 		packet, err := carrier.Recv(ctx)
 		if err != nil {
+			// Previously this returned silently, which made "the peer sent
+			// nothing" and "the carrier failed immediately" indistinguishable:
+			// a broken stream looked exactly like an idle tunnel.
+			if ctx.Err() == nil {
+				log.Warn().Err(err).Msg("vpn: inbound carrier stopped")
+			}
 			return
 		}
 		if len(packet) == 0 {
@@ -192,6 +198,26 @@ func (s *Server) Stats() (forwarded, delivered uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.forwarded, s.delivered
+}
+
+// HasDevice reports whether a real tunnel device was opened.
+//
+// A node without one can still hold tunnel state, but no packet can cross it,
+// so this is what the daemon uses to decide whether to claim the service is up.
+func (s *Server) HasDevice() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.iface != nil
+}
+
+// DeviceName returns the tunnel interface name, or "" when there is none.
+func (s *Server) DeviceName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iface == nil {
+		return ""
+	}
+	return s.iface.Name()
 }
 
 func (s *Server) CreateTunnel(ctx context.Context, peerID [32]byte, addr string) (TunnelID, error) {

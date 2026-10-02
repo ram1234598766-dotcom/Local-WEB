@@ -73,6 +73,16 @@ type Stream interface {
 	ServiceID() ServiceID
 	ID() uint64
 	PeerID() [32]byte
+
+	// SetReadDeadline and SetWriteDeadline bound a blocked read or write.
+	//
+	// These were missing, which the layer-1 audit had already flagged as a red
+	// flag: a service that read a stream in a loop could block for ever on a peer
+	// that stopped sending, and nothing in the daemon could interrupt it. A
+	// caller that needs a bounded read (the VPN carrier does) had no way to ask
+	// for one.
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
 }
 
 // RelayInfo holds information about a circuit relay.

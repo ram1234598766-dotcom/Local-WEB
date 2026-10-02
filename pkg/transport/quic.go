@@ -233,6 +233,7 @@ func (s *Server) serveStreams(conn *Connection, qc *quic.Conn) {
 		if err != nil {
 			// The connection is finished, whether the server shut down or the
 			// peer went away.
+			log.Debug().Err(err).Str("peer", fmt.Sprintf("%x", conn.peerID[:8])).Msg("stream accept loop ended")
 			break
 		}
 
@@ -774,6 +775,14 @@ func (w *quicStream) Close() error                { return w.q.Close() }
 func (w *quicStream) ServiceID() ServiceID        { return w.svcID }
 func (w *quicStream) ID() uint64                  { return uint64(w.q.StreamID()) }
 func (w *quicStream) PeerID() [32]byte            { return w.peerID }
+
+// SetReadDeadline bounds a blocked Read. quic-go surfaces an exceeded deadline
+// as a net.Error with Timeout() true, so a caller can distinguish a slow peer
+// from a closed connection.
+func (w *quicStream) SetReadDeadline(t time.Time) error { return w.q.SetReadDeadline(t) }
+
+// SetWriteDeadline bounds a blocked Write.
+func (w *quicStream) SetWriteDeadline(t time.Time) error { return w.q.SetWriteDeadline(t) }
 
 // MaxFrameSize is the maximum allowed payload size for a single frame (1 MiB).
 const MaxFrameSize = 1 << 20

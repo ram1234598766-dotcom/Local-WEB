@@ -29,6 +29,7 @@ import (
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/files"
 	httpsvc "github.com/ram1234598766-dotcom/Local-WEB/pkg/services/http"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/registry"
+	"github.com/ram1234598766-dotcom/Local-WEB/pkg/services/vpn"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/store"
 	"github.com/ram1234598766-dotcom/Local-WEB/pkg/transport"
 )
@@ -626,8 +627,27 @@ func startServices(ctx context.Context, api *gui.NodeAPI, pub [32]byte, dataDir 
 		log.Printf("registry: index on %s, dht on %s", ports.registry, dhtSrv.Addr())
 	}()
 
-	// The remaining three stay false and that is the honest state.
-	for _, name := range []string{"messaging", "voice", "vpn"} {
+	// --- VPN: a real TUN device and a real ServiceVPN tunnel ---
+	//
+	// The service registers a transport handler so a peer can open a VPN stream,
+	// and the forwarding loop carries packets over it. A tunnel is only possible
+	// where the operating system lets this process open a TUN device, which
+	// needs root or CAP_NET_ADMIN; where it cannot, the service stays reported as
+	// not running rather than claiming a tunnel that carries nothing.
+	vpnSrv := vpn.NewServer(crypto.NodeID(pub))
+	if vpnSrv.HasDevice() {
+		srv.RegisterHandler(transport.ServiceVPN, vpnSrv.ServiceHandler(func(st transport.Stream) [32]byte {
+			return st.PeerID()
+		}))
+		api.SetServiceLive(true, "vpn")
+		log.Printf("vpn: tun device %q up, serviceVPN handler registered", vpnSrv.DeviceName())
+	} else {
+		api.SetServiceLive(false, "vpn")
+		log.Printf("vpn: no tun device (needs root or CAP_NET_ADMIN), service not started")
+	}
+
+	// The remaining two stay false and that is the honest state.
+	for _, name := range []string{"messaging", "voice"} {
 		api.SetServiceLive(false, name)
 	}
 
