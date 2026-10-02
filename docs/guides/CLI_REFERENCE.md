@@ -76,7 +76,7 @@ Start the node daemon.
 ```bash
 localweb-cli node                                    # Start with defaults
 localweb-cli node --name "my-laptop"                # Set display name
-localweb-cli node --listen :4444                    # Custom port
+localweb-cli node -addr 0.0.0.0:4444                # Custom port
 localweb-cli node --storage ./data                  # Custom storage path
 localweb-cli node --data-dir ./keys                 # Custom identity path
 localweb-cli node --rendezvous https://server.url   # Enable federation

@@ -427,9 +427,9 @@ make cross-compile
 ## 🌐 Web GUI (Optional)
 
 ```bash
-# Enable web dashboard (loopback only by default, and unauthenticated)
-go run ./cmd/node --dashboard
-# Open http://localhost:8080
+# The dashboard starts with the node; there is no --dashboard flag to add.
+go run ./cmd/node
+# Open http://127.0.0.1:8080
 ```
 
 The dashboard has **no authentication** and is not read-only: it can create and
@@ -438,7 +438,7 @@ save documents, upload files into the local store, and restore a backup. It bind
 deliberately and put your own authentication in front of it:
 
 ```bash
-go run ./cmd/node --dashboard -gui-addr 0.0.0.0:8080
+go run ./cmd/node -gui-addr 0.0.0.0:8080
 ```
 
 **13 Screens:** Dashboard, Network/Peers (topology), Files, DNS, HTTP, Email, Messaging, Docs, Registry, Voice, VPN, Security (live audit-chain), Settings

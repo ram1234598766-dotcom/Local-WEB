@@ -10,11 +10,11 @@ The optional read-only web dashboard provides a visual overview of your node.
 
 ```bash
 # Start node with dashboard
-go run ./cmd/node --dashboard
+go run ./cmd/node                                # the dashboard starts with the node
 
 # Or build and run
 go build -o bin/node ./cmd/node
-./bin/node --dashboard
+./bin/node                                      # the dashboard starts with the node
 ```
 
 Then open **http://localhost:8080** in your browser.

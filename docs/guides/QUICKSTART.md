@@ -86,7 +86,7 @@ bin/localweb-cli messaging send --channel test --text "Hello!"
 | Send message | `bin/localweb-cli messaging send --channel test --text "Hi"` |
 | View peers | `bin/localweb-cli peers` |
 | Start VPN | `bin/localweb-cli vpn connect --peer <id>` |
-| Enable web GUI | `go run ./cmd/node --dashboard` then open `http://localhost:8080` |
+| Enable web GUI | The dashboard starts with the node; open `http://127.0.0.1:8080` |
 
 ---
 
@@ -95,7 +95,7 @@ bin/localweb-cli messaging send --channel test --text "Hello!"
 | Problem | Solution |
 |---------|----------|
 | "No peers found" | Both devices must be on same LAN. Check firewall. |
-| "Port in use" | Change port: `./bin/node --listen :4444` |
+| "Port in use" | Change port: `./bin/node -addr 0.0.0.0:4444` |
 | "VPN needs root" | Run with `sudo` on Linux/macOS |
 | "Permission denied" | Allow LocalWEB in firewall settings |
 
