@@ -16,6 +16,22 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 OUT_DIR="${1:-${REPO_ROOT}/dist}"
 OUT_DIR="$(normalize_out_dir "${OUT_DIR}")"
+VERSION="${VERSION:-1.0.1}"
+
+# The output file is named from APP_VERSION, and the installer stamps that same
+# value into the registry and the Add/Remove Programs entry. build-msi.sh
+# defaults to the same 1.0.1 and takes the same VERSION override, so a release
+# sets VERSION once and both packages agree.
+#
+# makensis has no numeric-field restriction the way MSI Version does, so a
+# pre-release suffix such as 1.1.0-rc1 is legal here. It is rejected anyway to
+# keep the two installers' naming rules identical and avoid shipping a package
+# whose stamped version does not match the release.
+if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "error: VERSION='${VERSION}' is not major.minor.build, which this installer requires" >&2
+  exit 1
+fi
+
 STAGE="$(make_stage_dir "${OUT_DIR}/.stage")"
 trap 'rm -rf "${STAGE}"' EXIT
 
@@ -73,7 +89,10 @@ echo "==> makensis"
 # ${MAKENSIS} is invoked as-is: WSL launches a native Windows exe from its
 # Linux-style path. to_tool_path picks the right argument style for whichever
 # makensis was found, Linux or Windows.
-( cd "${STAGE}" && "${MAKENSIS}" "$(to_tool_path "${MAKENSIS}" "${STAGE}/localweb.nsi")" )
+#
+# -DAPP_VERSION passes the release version in. localweb.nsi guards its own
+# !define with !ifndef so this wins instead of being silently overridden.
+( cd "${STAGE}" && "${MAKENSIS}" -DAPP_VERSION="${VERSION}" "$(to_tool_path "${MAKENSIS}" "${STAGE}/localweb.nsi")" )
 
 mkdir -p "${OUT_DIR}"
 built="$(find "${STAGE}" -maxdepth 1 -name '*-setup.exe' | head -n 1)"
