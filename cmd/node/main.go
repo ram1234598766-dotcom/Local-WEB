@@ -53,7 +53,34 @@ func stripLeadingSubcommand() {
 	}
 }
 
+// main decides how this process was started before doing any node work.
+//
+// Started by the Windows service control manager, the process has to connect to
+// the dispatcher promptly. SCM allows about 60 seconds and then declares the
+// service failed to start (event 7009), which is what made the MSI abort with
+// "Error 1920. Service 'LocalWEB Mesh Network' failed to start." Generating an
+// identity, opening BadgerDB and binding nine listeners first can exceed that,
+// so the dispatcher is connected before any of it happens.
+//
+// isServiceSession reports false for a console run, and runAsWindowsService is
+// the no-op it is on every platform but Windows.
 func main() {
+	if isServiceSession() {
+		if err := runAsWindowsService(); err != nil {
+			log.Fatalf("windows service: %v", err)
+		}
+		return
+	}
+	runNode(nil)
+}
+
+// runNode brings the node up and blocks until ctx is cancelled.
+//
+// A nil ctx means an interactive run: runNode makes its own and ties it to
+// SIGINT and SIGTERM. The Windows service passes in a context it cancels on a
+// Stop or Shutdown request, so both entry points share a single shutdown path
+// instead of one existing only for the console case.
+func runNode(ctx context.Context) {
 	addr := flag.String("addr", "0.0.0.0:4443", "listen address")
 	name := flag.String("name", "", "node name")
 	storage := flag.String("storage", "", "path to BadgerDB storage directory")
@@ -164,16 +191,22 @@ func main() {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// See runNode's doc comment: a nil ctx is an interactive run that owns its
+	// own cancellation. A non-nil ctx belongs to the caller, which cancels it on
+	// a service Stop or Shutdown request.
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		log.Println("received shutdown signal, flushing and closing...")
-		cancel()
-	}()
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			log.Println("received shutdown signal, flushing and closing...")
+			cancel()
+		}()
+	}
 
 	// Load or generate persistent identity — keys are NOT regenerated on every startup
 	pub, priv, err := crypto.LoadOrGenerateIdentity(*dataDir)
@@ -205,7 +238,9 @@ func main() {
 	}
 
 	// Graceful shutdown: flush pending writes before close
+	flushed := make(chan struct{})
 	go func() {
+		defer close(flushed)
 		<-ctx.Done()
 		if err := dbStore.Flush(); err != nil {
 			log.Printf("flush error: %v", err)
@@ -382,6 +417,11 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("shutting down")
+
+	// Wait for the store flush before returning. Under the service control
+	// manager the process ends the moment this function returns, so returning
+	// while the flush is still running would abandon it mid-write.
+	<-flushed
 }
 
 // servicePorts carries the listen address for each protocol service. They are
